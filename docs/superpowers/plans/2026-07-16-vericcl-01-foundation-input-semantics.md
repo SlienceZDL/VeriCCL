@@ -123,7 +123,7 @@ Checkpoint files: `setup.py`, `vericcl/`, `requirements-dev.txt`, `pytest.ini`, 
 - Produces: `canonical_json(value: object) -> str`
 - Produces: `sha256_json(value: object) -> str`
 
-- [ ] **Step 1: Write failing model and canonicalization tests**
+- [x] **Step 1: Write failing model and canonicalization tests**
 
 ```python
 from vericcl.input.json_codec import canonical_json, sha256_json
@@ -148,13 +148,13 @@ def test_collective_spec_defaults_to_out_of_place():
     assert spec.inplace is False
 ```
 
-- [ ] **Step 2: Run tests and verify missing modules fail**
+- [x] **Step 2: Run tests and verify missing modules fail**
 
 Run: `python3 -m pytest tests/unit/input/test_models.py tests/unit/input/test_json_codec.py -q`
 
 Expected: collection fails because `vericcl.input` is absent.
 
-- [ ] **Step 3: Implement exact immutable input types**
+- [x] **Step 3: Implement exact immutable input types**
 
 Use these field contracts:
 
@@ -252,11 +252,11 @@ class ResolvedInput:
     input_sha256: str
 ```
 
-- [ ] **Step 4: Implement recursive JSON conversion without serializing Python repr strings**
+- [x] **Step 4: Implement recursive JSON conversion without serializing Python repr strings**
 
 `canonical_json()` must convert dataclasses, enums, frozensets, tuples, mappings, and paths to JSON-native values, sort mapping keys and set elements, then call `json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=True)`.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `python3 -m pytest tests/unit/input/test_models.py tests/unit/input/test_json_codec.py -q`
 
