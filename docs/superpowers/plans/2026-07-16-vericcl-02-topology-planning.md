@@ -33,7 +33,7 @@
 - Produces: `safe_per_channel_bandwidth(curve: PerformanceCurve, concurrency: int) -> float`
 - Produces: `transfer_duration_us(link: DirectedLink, slice_size_bytes: int, concurrency: int) -> float`
 
-- [ ] **Step 1: Write failing direction, lane, and duration tests**
+- [x] **Step 1: Write failing direction, lane, and duration tests**
 
 ```python
 def test_links_are_directional():
@@ -52,13 +52,13 @@ def test_calibrated_curve_uses_prefix_minimum():
     assert safe_per_channel_bandwidth(curve, 2) == 85.0
 ```
 
-- [ ] **Step 2: Run tests and observe missing topology modules**
+- [x] **Step 2: Run tests and observe missing topology modules**
 
 Run: `python3 -m pytest tests/unit/topology/test_model.py tests/unit/topology/test_performance.py -q`
 
 Expected: collection fails on missing imports.
 
-- [ ] **Step 3: Implement immutable topology records**
+- [x] **Step 3: Implement immutable topology records**
 
 ```python
 @dataclass(frozen=True, order=True)
@@ -91,11 +91,11 @@ class DirectedLink:
 
 `Topology` stores rank count, links by LinkKey, shared resources, node membership, gateways, and an isomorphism signature. It exposes `destinations(src)`, `sources(dst)`, `lanes(link, channel_count)`, and `resources_for(link)` in deterministic order.
 
-- [ ] **Step 4: Implement parameter consistency and duration formulas**
+- [x] **Step 4: Implement parameter consistency and duration formulas**
 
 If input alpha, beta, and invbw disagree, retain invbw, compute `beta_effective=invbw-alpha`, and append an English warning. Uncalibrated duration is `alpha + K*beta_effective`. Calibrated duration uses `min(B_link(k)/k for 1 <= k <= K)` and `alpha + S/b_safe(K)`; missing intermediate k is an input error, not interpolation.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `python3 -m pytest tests/unit/topology/test_model.py tests/unit/topology/test_performance.py -q`
 
