@@ -40,7 +40,7 @@ Before Step 1, create the isolated environment with `python3 -m venv .venv` and 
 - Produces: `vericcl.cli.main.main(argv: Optional[Sequence[str]] = None) -> int`
 - Produces: `VeriCCLError`, `InputValidationError`, `SemanticError`, `SolverUnavailableError`, `RuntimeCompatibilityError`
 
-- [ ] **Step 1: Write the failing CLI and package tests**
+- [x] **Step 1: Write the failing CLI and package tests**
 
 ```python
 from vericcl.cli.main import build_parser, main
@@ -56,13 +56,13 @@ def test_main_returns_zero_for_help():
     assert main(["--version"]) == 0
 ```
 
-- [ ] **Step 2: Run the test and confirm the package is absent**
+- [x] **Step 2: Run the test and confirm the package is absent**
 
 Run: `python3 -m pytest tests/unit/test_cli.py -q`
 
 Expected: collection fails with `ModuleNotFoundError: No module named 'vericcl'`.
 
-- [ ] **Step 3: Add the package, errors, entry point, and development dependencies**
+- [x] **Step 3: Add the package, errors, entry point, and development dependencies**
 
 Implement `setup.py` with distribution name `vericcl`, `find_packages(include=["vericcl", "vericcl.*"])`, Python requirement `>=3.9`, console entry `vericcl=vericcl.cli.main:console_main`, and existing runtime dependencies. Add `pytest`, `pytest-cov`, and `hypothesis` to `requirements-dev.txt`. Configure markers `phase01` through `phase07`, `gurobi`, and `hardware` in `pytest.ini`.
 
@@ -81,7 +81,7 @@ class SemanticError(VeriCCLError):
 
 `main()` must parse `--version`, `solve`, and `verify`; handler imports remain local so this phase does not create circular imports.
 
-- [ ] **Step 4: Install the editable package and run the focused test**
+- [x] **Step 4: Install the editable package and run the focused test**
 
 Run: `python3 -m pip install -e . -r requirements-dev.txt`
 
@@ -98,7 +98,7 @@ Run: `python3 -m pytest tests/unit/test_cli.py -q`
 
 Expected: `2 passed`.
 
-- [ ] **Step 5: Check the phase files for forbidden characters and review the file list**
+- [x] **Step 5: Check the phase files for forbidden characters and review the file list**
 
 Run: `rg -n '[\p{Han}]' vericcl tests setup.py requirements-dev.txt pytest.ini -g '*.{py,txt,ini}'`
 
