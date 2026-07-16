@@ -9,6 +9,8 @@ from vericcl.input.models import (
     SolverConfig,
     StrategyConfig,
 )
+from vericcl.input.loader import resolve_inputs
+from vericcl.input.validation import validate_collective
 
 __all__ = [
     "AtomConstraints",
@@ -18,4 +20,6 @@ __all__ = [
     "ResolvedInput",
     "SolverConfig",
     "StrategyConfig",
+    "resolve_inputs",
+    "validate_collective",
 ]

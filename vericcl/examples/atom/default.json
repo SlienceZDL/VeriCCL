@@ -1,0 +1,13 @@
+{
+  "stage_num": null,
+  "forbidden_transfers": [],
+  "strategies": {
+    "hierarchy": false,
+    "symmetry": false,
+    "shortest_paths": false,
+    "batching": false,
+    "constructive_trees": true,
+    "milp": true
+  },
+  "manual_hierarchy": []
+}

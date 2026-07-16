@@ -278,7 +278,7 @@ Expected: all tests pass.
 - Produces: `resolve_inputs(topology_path: Path, sketch_path: Path, atom_path: Path) -> ResolvedInput`
 - Produces: `validate_collective(spec: CollectiveSpec, rank_count: int, slice_count: int) -> None`
 
-- [ ] **Step 1: Write positive and negative loader tests**
+- [x] **Step 1: Write positive and negative loader tests**
 
 ```python
 def test_resolve_inputs_derives_global_rank_count_and_chunkup(tmp_path):
@@ -302,23 +302,23 @@ def test_reduce_scatter_requires_divisible_slice_count(tmp_path):
         resolve_inputs(*paths)
 ```
 
-- [ ] **Step 2: Run tests and observe missing loader failures**
+- [x] **Step 2: Run tests and observe missing loader failures**
 
 Run: `python3 -m pytest tests/unit/input/test_loader.py tests/unit/input/test_validation.py -q`
 
 Expected: collection fails on missing loader functions.
 
-- [ ] **Step 3: Implement strict loading and normalization**
+- [x] **Step 3: Implement strict loading and normalization**
 
 `topo.json` rank count is derived from explicit `ranks`, or from `nnodes * gpus_per_node` for legacy examples. `sketch.json` is the sole source of CollectiveSpec. Command-line semantic overrides are not implemented in this task. `atom.json` accepts `stage_num`, a list of four-field forbidden transfers, strategy booleans, and optional manual hierarchy.
 
 Validation must reject unknown operators, missing or out-of-range roots, missing reduction operations for reduction collectives, non-positive sizes, non-divisible sizes, inconsistent `input_chunkup`, and AllToAll/ReduceScatter `N % P != 0`.
 
-- [ ] **Step 4: Emit normalized examples and resolved input content**
+- [x] **Step 4: Emit normalized examples and resolved input content**
 
 The three examples must contain only English keys and diagnostics. The normalized sketch must always contain explicit defaults for `inplace`, solver budgets, objective mode, calibration options, and tuning limits so cache signatures never depend on implicit defaults.
 
-- [ ] **Step 5: Run loader tests and inspect deterministic hash stability**
+- [x] **Step 5: Run loader tests and inspect deterministic hash stability**
 
 Run: `python3 -m pytest tests/unit/input -q`
 
