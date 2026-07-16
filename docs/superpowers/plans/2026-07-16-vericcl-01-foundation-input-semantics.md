@@ -337,7 +337,7 @@ Expected: all input tests pass, including equal hashes for reordered JSON keys.
 - Produces: `logical_slice_index(slice_id: int, slice_count: int) -> int`
 - Produces: `Symbol`, `PathStage`, `Atom`, `Transfer`, `Schedule`
 
-- [ ] **Step 1: Write failing identity, path-prefix, and transfer dedup tests**
+- [x] **Step 1: Write failing identity, path-prefix, and transfer dedup tests**
 
 ```python
 def test_slice_identity_uses_global_n():
@@ -355,13 +355,13 @@ def test_shared_transfer_counts_physical_bytes_once():
     assert transfer.physical_bytes == 1024
 ```
 
-- [ ] **Step 2: Run tests and confirm missing semantics modules**
+- [x] **Step 2: Run tests and confirm missing semantics modules**
 
 Run: `python3 -m pytest tests/unit/semantics/test_slice.py tests/unit/semantics/test_atom.py -q`
 
 Expected: collection fails on missing imports.
 
-- [ ] **Step 3: Implement exact atom and transfer records**
+- [x] **Step 3: Implement exact atom and transfer records**
 
 ```python
 @dataclass(frozen=True)
@@ -427,11 +427,11 @@ class Schedule:
 
 `Schedule` contains a deterministic tuple of transfers, final state IDs, rank count, slice count, slice size, and metadata. Constructor validation enforces non-negative IDs, exact atom size, `st_time <= ed_time`, unique transfer IDs, and path-prefix consistency.
 
-- [ ] **Step 4: Implement forbidden-member matching**
+- [x] **Step 4: Implement forbidden-member matching**
 
 Add `Transfer.is_forbidden(forbidden: Collection[ForbiddenTransfer]) -> bool`; return true when any member slice matches `(slice_id, src_rank, dst_rank, stage_id)`.
 
-- [ ] **Step 5: Run all atom tests**
+- [x] **Step 5: Run all atom tests**
 
 Run: `python3 -m pytest tests/unit/semantics/test_slice.py tests/unit/semantics/test_atom.py -q`
 
