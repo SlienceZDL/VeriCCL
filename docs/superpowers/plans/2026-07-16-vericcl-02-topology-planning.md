@@ -115,7 +115,7 @@ Expected: all tests pass.
 - Produces: `load_topology(inputs: ResolvedInput) -> Topology`
 - Produces: `convert_legacy_topology(raw_topology: Mapping[str, object], raw_sketch: Mapping[str, object]) -> Mapping[str, object]`
 
-- [ ] **Step 1: Write loader tests for explicit and legacy inputs**
+- [x] **Step 1: Write loader tests for explicit and legacy inputs**
 
 ```python
 def test_gateway_topology_contains_only_real_cross_node_links():
@@ -137,21 +137,21 @@ def test_legacy_ndv2_example_resolves_rank_count():
     assert topology.rank_count == 16
 ```
 
-- [ ] **Step 2: Run tests and confirm loader is absent**
+- [x] **Step 2: Run tests and confirm loader is absent**
 
 Run: `python3 -m pytest tests/unit/topology/test_loader.py tests/unit/topology/test_shared_resources.py -q`
 
 Expected: collection fails on missing loader functions.
 
-- [ ] **Step 3: Implement explicit schema parsing**
+- [x] **Step 3: Implement explicit schema parsing**
 
 The explicit topology schema contains `ranks`, `nodes`, `directed_links`, and `shared_resources`. Each directed link names src, dst, max_channels, alpha, beta or invbw, optional calibrated bandwidth points, and resource IDs. Each shared resource contains an ID, direction-specific membership, and the same performance representation used by links.
 
-- [ ] **Step 4: Implement legacy conversion without mutating source dictionaries**
+- [x] **Step 4: Implement legacy conversion without mutating source dictionaries**
 
 Port only the necessary matrix and `internode_conn` interpretation from `taccl/topologies/generic.py` and `taccl/cli/common.py`. Convert switch and NIC hyperedges into explicit shared resources. Preserve the legacy source snapshot and add provenance `legacy_format="taccl_topology_v2"`; do not expose TACCL names in internal class names or log prefixes.
 
-- [ ] **Step 5: Run topology loader tests**
+- [x] **Step 5: Run topology loader tests**
 
 Run: `python3 -m pytest tests/unit/topology -q`
 

@@ -4,7 +4,8 @@
   "nodes": [
     {
       "id": 0,
-      "ranks": [0, 1]
+      "ranks": [0, 1],
+      "gateways": []
     }
   ],
   "directed_links": [
