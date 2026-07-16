@@ -30,7 +30,13 @@ def make_spec(kind):
         ),
         root=(
             0
-            if kind in {CollectiveKind.BROADCAST, CollectiveKind.REDUCE}
+            if kind
+            in {
+                CollectiveKind.BROADCAST,
+                CollectiveKind.REDUCE,
+                CollectiveKind.SCATTER,
+                CollectiveKind.GATHER,
+            }
             else None
         ),
     )
@@ -41,6 +47,8 @@ def make_spec(kind):
     [
         (CollectiveKind.BROADCAST, OutputSlot(1, 0), frozenset({0})),
         (CollectiveKind.REDUCE, OutputSlot(0, 0), frozenset({0, 2})),
+        (CollectiveKind.SCATTER, OutputSlot(1, 0), frozenset({1})),
+        (CollectiveKind.GATHER, OutputSlot(0, 2), frozenset({2})),
         (CollectiveKind.ALL_GATHER, OutputSlot(1, 2), frozenset({2})),
         (CollectiveKind.ALL_REDUCE, OutputSlot(1, 0), frozenset({0, 2})),
         (CollectiveKind.ALL_TO_ALL, OutputSlot(1, 0), frozenset({1})),
@@ -58,6 +66,8 @@ def test_required_output_mapping(kind, slot, contributors):
     [
         (CollectiveKind.BROADCAST, 4),
         (CollectiveKind.REDUCE, 2),
+        (CollectiveKind.SCATTER, 2),
+        (CollectiveKind.GATHER, 4),
         (CollectiveKind.ALL_GATHER, 8),
         (CollectiveKind.ALL_REDUCE, 4),
         (CollectiveKind.ALL_TO_ALL, 4),

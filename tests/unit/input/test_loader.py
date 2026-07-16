@@ -235,6 +235,14 @@ def test_unknown_collective_operator_is_rejected(tmp_path):
         resolve_inputs(*paths)
 
 
+@pytest.mark.parametrize("operator", ["scatter", "gather"])
+def test_internal_collectives_are_rejected_as_direct_inputs(tmp_path, operator):
+    paths = write_three_inputs(tmp_path, operator=operator)
+
+    with pytest.raises(InputValidationError, match="internal plan operator"):
+        resolve_inputs(*paths)
+
+
 def test_resolved_mappings_are_immutable(tmp_path):
     resolved = resolve_inputs(*write_three_inputs(tmp_path))
 

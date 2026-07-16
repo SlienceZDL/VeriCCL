@@ -215,6 +215,12 @@ def _collective(sketch: Mapping[str, object]) -> CollectiveSpec:
         raise InputValidationError(
             "unsupported collective operator: {}".format(operator)
         ) from error
+    if kind in {CollectiveKind.SCATTER, CollectiveKind.GATHER}:
+        raise InputValidationError(
+            "{} is only available as an internal plan operator".format(
+                kind.value
+            )
+        )
     if "datatype" not in value:
         raise InputValidationError("sketch.collective.datatype is required")
     datatype = _string(value["datatype"], "sketch.collective.datatype").lower()

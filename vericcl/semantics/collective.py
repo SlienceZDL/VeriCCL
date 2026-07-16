@@ -9,6 +9,8 @@ from vericcl.errors import SemanticError
 class CollectiveKind(str, Enum):
     BROADCAST = "broadcast"
     REDUCE = "reduce"
+    SCATTER = "scatter"
+    GATHER = "gather"
     ALL_GATHER = "allgather"
     ALL_REDUCE = "allreduce"
     ALL_TO_ALL = "alltoall"
@@ -58,7 +60,12 @@ def _validate_output_problem(
         raise SemanticError("spec must be a CollectiveSpec")
     _positive(rank_count, "rank_count")
     _positive(slice_count, "slice_count")
-    rooted = {CollectiveKind.BROADCAST, CollectiveKind.REDUCE}
+    rooted = {
+        CollectiveKind.BROADCAST,
+        CollectiveKind.REDUCE,
+        CollectiveKind.SCATTER,
+        CollectiveKind.GATHER,
+    }
     if spec.kind in rooted:
         if isinstance(spec.root, bool) or not isinstance(spec.root, int):
             raise SemanticError("{} requires an integer root".format(spec.kind.value))
@@ -66,7 +73,11 @@ def _validate_output_problem(
             raise SemanticError("collective root is outside the rank range")
     elif spec.root is not None:
         raise SemanticError("{} must not define root".format(spec.kind.value))
-    if spec.kind in {CollectiveKind.ALL_TO_ALL, CollectiveKind.REDUCE_SCATTER}:
+    if spec.kind in {
+        CollectiveKind.SCATTER,
+        CollectiveKind.ALL_TO_ALL,
+        CollectiveKind.REDUCE_SCATTER,
+    }:
         if slice_count % rank_count != 0:
             raise SemanticError("slice count must be divisible by rank count")
 
@@ -104,6 +115,20 @@ def required_outputs(
                     slice_count,
                 )
             )
+    elif spec.kind is CollectiveKind.SCATTER:
+        quotient = slice_count // rank_count
+        for logical_address in range(slice_count):
+            owner = logical_address // quotient
+            offset = logical_address % quotient
+            contributor = spec.root * slice_count + logical_address
+            outputs[OutputSlot(owner, offset)] = frozenset({contributor})
+    elif spec.kind is CollectiveKind.GATHER:
+        for source_rank in range(rank_count):
+            for logical_address in range(slice_count):
+                contributor = source_rank * slice_count + logical_address
+                outputs[OutputSlot(spec.root, contributor)] = frozenset(
+                    {contributor}
+                )
     elif spec.kind is CollectiveKind.ALL_GATHER:
         for rank in range(rank_count):
             for source_rank in range(rank_count):
@@ -143,5 +168,5 @@ def required_outputs(
                 slice_count,
             )
     else:
-        raise SemanticError("unsupported direct collective")
+        raise SemanticError("unsupported collective")
     return MappingProxyType(outputs)

@@ -47,9 +47,9 @@ def _actual_output(
         CollectiveKind.ALL_REDUCE,
     }:
         slot = OutputSlot(state.rank, logical_address)
-    elif spec.kind is CollectiveKind.ALL_GATHER:
+    elif spec.kind in {CollectiveKind.GATHER, CollectiveKind.ALL_GATHER}:
         if len(state.contributors) != 1:
-            raise SemanticError("AllGather final state must contain one contributor")
+            raise SemanticError("gather final state must contain one contributor")
         slot = OutputSlot(state.rank, next(iter(state.contributors)))
     elif spec.kind is CollectiveKind.ALL_TO_ALL:
         if len(state.contributors) != 1:
@@ -59,7 +59,9 @@ def _actual_output(
         source_rank = contributor // slice_count
         offset = source_rank * quotient + logical_address % quotient
         slot = OutputSlot(state.rank, offset)
-    elif spec.kind is CollectiveKind.REDUCE_SCATTER:
+    elif spec.kind in {CollectiveKind.SCATTER, CollectiveKind.REDUCE_SCATTER}:
+        if spec.kind is CollectiveKind.SCATTER and len(state.contributors) != 1:
+            raise SemanticError("scatter final state must contain one contributor")
         quotient = slice_count // rank_count
         slot = OutputSlot(state.rank, logical_address % quotient)
     else:

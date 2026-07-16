@@ -222,7 +222,7 @@ Expected: all tests pass.
 - Produces: `build_internal_scatter(root: int, group: tuple[int, ...], values: StageInterface, topology: Topology) -> tuple[PlanNode, ...]`
 - Produces: `build_internal_gather(root: int, group: tuple[int, ...], values: StageInterface, topology: Topology) -> tuple[PlanNode, ...]`
 
-- [ ] **Step 1: Write tests for direct plan semantics**
+- [x] **Step 1: Write tests for direct plan semantics**
 
 ```python
 def test_allgather_plan_is_sum_of_broadcasts():
@@ -243,13 +243,13 @@ def test_scatter_and_gather_are_available_as_internal_nodes():
     assert gather_nodes[-1].logical_output == gathered_interface()
 ```
 
-- [ ] **Step 2: Run tests and observe missing planner**
+- [x] **Step 2: Run tests and observe missing planner**
 
 Run: `python3 -m pytest tests/unit/planner/test_direct.py tests/property/test_plan_interfaces.py -q`
 
 Expected: collection fails on missing planner types.
 
-- [ ] **Step 3: Implement immutable PlanDAG records**
+- [x] **Step 3: Implement immutable PlanDAG records**
 
 ```python
 @dataclass(frozen=True)
@@ -272,11 +272,11 @@ class PlanNode:
 
 `PlanDAG` validates unique IDs, acyclicity, every edge's producer/consumer interface equality, and exact final outputs. Stage IDs express semantic scope only and never create an implicit barrier.
 
-- [ ] **Step 4: Implement six direct operator decompositions**
+- [x] **Step 4: Implement six direct operator decompositions**
 
 Broadcast creates one propagation node per logical slice; AllGather creates one Broadcast per source slice; Reduce and ReduceScatter create dual descriptors that Phase 03 will materialize from solved AG trees; AllReduce creates a ReduceScatter dual stage followed by AllGather; AllToAll creates source/destination demands directly. Scatter and Gather builders are exposed only for internal PlanDAG composition. No direct full-global AllReduce candidate is emitted when hierarchy is explicitly enabled and the dominated gateway template applies.
 
-- [ ] **Step 5: Run direct planner and property tests**
+- [x] **Step 5: Run direct planner and property tests**
 
 Run: `python3 -m pytest tests/unit/planner/test_direct.py tests/property/test_plan_interfaces.py -q`
 

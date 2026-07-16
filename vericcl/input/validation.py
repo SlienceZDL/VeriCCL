@@ -3,7 +3,14 @@ from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 
 
 SUPPORTED_REDUCTION_OPERATIONS = frozenset({"avg", "max", "min", "prod", "sum"})
-_ROOTED_COLLECTIVES = frozenset({CollectiveKind.BROADCAST, CollectiveKind.REDUCE})
+_ROOTED_COLLECTIVES = frozenset(
+    {
+        CollectiveKind.BROADCAST,
+        CollectiveKind.REDUCE,
+        CollectiveKind.SCATTER,
+        CollectiveKind.GATHER,
+    }
+)
 _REDUCTION_COLLECTIVES = frozenset(
     {
         CollectiveKind.REDUCE,
@@ -12,7 +19,11 @@ _REDUCTION_COLLECTIVES = frozenset(
     }
 )
 _PARTITIONING_COLLECTIVES = frozenset(
-    {CollectiveKind.ALL_TO_ALL, CollectiveKind.REDUCE_SCATTER}
+    {
+        CollectiveKind.SCATTER,
+        CollectiveKind.ALL_TO_ALL,
+        CollectiveKind.REDUCE_SCATTER,
+    }
 )
 
 
