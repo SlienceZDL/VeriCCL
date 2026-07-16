@@ -1,5 +1,6 @@
 """Logical collective planning and communication-group discovery."""
 
+from vericcl.planner.build import build_plan
 from vericcl.planner.direct import (
     build_direct_plan,
     build_internal_gather,
@@ -9,6 +10,7 @@ from vericcl.planner.groups import (
     CommunicationGroups,
     discover_communication_groups,
 )
+from vericcl.planner.hierarchy import validate_manual_hierarchy
 from vericcl.planner.model import (
     LogicalValue,
     PlanDAG,
@@ -25,7 +27,9 @@ __all__ = [
     "PlanNode",
     "StageInterface",
     "build_direct_plan",
+    "build_plan",
     "build_internal_gather",
     "build_internal_scatter",
     "discover_communication_groups",
+    "validate_manual_hierarchy",
 ]

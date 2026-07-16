@@ -295,7 +295,7 @@ Expected: all tests pass.
 - Produces: `build_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG`
 - Produces: `validate_manual_hierarchy(plan_spec: object, topology: Topology, collective: CollectiveSpec) -> None`
 
-- [ ] **Step 1: Write the confirmed two-node gateway AllReduce test**
+- [x] **Step 1: Write the confirmed two-node gateway AllReduce test**
 
 ```python
 def test_gateway_allreduce_uses_only_real_gateways():
@@ -311,21 +311,21 @@ def test_gateway_allreduce_uses_only_real_gateways():
     assert all(LinkKey(1, 5) not in node.allowed_links for node in plan.nodes)
 ```
 
-- [ ] **Step 2: Add illegal manual hierarchy tests**
+- [x] **Step 2: Add illegal manual hierarchy tests**
 
 Test rejection of a non-existent communication edge, mismatched contributors between adjacent stages, a group with unsorted duplicate ranks, and a final interface that does not equal the global CollectiveSpec.
 
-- [ ] **Step 3: Run tests and confirm missing hierarchy builder**
+- [x] **Step 3: Run tests and confirm missing hierarchy builder**
 
 Run: `python3 -m pytest tests/unit/planner/test_hierarchy.py tests/integration/test_plan_gateway_allreduce.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement manual-first and automatic hierarchy selection**
+- [x] **Step 4: Implement manual-first and automatic hierarchy selection**
 
 If a manual plan exists, validate and use it; otherwise, when hierarchy is enabled, derive gateway templates from actual topology groups. Local ranks are sorted numerically. Add edges only for exact logical interfaces, and allow independent stages to remain unordered so Phase 03 can pipeline ready slices.
 
-- [ ] **Step 5: Run Phase 02 regression and coverage**
+- [x] **Step 5: Run Phase 02 regression and coverage**
 
 Run: `python3 -m pytest -m phase02 --cov=vericcl.topology --cov=vericcl.planner --cov-report=term-missing -q`
 
