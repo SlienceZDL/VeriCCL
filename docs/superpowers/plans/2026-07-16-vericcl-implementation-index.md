@@ -23,8 +23,8 @@
 - 默认 `max_tuning_iterations=20`、`total_verification_timeout_s=10800`，统计接受阈值遵循规范。
 - 所有源代码、测试代码、生成 XML 与 JSON 诊断不得包含中文字符；第三方版权和明确的来源说明可以保留必要的 `TACCL` 名称。
 - 每个阶段先写失败测试，再写最小实现，并在阶段结束时运行对应回归和中文字符扫描。
-- 当前目录不是 Git 仓库，因此计划以“测试通过 + 文件清单复核”作为阶段检查点，不执行会失败的提交命令；用户建立 Git 仓库后再按阶段形成独立提交。
-- 当前本机 Python 为 3.9.6，尚未安装 pytest 和 gurobipy；第一阶段负责建立开发依赖，Gurobi 或硬件不可用时必须显式报告 `not_run`。
+- 当前项目是独立 Git 仓库，开发固定在 `feature/vericcl-implementation` 分支；每个阶段以“测试通过 + 文件清单复核 + 独立提交”为检查点，不在 `main` 上开发。
+- 当前本机 Python 为 3.9.6，基线尚未安装 pytest 和 gurobipy；第一阶段在仓库本地 `.venv` 中建立开发依赖，Gurobi 或硬件不可用时必须显式报告 `not_run`。
 - 所有 Python 类型注解兼容 3.9：可空类型和联合类型分别使用 `typing.Optional` 与 `typing.Union`，不得使用 Python 3.10 的 `X | Y` 语法。
 
 ---

@@ -21,6 +21,8 @@
 
 ### Task 1: Package Skeleton and Test Harness
 
+Before Step 1, create the isolated environment with `python3 -m venv .venv` and install only the test bootstrap dependency with `.venv/bin/python -m pip install pytest`. In every command below, use `.venv/bin/python` in place of `python3`; later installation steps must not modify the system Python environment.
+
 **Files:**
 - Modify: `setup.py`
 - Create: `vericcl/__init__.py`
