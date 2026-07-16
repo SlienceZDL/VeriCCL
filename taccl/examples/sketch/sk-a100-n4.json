@@ -1,0 +1,17 @@
+{
+    "nnodes": 4,
+    "intranode_sketch": {
+        "strategy": "switch",
+        "switches": [[0,1,2,3,4,5,6,7]],
+        "switch_hyperedge_strategy": ["uc-min"]
+    },
+    "internode_sketch": {
+        "strategy": "relay",
+        "internode_conn": {"0" : [0]
+                           }
+    },
+    "symmetry_offsets": [[8,16]],
+    "hyperparameters": {
+        "input_chunkup": 1
+    }
+}
