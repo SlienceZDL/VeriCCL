@@ -38,7 +38,7 @@
 - Produces: `candidate_cache_key(request: SolveRequest) -> str`
 - Produces: initial immutable `TuningOverlay`; Phase 05 adds validation and repair behavior without changing its fields
 
-- [ ] **Step 1: Write failing result and budget tests**
+- [x] **Step 1: Write failing result and budget tests**
 
 ```python
 def test_selected_best_is_distinct_from_proven_optimal():
@@ -56,13 +56,13 @@ def test_solver_seed_changes_cache_key():
     assert candidate_cache_key(request(seed=0)) != candidate_cache_key(request(seed=1))
 ```
 
-- [ ] **Step 2: Run tests and confirm solver package is absent**
+- [x] **Step 2: Run tests and confirm solver package is absent**
 
 Run: `python3 -m pytest tests/unit/solver/test_model.py tests/unit/solver/test_budget.py tests/unit/solver/test_cache.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 3: Implement exact request and result records**
+- [x] **Step 3: Implement exact request and result records**
 
 ```python
 @dataclass(frozen=True)
@@ -106,11 +106,11 @@ class SolveCandidate:
 
 `SolverMetrics` includes status, objective values, best bound, MIP gap, `within_requested_gap`, solve time, model count, operation count, hop count, makespan, maximum normalized resource load, and solver version/seed/thread metadata.
 
-- [ ] **Step 4: Implement monotonic wall-clock budgets and two-level cache keys**
+- [x] **Step 4: Implement monotonic wall-clock budgets and two-level cache keys**
 
 The structural cache key covers normalized inputs, topology structure, PlanDAG, enabled restrictions, objective, K, solver seed, and solver/model version. The performance cache additionally includes alpha/beta/invbw, calibrated B_link points, slice size, and environment signature. Expired or partial results are never returned as proven.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `python3 -m pytest tests/unit/solver/test_model.py tests/unit/solver/test_budget.py tests/unit/solver/test_cache.py -q`
 
