@@ -449,7 +449,7 @@ Expected: all tests pass.
 - Produces: `PayloadLedger.reduce(left_id: str, right_id: str, dst_rank: int, ready_time: float) -> PayloadState`
 - Produces: `PayloadLedger.send(state_id: str, dst_rank: int, ready_time: float, required_contributors: frozenset[int]) -> PayloadState`
 
-- [ ] **Step 1: Write state transition tests including negative cases**
+- [x] **Step 1: Write state transition tests including negative cases**
 
 ```python
 def test_reduce_unions_disjoint_contributors():
@@ -478,13 +478,13 @@ def test_incomplete_state_has_at_most_one_outbound_send():
         ledger.send("a", dst_rank=2, ready_time=1.0, required_contributors=frozenset({0, 4}))
 ```
 
-- [ ] **Step 2: Run the tests and verify failure**
+- [x] **Step 2: Run the tests and verify failure**
 
 Run: `python3 -m pytest tests/unit/semantics/test_state.py -q`
 
 Expected: collection fails because state types are absent.
 
-- [ ] **Step 3: Implement the immutable state record and mutable ledger boundary**
+- [x] **Step 3: Implement the immutable state record and mutable ledger boundary**
 
 ```python
 @dataclass(frozen=True)
@@ -501,11 +501,11 @@ class PayloadState:
 
 The ledger owns state versions, inactive IDs, incomplete outbound counts, and the active `(rank, logical_address)` aggregate index. REDUCE verifies equal logical address, disjoint contributors, active versions, target uniqueness, and `ready_time >= max(input.ready_time)`; it deactivates both inputs and creates one new version. SEND creates a destination version, preserves member paths, and deactivates only an incomplete source after its single allowed outbound operation. Complete states may branch without consuming the source.
 
-- [ ] **Step 4: Add local-contributor merge without a self-transfer**
+- [x] **Step 4: Add local-contributor merge without a self-transfer**
 
 Implement `merge_local(state_id, local_state_id, ready_time)` as a ledger reduction that records no network Transfer. Test that the resulting state has the union contributors and the caller's transfer list remains unchanged.
 
-- [ ] **Step 5: Run state tests**
+- [x] **Step 5: Run state tests**
 
 Run: `python3 -m pytest tests/unit/semantics/test_state.py -q`
 
