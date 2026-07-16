@@ -50,3 +50,14 @@ def test_sha256_json_returns_lowercase_hex_digest():
     assert len(digest) == 64
     assert digest == digest.lower()
     assert set(digest) <= set("0123456789abcdef")
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("nan")])
+def test_canonical_json_rejects_non_finite_floats(value):
+    with pytest.raises(ValueError, match="finite"):
+        canonical_json(value)
+
+
+def test_canonical_json_rejects_non_string_mapping_keys():
+    with pytest.raises(TypeError, match="mapping keys"):
+        canonical_json({1: "value"})

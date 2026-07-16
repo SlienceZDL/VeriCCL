@@ -73,6 +73,8 @@ def test_reduce_unions_disjoint_contributors():
     assert result.ready_time == 3.0
     assert ledger.state("a").active is False
     assert ledger.state("b").active is False
+    assert ledger.inactive_ids == frozenset({"a", "b"})
+    assert len(ledger.states) == 3
 
 
 def test_reduce_rejects_intersecting_contributors():
@@ -211,4 +213,58 @@ def test_merge_local_requires_both_states_at_same_rank():
     )
 
     with pytest.raises(SemanticError, match="same rank"):
+        ledger.merge_local("incoming", "local", ready_time=2.0)
+
+
+def test_ledger_rejects_unknown_and_duplicate_state_ids():
+    first = state("a", 0, 0, {0})
+
+    with pytest.raises(SemanticError, match="unknown state version"):
+        PayloadLedger().state("missing")
+    with pytest.raises(SemanticError, match="state IDs must be unique"):
+        PayloadLedger((first, first))
+
+
+def test_ledger_rejects_duplicate_active_aggregates():
+    first = state("a", 0, 0, {0, 4})
+    second = state("b", 0, 0, {8, 12})
+
+    with pytest.raises(SemanticError, match="active aggregate already exists"):
+        PayloadLedger((first, second))
+
+
+def test_ledger_tracks_initially_inactive_states():
+    ledger = PayloadLedger((state("a", 0, 0, {0}, active=False),))
+
+    assert ledger.inactive_ids == frozenset({"a"})
+
+
+def test_reduce_rejects_same_state_and_unowned_destination():
+    ledger = ledger_with_states(
+        state("a", 0, 0, {0}),
+        state("b", 1, 0, {4}),
+    )
+
+    with pytest.raises(SemanticError, match="distinct state versions"):
+        ledger.reduce("a", "a", dst_rank=0, ready_time=1.0)
+    with pytest.raises(SemanticError, match="destination must own"):
+        ledger.reduce("a", "b", dst_rank=2, ready_time=1.0)
+
+
+def test_send_rejects_self_destination_and_early_ready_time():
+    ledger = ledger_with_states(state("a", 0, 0, {0}, ready_time=2.0))
+
+    with pytest.raises(SemanticError, match="must be distinct"):
+        ledger.send("a", 0, 2.0, frozenset({0}))
+    with pytest.raises(SemanticError, match="precedes"):
+        ledger.send("a", 1, 1.0, frozenset({0}))
+
+
+def test_merge_local_requires_singleton_local_contribution():
+    ledger = ledger_with_states(
+        state("incoming", 0, 0, {8}),
+        state("local", 0, 0, {0, 4}),
+    )
+
+    with pytest.raises(SemanticError, match="one slice"):
         ledger.merge_local("incoming", "local", ready_time=2.0)

@@ -18,6 +18,10 @@ def write_json(path: Path, value: object) -> Path:
     return path
 
 
+def read_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def write_three_inputs(
     directory: Path,
     *,
@@ -236,3 +240,160 @@ def test_resolved_mappings_are_immutable(tmp_path):
 
     with pytest.raises(TypeError):
         resolved.resolved_topology["ranks"] = 4
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "[1, 2]",
+        "{",
+        '{"ranks": 2, "ranks": 3}',
+        '{"ranks": NaN}',
+    ],
+)
+def test_invalid_json_documents_are_rejected(tmp_path, raw):
+    paths = write_three_inputs(tmp_path)
+    paths[0].write_text(raw, encoding="utf-8")
+
+    with pytest.raises(InputValidationError):
+        resolve_inputs(*paths)
+
+
+def test_topology_requires_rank_geometry(tmp_path):
+    paths = write_three_inputs(tmp_path)
+    write_json(paths[0], {"name": "missing-geometry"})
+
+    with pytest.raises(InputValidationError, match="topology must define"):
+        resolve_inputs(*paths)
+
+
+@pytest.mark.parametrize(
+    "collective,match",
+    [
+        (None, "collective is required"),
+        ([], "must be a JSON object"),
+        ({"datatype": "float32"}, "operator is required"),
+        ({"operator": "allgather"}, "datatype is required"),
+        (
+            {"operator": "broadcast", "datatype": "float32", "root": "zero"},
+            "must be an integer",
+        ),
+    ],
+)
+def test_invalid_collective_shapes_are_rejected(tmp_path, collective, match):
+    paths = write_three_inputs(tmp_path)
+    sketch = read_json(paths[1])
+    if collective is None:
+        del sketch["collective"]
+    else:
+        sketch["collective"] = collective
+    write_json(paths[1], sketch)
+
+    with pytest.raises(InputValidationError, match=match):
+        resolve_inputs(*paths)
+
+
+def test_missing_hyperparameters_are_rejected(tmp_path):
+    paths = write_three_inputs(tmp_path)
+    sketch = read_json(paths[1])
+    del sketch["hyperparameters"]
+    write_json(paths[1], sketch)
+
+    with pytest.raises(InputValidationError, match="hyperparameters is required"):
+        resolve_inputs(*paths)
+
+
+def test_invalid_objective_mode_is_rejected(tmp_path):
+    paths = write_three_inputs(tmp_path)
+    sketch = read_json(paths[1])
+    sketch["hyperparameters"]["objective_mode"] = "balanced"
+    write_json(paths[1], sketch)
+
+    with pytest.raises(InputValidationError, match="objective_mode"):
+        resolve_inputs(*paths)
+
+
+def test_legacy_solver_setting_in_hyperparameters_is_normalized(tmp_path):
+    paths = write_three_inputs(tmp_path)
+    sketch = read_json(paths[1])
+    sketch["hyperparameters"]["solver_seed"] = 7
+    write_json(paths[1], sketch)
+
+    resolved = resolve_inputs(*paths)
+
+    assert resolved.solver.solver_seed == 7
+    assert resolved.resolved_sketch["solver"]["solver_seed"] == 7
+
+
+def test_duplicate_solver_setting_is_rejected(tmp_path):
+    paths = write_three_inputs(tmp_path)
+    sketch = read_json(paths[1])
+    sketch["hyperparameters"]["solver_seed"] = 7
+    sketch["solver"] = {"solver_seed": 7}
+    write_json(paths[1], sketch)
+
+    with pytest.raises(InputValidationError, match="duplicate sketch setting"):
+        resolve_inputs(*paths)
+
+
+@pytest.mark.parametrize(
+    "section,field,value",
+    [
+        ("hyperparameters", "max_calibration_channels", 33),
+        ("hyperparameters", "min_expected_improvement", -0.1),
+        ("hyperparameters", "min_tuning_improvement", 1.1),
+        ("solver", "mip_gap", True),
+        ("solver", "max_channels", 33),
+    ],
+)
+def test_invalid_numeric_configuration_is_rejected(
+    tmp_path,
+    section,
+    field,
+    value,
+):
+    paths = write_three_inputs(tmp_path)
+    sketch = read_json(paths[1])
+    sketch.setdefault(section, {})[field] = value
+    write_json(paths[1], sketch)
+
+    with pytest.raises(InputValidationError):
+        resolve_inputs(*paths)
+
+
+def test_rank_geometry_in_sketch_is_rejected(tmp_path):
+    paths = write_three_inputs(tmp_path)
+    sketch = read_json(paths[1])
+    sketch["ranks"] = 2
+    write_json(paths[1], sketch)
+
+    with pytest.raises(InputValidationError, match="belongs only in topology"):
+        resolve_inputs(*paths)
+
+
+@pytest.mark.parametrize(
+    "atom,match",
+    [
+        ({"forbidden_transfers": {}}, "must be a list"),
+        ({"forbidden_transfers": [[0, 1]]}, "must contain"),
+        ({"forbidden_transfers": [[16, 0, 1, 0]]}, "slice_id is out of range"),
+        ({"forbidden_transfers": [[0, 2, 1, 0]]}, "rank is out of range"),
+        ({"forbidden_transfers": [[0, 0, 0, 0]]}, "distinct ranks"),
+        (
+            {"stage_num": 1, "forbidden_transfers": [[0, 0, 1, 1]]},
+            "stage_id is out of range",
+        ),
+        ({"manual_hierarchy": {}}, "must be a list"),
+        ({"manual_hierarchy": [1]}, "must be a JSON object"),
+        (
+            {"hierarchy": True, "strategies": {"hierarchy": True}},
+            "duplicate atom strategy",
+        ),
+    ],
+)
+def test_invalid_atom_constraints_are_rejected(tmp_path, atom, match):
+    paths = write_three_inputs(tmp_path)
+    write_json(paths[2], atom)
+
+    with pytest.raises(InputValidationError, match=match):
+        resolve_inputs(*paths)

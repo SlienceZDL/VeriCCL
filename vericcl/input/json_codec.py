@@ -18,14 +18,14 @@ def _json_sort_key(value: object) -> str:
 
 
 def _to_json_native(value: object) -> Any:
+    if isinstance(value, Enum):
+        return _to_json_native(value.value)
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError("canonical JSON requires finite floating-point values")
         return value
-    if isinstance(value, Enum):
-        return _to_json_native(value.value)
     if isinstance(value, PurePath):
         return str(value)
     if is_dataclass(value) and not isinstance(value, type):

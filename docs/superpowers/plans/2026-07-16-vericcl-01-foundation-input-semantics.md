@@ -525,7 +525,7 @@ Expected: all positive and negative tests pass.
 - Produces: `required_outputs(spec: CollectiveSpec, rank_count: int, slice_count: int) -> Mapping[OutputSlot, frozenset[int]]`
 - Produces: `check_final_states(spec: CollectiveSpec, rank_count: int, slice_count: int, states: Iterable[PayloadState]) -> None`
 
-- [ ] **Step 1: Write table-driven tests for all six direct operators**
+- [x] **Step 1: Write table-driven tests for all six direct operators**
 
 ```python
 @pytest.mark.parametrize(
@@ -544,23 +544,23 @@ def test_required_output_mapping(kind, slot, contributors):
     assert required_outputs(spec, rank_count=2, slice_count=2)[slot] == contributors
 ```
 
-- [ ] **Step 2: Add property tests for complete and duplicate-free contributor sets**
+- [x] **Step 2: Add property tests for complete and duplicate-free contributor sets**
 
 Generate rank counts 2 to 4 and slice counts divisible by rank count. Assert that AllReduce has `P*N` output slots, each logical slot contains exactly one slice from every source rank, and ReduceScatter partitions the `N` logical positions without overlap.
 
-- [ ] **Step 3: Run tests and confirm missing implementation failure**
+- [x] **Step 3: Run tests and confirm missing implementation failure**
 
 Run: `python3 -m pytest tests/unit/semantics/test_collective.py tests/property/test_collective_semantics.py -q`
 
 Expected: collection fails on missing collective functions.
 
-- [ ] **Step 4: Implement final output mappings exactly as specified**
+- [x] **Step 4: Implement final output mappings exactly as specified**
 
 Broadcast uses root contributions at every rank; Reduce emits only root outputs; AllGather maps source `r`, logical `l` to offset `r*N+l`; AllReduce maps every full aggregate to `l`; AllToAll uses `q=N/P`, destination `floor(l/q)`, offset `r*q+(l mod q)`; ReduceScatter uses owner `floor(l/q)` and offset `l mod q`.
 
 `check_final_states()` must compare exact output keys and exact contributor sets, rejecting missing, extra, duplicated, or misaddressed outputs.
 
-- [ ] **Step 5: Run the complete Phase 01 suite and coverage**
+- [x] **Step 5: Run the complete Phase 01 suite and coverage**
 
 Run: `python3 -m pytest -m phase01 --cov=vericcl.input --cov=vericcl.semantics --cov-report=term-missing -q`
 

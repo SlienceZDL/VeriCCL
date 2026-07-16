@@ -181,3 +181,123 @@ def test_schedule_rejects_slice_id_outside_global_range():
             slice_size_bytes=1024,
             metadata={},
         )
+
+
+@pytest.mark.parametrize(
+    "args,match",
+    [
+        ((True, 1, 0.0), "must be an integer"),
+        ((-1, 1, 0.0), "must be at least"),
+        ((0, 0, 0.0), "distinct"),
+        ((0, 1, "now"), "must be a number"),
+        ((0, 1, float("inf")), "finite"),
+    ],
+)
+def test_symbol_rejects_invalid_fields(args, match):
+    with pytest.raises(SemanticError, match=match):
+        Symbol(*args)
+
+
+def test_path_stage_validates_operator_symbols_and_count():
+    stage = PathStage(0, "SEND", (Symbol(0, 1, 0.0),))
+
+    assert stage.operation_count == 1
+    with pytest.raises(SemanticError, match="operator"):
+        PathStage(0, "COPY", (Symbol(0, 1, 0.0),))
+    with pytest.raises(SemanticError, match="must not be empty"):
+        PathStage(0, "SEND", ())
+    with pytest.raises(SemanticError, match="Symbol"):
+        PathStage(0, "SEND", (object(),))
+
+
+def test_atom_rejects_invalid_path_and_time_fields():
+    with pytest.raises(SemanticError, match="must not be empty"):
+        Atom(0, 1, (), 0.0, 1.0)
+    with pytest.raises(SemanticError, match="PathStage"):
+        Atom(0, 1, (object(),), 0.0, 1.0)
+    with pytest.raises(SemanticError, match="must not exceed"):
+        make_atom(st_time=2.0, ed_time=1.0)
+
+
+def test_atom_rejects_non_increasing_stages_and_ready_times():
+    first = PathStage(0, "SEND", (Symbol(0, 1, 2.0),))
+    repeated = PathStage(0, "SEND", (Symbol(1, 2, 3.0),))
+    earlier = PathStage(1, "SEND", (Symbol(1, 2, 1.0),))
+
+    with pytest.raises(SemanticError, match="stage IDs"):
+        Atom(0, 1, (first, repeated), 3.0, 4.0)
+    with pytest.raises(SemanticError, match="non-decreasing"):
+        Atom(0, 1, (first, earlier), 3.0, 4.0)
+
+
+def test_atom_path_prefix_rejects_invalid_geometry_and_destination():
+    atom = make_atom()
+
+    with pytest.raises(SemanticError, match="slice_count"):
+        atom.validate_path_prefix(current_rank=1, slice_count=0)
+    with pytest.raises(SemanticError, match="current rank"):
+        atom.validate_path_prefix(current_rank=2)
+
+
+def test_transfer_rejects_invalid_identity_and_shape():
+    atom = make_atom()
+
+    with pytest.raises(SemanticError, match="non-empty string"):
+        make_transfer(transfer_id="", atoms=(atom,))
+    with pytest.raises(SemanticError, match="kind"):
+        make_transfer(kind="COPY", atoms=(atom,))
+    with pytest.raises(SemanticError, match="distinct"):
+        make_transfer(src_rank=0, dst_rank=0, atoms=(atom,))
+    with pytest.raises(SemanticError, match="member_slice_ids"):
+        make_transfer(member_slice_ids=frozenset(), atoms=())
+    with pytest.raises(SemanticError, match="Atom values"):
+        make_transfer(atoms=(object(),))
+    with pytest.raises(SemanticError, match="depend on itself"):
+        make_transfer(predecessor_ids=frozenset({"transfer-0"}))
+
+
+def test_transfer_rejects_mismatched_atom_sizes_and_times():
+    first = make_atom(slice_id=0, size_bytes=1024)
+    second = make_atom(slice_id=4, size_bytes=2048)
+
+    with pytest.raises(SemanticError, match="equal slice sizes"):
+        make_transfer(
+            member_slice_ids=frozenset({0, 4}),
+            atoms=(first, second),
+        )
+    with pytest.raises(SemanticError, match="time intervals"):
+        make_transfer(atoms=(first,), st_time=1.0, ed_time=2.0)
+
+
+def test_schedule_rejects_invalid_members_and_dependencies():
+    transfer = make_transfer()
+    missing_predecessor = make_transfer(
+        predecessor_ids=frozenset({"missing"}),
+    )
+
+    with pytest.raises(SemanticError, match="Transfer values"):
+        Schedule("schedule", (object(),), (), 2, 4, 1024, {})
+    with pytest.raises(SemanticError, match="final state IDs must be unique"):
+        Schedule("schedule", (transfer,), ("a", "a"), 2, 4, 1024, {})
+    with pytest.raises(SemanticError, match="metadata"):
+        Schedule("schedule", (transfer,), (), 2, 4, 1024, [])
+    with pytest.raises(SemanticError, match="predecessor"):
+        Schedule("schedule", (missing_predecessor,), (), 2, 4, 1024, {})
+    with pytest.raises(SemanticError, match="slice size"):
+        Schedule("schedule", (transfer,), (), 2, 4, 2048, {})
+
+
+def test_schedule_freezes_nested_metadata():
+    schedule = Schedule(
+        "schedule",
+        (make_transfer(),),
+        (),
+        2,
+        4,
+        1024,
+        {"list": [1], "tuple": (2,), "set": {3}},
+    )
+
+    assert schedule.metadata["list"] == (1,)
+    assert schedule.metadata["tuple"] == (2,)
+    assert schedule.metadata["set"] == frozenset({3})
