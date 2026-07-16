@@ -171,7 +171,7 @@ Expected: all topology tests pass and parameter mismatch warnings are determinis
 - Produces: `exact_domain_signature(topology: Topology, ranks: tuple[int, ...]) -> str`
 - Produces: `discover_communication_groups(topology: Topology) -> CommunicationGroups`
 
-- [ ] **Step 1: Write tests for all equal shortest paths and gateway grouping**
+- [x] **Step 1: Write tests for all equal shortest paths and gateway grouping**
 
 ```python
 def test_shortest_path_set_keeps_equal_cost_routes():
@@ -186,21 +186,21 @@ def test_gateway_groups_do_not_invent_rank_pairs():
     assert (1, 5) not in groups.inter_node
 ```
 
-- [ ] **Step 2: Run tests and verify missing path/group functions**
+- [x] **Step 2: Run tests and verify missing path/group functions**
 
 Run: `python3 -m pytest tests/unit/topology/test_paths.py tests/unit/planner/test_groups.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 3: Implement deterministic all-shortest-path enumeration**
+- [x] **Step 3: Implement deterministic all-shortest-path enumeration**
 
 Use Dijkstra over `invbw_us` with predecessor sets, then enumerate predecessor DAG paths in rank order. A path is legal only if every directed edge exists; forbidden atom filtering remains per slice and stage in the solver.
 
-- [ ] **Step 4: Implement exact communication-domain signatures**
+- [x] **Step 4: Implement exact communication-domain signatures**
 
 The signature includes sorted rank-relative directed links, max channels, performance parameters, shared-resource membership, node/gateway roles, and direction. Two groups are reusable only when their signatures and logical input/output interfaces match exactly.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `python3 -m pytest tests/unit/topology/test_paths.py tests/unit/planner/test_groups.py -q`
 
