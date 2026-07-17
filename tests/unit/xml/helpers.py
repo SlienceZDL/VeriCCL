@@ -331,6 +331,69 @@ def send_relay_schedule():
     )
 
 
+def two_send_same_lane_schedule():
+    transfers = []
+    for logical in range(2):
+        transfer_id = "lane-send-{}".format(logical)
+        start = float(logical)
+        stage = PathStage(
+            0,
+            "SEND",
+            (Symbol(0, 1, start),),
+        )
+        transfers.append(
+            _transfer(
+                transfer_id,
+                "SEND",
+                0,
+                1,
+                0,
+                (logical,),
+                {logical: (stage,)},
+                start,
+                start + 1.0,
+                (),
+            )
+        )
+    outputs = required_outputs(
+        collective_spec(CollectiveKind.BROADCAST, root=0),
+        2,
+        2,
+    )
+    return Schedule(
+        schedule_id="two-send-same-lane",
+        transfers=tuple(transfers),
+        final_state_ids=tuple(
+            "final-r{}-o{}".format(slot.rank, slot.offset)
+            for slot in sorted(outputs)
+        ),
+        rank_count=2,
+        slice_count=2,
+        slice_size_bytes=1024,
+        metadata={
+            "path_scope": "global",
+            "semantic_predecessors": {
+                "lane-send-0": (),
+                "lane-send-1": (),
+            },
+            "final_outputs": {
+                "r{:08d}-o{:08d}".format(slot.rank, slot.offset): tuple(
+                    sorted(contributors)
+                )
+                for slot, contributors in outputs.items()
+            },
+            "final_dependencies": {
+                "r{:08d}-o{:08d}".format(slot.rank, slot.offset): (
+                    ()
+                    if slot.rank == 0
+                    else ("lane-send-{}".format(slot.offset),)
+                )
+                for slot in outputs
+            },
+        },
+    )
+
+
 def allreduce_star_schedule():
     reduce_schedule = concurrent_reduce_star_schedule()
     reduce_ids = tuple(

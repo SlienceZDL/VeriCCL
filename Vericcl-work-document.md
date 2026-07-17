@@ -156,6 +156,8 @@ XML通信TB严格使用单向结构。通信TB按`(rank, direction, peer, channe
 
 XML生成后必须执行端点级事件模拟。每个TB只能暴露其队首step；一次传输只有在配对的`s`与`r/rrc`同时位于各自TB队首且两侧依赖均满足时才能执行。如果仍有未完成step但不存在可执行的端点对，则判定为死锁并拒绝该XML。事件模拟属于XML正确性的强制验证，不得由在线性能验证替代。
 
+当前`vericcl/xml/threadblocks.py`和`list_scheduler.py`按照Rank、方向、peer及channel建立单向通信TB，并为每个Rank建立独立本地复制TB。调度器只从依赖已完成的TransferNode中选择节点，将通信端点对原子地追加到两侧TB；同一消费端的多个跨TB前驱使用一个直接依赖和其余`nop`完整表达，所有被引用前驱均记录完成标志。全局就绪顺序使语义边和新增TB串行边保持同向，并在降低完成后再次执行step依赖图无环检查，同时记录相对求解时间顺序的逆序数量。`deadlock.py`只暴露各TB队首，成对执行通信端点并独立推进`cpy/nop`；无可执行事件时返回阻塞transfer和各TB队首，供XML生成阶段拒绝死锁候选。
+
 设`P`为全局Rank数，各算子的XML chunk参数为：
 
 | 算子 | `nchunksperloop` | `i_chunks` | `o_chunks` |

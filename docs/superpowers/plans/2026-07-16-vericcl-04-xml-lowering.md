@@ -207,7 +207,7 @@ Expected: all tests pass.
 - Produces: `schedule_threadblocks(program: EndpointProgram, dag: TransferDAG) -> ThreadblockProgram`
 - Produces: `simulate_endpoint_execution(program: ThreadblockProgram) -> DeadlockResult`
 
-- [ ] **Step 1: Write unidirectional TB and synchronized-order tests**
+- [x] **Step 1: Write unidirectional TB and synchronized-order tests**
 
 ```python
 def test_send_and_receive_use_different_threadblocks():
@@ -222,29 +222,29 @@ def test_paired_endpoints_have_matching_lane_order():
     assert send_order(tb_program, 0, 1, 0) == recv_order(tb_program, 1, 0, 0)
 ```
 
-- [ ] **Step 2: Write three-contributor NOP and deadlock tests**
+- [x] **Step 2: Write three-contributor NOP and deadlock tests**
 
 Assert the latest `ed_time` predecessor is the direct dependency; two earlier contributors create NOPs in the consumer TB. Create a deliberately crossed send/receive head order and assert the simulator reports blocked transfer IDs and TB heads.
 
-- [ ] **Step 3: Run tests and verify missing scheduling implementation**
+- [x] **Step 3: Run tests and verify missing scheduling implementation**
 
 Run: `python3 -m pytest tests/unit/xml/test_threadblocks.py tests/unit/xml/test_list_scheduler.py tests/unit/xml/test_deadlock.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement synchronized TransferNode list scheduling**
+- [x] **Step 4: Implement synchronized TransferNode list scheduling**
 
 Group communication TBs by `(rank, direction, peer, channel)` and copy TBs by rank. Select only nodes whose semantic predecessors are scheduled; order by smaller `st_time`, longer remaining critical path, smaller `ed_time`, then `(stage_id, logical_slice_index, src, dst, channel, transfer_id)`. Append both endpoints atomically.
 
-- [ ] **Step 5: Implement join lowering and minimal inversion repair**
+- [x] **Step 5: Implement join lowering and minimal inversion repair**
 
 Choose the critical predecessor by latest end time, then critical path and stable ID. Generate one NOP per remaining cross-TB predecessor in every consuming TB. Add TB serial edges, detect cycles, and only swap semantically independent nodes while minimizing inversions relative to solver order. Reject an unrepaired cycle.
 
-- [ ] **Step 6: Implement endpoint-head event simulation**
+- [x] **Step 6: Implement endpoint-head event simulation**
 
 Expose only each TB head. A communication step executes only when both paired endpoints are heads and all dependencies are complete; local copies and NOPs execute when their dependencies and TB order permit. If unfinished steps remain with no executable event, return a deadlock result and reject XML generation.
 
-- [ ] **Step 7: Run scheduling and deadlock tests**
+- [x] **Step 7: Run scheduling and deadlock tests**
 
 Run: `python3 -m pytest tests/unit/xml/test_threadblocks.py tests/unit/xml/test_list_scheduler.py tests/unit/xml/test_deadlock.py -q`
 

@@ -19,6 +19,10 @@ class TransferNode:
     endpoint_ids: Tuple[str, ...]
     member_slice_ids: frozenset[int]
     stage_id: int
+    logical_slice_index: int
+    src_rank: int
+    dst_rank: int
+    channel: int
     st_time: float
     ed_time: float
     effective_st_time: float
@@ -171,6 +175,13 @@ def build_transfer_dag(
             ),
             member_slice_ids=transfer.member_slice_ids,
             stage_id=transfer.stage_id,
+            logical_slice_index=min(
+                logical_slice_index(member, schedule.slice_count)
+                for member in transfer.member_slice_ids
+            ),
+            src_rank=transfer.src_rank,
+            dst_rank=transfer.dst_rank,
+            channel=transfer.channel,
             st_time=transfer.st_time,
             ed_time=transfer.ed_time,
             effective_st_time=effective_start,
@@ -188,6 +199,10 @@ def build_transfer_dag(
             endpoint_ids=(program.local_endpoints[copy_id].endpoint_id,),
             member_slice_ids=frozenset(),
             stage_id=-1,
+            logical_slice_index=-1,
+            src_rank=copy.rank,
+            dst_rank=copy.rank,
+            channel=-1,
             st_time=copy.st_time,
             ed_time=copy.ed_time,
             effective_st_time=copy.st_time,
