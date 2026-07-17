@@ -19,6 +19,10 @@ from vericcl.solver.model import (
     SolveStatus,
     SolverMetrics,
 )
+from vericcl.solver.objectives import (
+    ObjectiveExpressions,
+    configure_lexicographic_objective,
+)
 from vericcl.solver.scheduling import (
     NUMERICAL_TOLERANCE,
     available_channel_count,
@@ -67,6 +71,40 @@ class _Variables:
     end_time: Mapping[OperationKey, object]
     ready_time: Mapping[Tuple[int, int], object]
     makespan: object
+    maximum_resource_load: object
+
+
+@dataclass
+class _PrimaryObjectiveProgress:
+    gp: object
+    best_value: float = math.inf
+    best_bound: float = 0.0
+    mip_gap: float = math.inf
+    finished: bool = False
+
+    def __call__(self, model, where) -> None:
+        callback = self.gp.GRB.Callback
+        try:
+            if where == callback.MIP and not self.finished:
+                self.best_value = float(
+                    model.cbGet(callback.MIP_OBJBST)
+                )
+                self.best_bound = float(
+                    model.cbGet(callback.MIP_OBJBND)
+                )
+            elif where == callback.MULTIOBJ and not self.finished:
+                self.best_value = float(
+                    model.cbGet(callback.MULTIOBJ_OBJBST)
+                )
+                self.best_bound = float(
+                    model.cbGet(callback.MULTIOBJ_OBJBND)
+                )
+                self.mip_gap = float(
+                    model.cbGet(callback.MULTIOBJ_MIPGAP)
+                )
+                self.finished = True
+        except self.gp.GurobiError:
+            return
 
 
 def _positive_integer(value: object, field: str) -> int:
@@ -546,6 +584,48 @@ def _build_model(
                     "resource-order-{:08d}".format(disjunction_index),
                 )
                 disjunction_index += 1
+    resource_work = {}
+    for key in operations:
+        demand = operation_demand[key]
+        link = key[1]
+        physical = physical_link_key(
+            demand,
+            link.src_rank,
+            link.dst_rank,
+        )
+        duration = fixed_transfer_duration_us(
+            problem,
+            demand,
+            link.src_rank,
+            link.dst_rank,
+            operation_channels[key],
+        )
+        resource_work.setdefault(("link", physical), []).append(
+            (
+                duration / operation_channels[key],
+                edge_selected[key],
+            )
+        )
+        for resource_id in problem.topology.link(physical).resource_ids:
+            slots = min(
+                channel_count,
+                problem.topology.shared_resources[
+                    resource_id
+                ].max_channels,
+            )
+            resource_work.setdefault(("resource", resource_id), []).append(
+                (duration / slots, edge_selected[key])
+            )
+    maximum_resource_load = model.addVar(
+        lb=0.0,
+        vtype=gp.GRB.CONTINUOUS,
+        name="maximum-resource-load-us",
+    )
+    for entries in resource_work.values():
+        model.addConstr(
+            maximum_resource_load
+            >= gp.quicksum(coefficient * active for coefficient, active in entries)
+        )
     makespan = model.addVar(
         lb=0.0,
         vtype=gp.GRB.CONTINUOUS,
@@ -557,7 +637,17 @@ def _build_model(
                 makespan
                 >= ready_time[(tree.index, demand.required_leaf_rank)]
             )
-    model.setObjective(makespan, gp.GRB.MINIMIZE)
+    configure_lexicographic_objective(
+        model,
+        gp,
+        objective,
+        ObjectiveExpressions(
+            makespan=makespan,
+            operation_count=gp.quicksum(edge_selected.values()),
+            hop_count=gp.quicksum(flow_selected.values()),
+            maximum_resource_load=maximum_resource_load,
+        ),
+    )
     variables = _Variables(
         edge_selected=edge_selected,
         flow_selected=flow_selected,
@@ -567,6 +657,7 @@ def _build_model(
         end_time=end_time,
         ready_time=ready_time,
         makespan=makespan,
+        maximum_resource_load=maximum_resource_load,
     )
     _apply_warm_start(warm_start, trees, variables)
     model.update()
@@ -626,6 +717,37 @@ def _normalized_value(value: float) -> float:
     if abs(value) <= NUMERICAL_TOLERANCE:
         return 0.0
     return float(value)
+
+
+def _primary_bound_and_gap(
+    model,
+    status: SolveStatus,
+    primary_value: float,
+    progress: _PrimaryObjectiveProgress,
+) -> Tuple[float, float]:
+    if math.isfinite(progress.best_bound) and math.isfinite(progress.mip_gap):
+        return progress.best_bound, progress.mip_gap
+    if math.isfinite(progress.best_value) and math.isfinite(
+        progress.best_bound
+    ):
+        denominator = abs(progress.best_value)
+        if denominator <= NUMERICAL_TOLERANCE:
+            gap = 0.0 if abs(progress.best_bound) <= NUMERICAL_TOLERANCE else 1.0
+        else:
+            gap = abs(progress.best_value - progress.best_bound) / denominator
+        return progress.best_bound, gap
+    try:
+        best_bound = float(model.ObjBound)
+        mip_gap = float(model.MIPGap)
+    except AttributeError:
+        if status is SolveStatus.OPTIMAL:
+            return primary_value, 0.0
+        return 0.0, 1.0 if primary_value > NUMERICAL_TOLERANCE else 0.0
+    if not math.isfinite(best_bound):
+        best_bound = 0.0
+    if not math.isfinite(mip_gap):
+        mip_gap = 0.0
+    return best_bound, mip_gap
 
 
 def _extract_operations(
@@ -994,9 +1116,8 @@ def _maximum_normalized_load(
     problem: SolverProblem,
     operations: Tuple[_OperationValue, ...],
     channel_count: int,
-    makespan_us: float,
 ) -> float:
-    if not operations or makespan_us <= NUMERICAL_TOLERANCE:
+    if not operations:
         return 0.0
     link_durations = {}
     link_capacities = {}
@@ -1024,7 +1145,7 @@ def _maximum_normalized_load(
                 + operation.duration
             )
     loads = [
-        duration / (link_capacities[link] * makespan_us)
+        duration / link_capacities[link]
         for link, duration in link_durations.items()
     ]
     loads.extend(
@@ -1036,11 +1157,10 @@ def _maximum_normalized_load(
                     resource_id
                 ].max_channels,
             )
-            * makespan_us
         )
         for resource_id, duration in resource_durations.items()
     )
-    return min(1.0, max(loads, default=0.0))
+    return max(loads, default=0.0)
 
 
 def solve_milp(
@@ -1121,6 +1241,9 @@ def solve_milp(
                 solve_time_s=0.0,
                 thread_count=threads,
                 termination_reason="local_only",
+                objective_values=(0.0, 0.0, 0.0)
+                if objective is ObjectiveMode.LATENCY
+                else (0.0, 0.0),
             ),
             selected_best=False,
             proven_optimal=(
@@ -1141,7 +1264,8 @@ def solve_milp(
         budget,
         warm_start,
     )
-    model.optimize()
+    progress = _PrimaryObjectiveProgress(gp)
+    model.optimize(progress)
     elapsed = time.monotonic() - started
     status = _status(gp, model)
     if model.SolCount <= 0:
@@ -1187,12 +1311,23 @@ def solve_milp(
         model.dispose()
         return candidate
     makespan = _normalized_value(variables.makespan.X)
-    best_bound = float(model.ObjBound)
-    if not math.isfinite(best_bound):
-        best_bound = 0.0
-    mip_gap = float(model.MIPGap)
-    if not math.isfinite(mip_gap):
-        mip_gap = 0.0
+    maximum_resource_load = _maximum_normalized_load(
+        problem,
+        operations,
+        channels,
+    )
+    hop_count = sum(len(value) for value in flows.values())
+    objective_values = (
+        (makespan, float(len(operations)), float(hop_count))
+        if objective is ObjectiveMode.LATENCY
+        else (maximum_resource_load, makespan)
+    )
+    best_bound, mip_gap = _primary_bound_and_gap(
+        model,
+        status,
+        objective_values[0],
+        progress,
+    )
     requested_gap = (
         0.0
         if problem.inputs.solver.require_proven_optimal
@@ -1211,19 +1346,14 @@ def solve_milp(
         solve_time_s=elapsed,
         thread_count=threads,
         termination_reason="gurobi_status_{}".format(model.Status),
-        objective_values=(makespan, float(len(operations))),
+        objective_values=objective_values,
         best_bound=best_bound,
         mip_gap=mip_gap,
         within_requested_gap=within_requested_gap,
         operation_count=len(operations),
-        hop_count=sum(len(value) for value in flows.values()),
+        hop_count=hop_count,
         makespan_us=makespan,
-        maximum_normalized_resource_load=_maximum_normalized_load(
-            problem,
-            operations,
-            channels,
-            makespan,
-        ),
+        maximum_normalized_resource_load=maximum_resource_load,
     )
     candidate = SolveCandidate(
         candidate_id=_candidate_id(problem, channels, objective),

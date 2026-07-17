@@ -327,7 +327,7 @@ c.MILP：参考原代码与TACCL代码，将硬约束、atom输入和选择的�
 输入参数`objective_mode`支持`latency`、`throughput`和`auto`，默认使用`auto`：
 
 1. `latency`首先最小化所有最终atom的最大`ed_time`，再按字典序最小化物理通信操作数和总路径跳数。
-2. `throughput`首先最小化有向链路及共享资源的最大稳态归一化负载，再最小化所有最终atom的最大`ed_time`。
+2. `throughput`首先最小化有向链路及共享资源的最大稳态归一化负载，再最小化所有最终atom的最大`ed_time`。对资源`q`，归一化负载定义为`L_q = sum_i(D_i(K))/C_slot(q,K)`，其中分子只累计实际使用该资源的物理传输持续时间，`C_slot`为该资源在固定K模型中的可并行slot数；因此`L_q`和`max_q(L_q)`的单位均为微秒，表示资源拥塞时间，不再除以候选makespan。该定义与MILP吞吐目标、`maximum_normalized_resource_load`指标及候选排序完全一致，避免把人为延长调度误判为更低负载。
 3. `auto`先求解latency候选并通过动态并发事件模拟得到当前`total_size_bytes`和`slice_size_bytes`下的验证完成时间，同时计算吞吐候选的理论下界。只有吞吐候选理论上可能显著改善当前完成时间时才继续求解throughput候选。若生成两个候选，则统一通过动态并发事件模拟，并选择验证完成时间较小的候选；完成时间相同时依次选择通信操作数更少、总路径跳数更少且稳定标识顺序更小的候选。
 
 吞吐候选的理论下界正式命名为`throughput_time_lower_bound`，表示当前有限消息大小下throughput模式在现有保守性能模型中可能达到的最小完成时间，不表示带宽。统一使用微秒作为`alpha`、`beta`、`invbw`、atom时间、验证完成时间和该下界的内部单位；`B_link(k)`使用字节/微秒，报告可换算为GB/s；改善比例为无量纲值。
@@ -342,7 +342,7 @@ throughput\_time\_lower\_bound=\max(LB_{resource},LB_{dependency})
 
 `auto`模式计算`gain_upper = max(0, (T_latency - throughput_time_lower_bound) / T_latency)`。输入参数`min_expected_improvement`默认值为0.01。`cv_relevant`取latency候选关键路径以及达到最大归一化负载的链路或共享资源中，所有稳定校准结果的最大变异系数。当`min_expected_improvement = 0`时筛选阈值为0，否则为`max(min_expected_improvement, 2 * cv_relevant)`。只有`gain_upper`不小于阈值时才求解throughput候选；缺少相关校准数据时使用`cv_relevant = 0`。任一相关校准结果不稳定时禁用该下界剪枝并直接求解throughput候选。
 
-MILP达到求解时间上限时，若Gurobi已经得到可行incumbent，则提取该调度并依次执行完整集合通信语义检查、BDD机会分析、动态并发事件模拟和XML验证；必要分析与验证完成后，该候选可以参与latency/throughput候选比较。结果必须记录目标值、best bound、MIP gap和求解时间，并设置`proven_optimal = false`。若没有可行incumbent，则在启用生成树或构造式求解器时执行回退；回退仍未得到可验证调度时，仅将该候选标记为失败，不影响其他候选。输入参数`require_proven_optimal`用于要求最终结果必须具有最优性证明。最终性能选择状态`selected_best`与最优性证明状态`proven_optimal`相互独立，禁止将“当前已验证候选中性能最好”表述为“已证明全局最优”。
+MILP达到求解时间上限时，若Gurobi已经得到可行incumbent，则提取该调度并依次执行完整集合通信语义检查、BDD机会分析、动态并发事件模拟和XML验证；必要分析与验证完成后，该候选可以参与latency/throughput候选比较。结果必须记录目标值、第一优先级目标的best bound和MIP gap、求解时间、模型总数及确定性的`model_index`，并设置`proven_optimal = false`。多目标模型不能使用普通单目标`ObjBound/MIPGap`属性，必须在第一优化pass结束时通过Gurobi多目标callback保存对应bound和gap；若该pass因超时未正常结束，则使用MIP callback保存的最后incumbent和bound计算gap。若没有可行incumbent，则在启用生成树或构造式求解器时执行回退；回退仍未得到可验证调度时，仅将该候选标记为失败，不影响其他候选。输入参数`require_proven_optimal`用于要求最终结果必须具有最优性证明。最终性能选择状态`selected_best`与最优性证明状态`proven_optimal`相互独立，禁止将“当前已验证候选中性能最好”表述为“已证明全局最优”。
 
 求解时间同时受全局预算和单模型预算控制。`total_solve_timeout_s`默认值为10800秒，覆盖一次`solve`调用中的分层子问题、外层channel数搜索、latency/throughput候选和回退过程；`per_model_timeout_s`默认值为1800秒。每个新模型的实际时间上限为`min(per_model_timeout_s, remaining_total_solve_time)`。全局预算耗尽后不再启动新模型，但必须保留并验证已经得到的incumbent或构造式候选。全局预算按墙钟时间计算，不累计并行模型的CPU时间。
 

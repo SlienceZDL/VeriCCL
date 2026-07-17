@@ -29,3 +29,20 @@ def test_forbidden_only_link_returns_infeasible_without_schedule():
     assert candidate.metrics.status is SolveStatus.INFEASIBLE
     assert not candidate.node_schedules
     assert not candidate.proven_optimal
+
+
+def test_expired_model_budget_does_not_build_a_schedule():
+    require_gurobi_license()
+    problem = broadcast_problem(logical_positions=(0,))
+
+    candidate = solve_milp(
+        problem,
+        channel_count=1,
+        objective=ObjectiveMode.LATENCY,
+        budget=ModelBudget(seconds=0, started_at=5, deadline=5),
+        warm_start=None,
+    )
+
+    assert candidate.metrics.status is SolveStatus.NOT_RUN
+    assert candidate.metrics.termination_reason == "budget_exhausted"
+    assert not candidate.node_schedules

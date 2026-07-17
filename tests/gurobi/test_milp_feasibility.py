@@ -52,7 +52,7 @@ def test_two_rank_broadcast_satisfies_flow_causality_and_lane_order():
     } == {(0,), (1,)}
     assert candidate.metrics.solver_seed == 0
     assert candidate.metrics.thread_count >= 1
-    assert 0.0 < candidate.metrics.maximum_normalized_resource_load <= 1.0
+    assert candidate.metrics.maximum_normalized_resource_load > 0.0
     assert candidate.metrics.within_requested_gap
     assert not candidate.proven_optimal
 

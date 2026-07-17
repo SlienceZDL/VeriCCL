@@ -255,6 +255,7 @@ def test_tuning_overlay_rejects_invalid_structures(field, value):
         ("objective_values", (float("nan"),)),
         ("within_requested_gap", 1),
         ("operation_count", -1),
+        ("model_index", -1),
         ("solver_name", ""),
     ],
 )

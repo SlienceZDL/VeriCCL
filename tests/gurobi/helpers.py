@@ -262,3 +262,55 @@ def zero_duration_cycle_problem():
         shared_resource_ids=frozenset(),
     )
     return build_solver_problem(node, inputs, topology)
+
+
+def throughput_tradeoff_problem():
+    inputs = resolve_inputs(
+        EXAMPLES / "topo" / "two_rank.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    inputs = replace(inputs, rank_count=3)
+    direct_curve = PerformanceCurve(0.0, 4.0, {})
+    alternate_curve = PerformanceCurve(0.0, 1.25, {})
+    links = {}
+    for key, channels, curve in (
+        (LinkKey(0, 2), 1, direct_curve),
+        (LinkKey(0, 1), 2, alternate_curve),
+        (LinkKey(1, 2), 2, alternate_curve),
+    ):
+        links[key] = DirectedLink(
+            key=key,
+            max_channels=channels,
+            performance=curve,
+            resource_ids=(),
+        )
+    topology = Topology(
+        rank_count=3,
+        links=links,
+        shared_resources={},
+        node_membership={rank: 0 for rank in range(3)},
+        gateways=frozenset(),
+        warnings=(),
+    )
+    contributors = frozenset({0})
+    node = PlanNode(
+        node_id="milp-throughput-tradeoff",
+        stage_id=0,
+        local_collective=CollectiveSpec(
+            kind=CollectiveKind.BROADCAST,
+            datatype="float32",
+            root=0,
+        ),
+        communication_group=(0, 1, 2),
+        logical_input=StageInterface({OutputSlot(0, 0): contributors}),
+        logical_output=StageInterface(
+            {
+                OutputSlot(0, 0): contributors,
+                OutputSlot(2, 0): contributors,
+            }
+        ),
+        allowed_links=frozenset(links),
+        shared_resource_ids=frozenset(),
+    )
+    return build_solver_problem(node, inputs, topology)

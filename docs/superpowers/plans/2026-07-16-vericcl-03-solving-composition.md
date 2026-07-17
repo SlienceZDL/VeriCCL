@@ -238,7 +238,7 @@ Expected: pass when Gurobi and a license are available; otherwise tests are repo
 - Produces: `search_models(problem: SolverProblem, config: SolverConfig, objective: ObjectiveMode, warm_start: Optional[Schedule]) -> tuple[SolveCandidate, ...]`
 - Produces: `rank_candidates(candidates: Iterable[SolveCandidate]) -> tuple[SolveCandidate, ...]`
 
-- [ ] **Step 1: Write objective and lower-bound tests**
+- [x] **Step 1: Write objective and lower-bound tests**
 
 ```python
 def test_latency_tie_breaks_by_operations_then_hops():
@@ -256,25 +256,25 @@ def test_thread_allocation_never_exceeds_cpu_count():
     assert sum(allocation) <= 16
 ```
 
-- [ ] **Step 2: Run tests and confirm missing implementations**
+- [x] **Step 2: Run tests and confirm missing implementations**
 
 Run: `python3 -m pytest tests/unit/solver/test_objectives.py tests/unit/solver/test_lower_bounds.py tests/unit/solver/test_search.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 3: Implement lexicographic latency and throughput objectives**
+- [x] **Step 3: Implement lexicographic latency and throughput objectives**
 
 Latency uses priorities makespan, physical transfer count, and hop count. Throughput minimizes maximum normalized steady load over directed links and shared resources, then makespan. Stable IDs are the final deterministic tie-break outside Gurobi.
 
-- [ ] **Step 4: Implement the continuous resource LP and dependency bound**
+- [x] **Step 4: Implement the continuous resource LP and dependency bound**
 
 The LP keeps legal topology, shared resources, forbidden transfers, semantic demands, and chosen hierarchy while relaxing integral paths, slice indivisibility, channel allocation, and TB order. Resource capacity uses `max(K * b_safe(K))`. The dependency bound ignores contention but keeps chain and join causality. Return both components and the maximum in microseconds.
 
-- [ ] **Step 5: Implement bounded K-model execution**
+- [x] **Step 5: Implement bounded K-model execution**
 
 Create one independent model per `K=1..max_channels` and objective. Run at most four concurrently, assign threads without exceeding CPU count, stop launching new models when the total budget expires, and retain complete incumbents from finished models. Seed, model order, solver version, threads, and wall-clock termination are written to metrics.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run: `python3 -m pytest tests/unit/solver/test_objectives.py tests/unit/solver/test_lower_bounds.py tests/unit/solver/test_search.py -q`
 

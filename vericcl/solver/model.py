@@ -65,6 +65,7 @@ class SolverMetrics:
     solver_seed: int
     thread_count: int
     termination_reason: str
+    model_index: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, SolveStatus):
@@ -117,6 +118,7 @@ class SolverMetrics:
             self.termination_reason,
             "solver_metrics.termination_reason",
         )
+        _integer(self.model_index, "solver_metrics.model_index")
 
 
 @dataclass(frozen=True)

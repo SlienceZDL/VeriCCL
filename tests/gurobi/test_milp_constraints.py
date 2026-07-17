@@ -9,6 +9,7 @@ from tests.gurobi.helpers import (
     batching_problem,
     multihop_problem,
     require_gurobi_license,
+    throughput_tradeoff_problem,
     zero_duration_cycle_problem,
 )
 
@@ -100,3 +101,41 @@ def test_tree_constraints_reject_a_disconnected_zero_duration_cycle():
 
     assert model.Status == gp.GRB.INFEASIBLE
     model.dispose()
+
+
+def test_latency_and_throughput_use_distinct_lexicographic_priorities():
+    require_gurobi_license()
+    problem = throughput_tradeoff_problem()
+    budget = ModelBudget(seconds=30, started_at=0, deadline=30)
+
+    latency = solve_milp(
+        problem,
+        channel_count=2,
+        objective=ObjectiveMode.LATENCY,
+        budget=budget,
+        warm_start=None,
+    )
+    throughput = solve_milp(
+        problem,
+        channel_count=2,
+        objective=ObjectiveMode.THROUGHPUT,
+        budget=budget,
+        warm_start=None,
+    )
+
+    latency_edges = {
+        (item.src_rank, item.dst_rank)
+        for item in next(iter(latency.node_schedules.values())).transfers
+    }
+    throughput_edges = {
+        (item.src_rank, item.dst_rank)
+        for item in next(iter(throughput.node_schedules.values())).transfers
+    }
+    assert latency_edges == {(0, 2)}
+    assert throughput_edges == {(0, 1), (1, 2)}
+    assert len(latency.metrics.objective_values) == 3
+    assert len(throughput.metrics.objective_values) == 2
+    assert (
+        throughput.metrics.maximum_normalized_resource_load
+        == throughput.metrics.objective_values[0]
+    )
