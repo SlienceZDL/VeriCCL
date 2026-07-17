@@ -35,7 +35,7 @@
 - Produces: `RunContext`, `RunArtifacts`, `execute_solve(context: RunContext) -> RunArtifacts`, `execute_verify(context: RunContext) -> RunArtifacts`
 - Produces: `create_run_layout(base: Path, inputs: ResolvedInput, run_id: str) -> RunLayout`
 
-- [ ] **Step 1: Write deterministic layout and no-overwrite tests**
+- [x] **Step 1: Write deterministic layout and no-overwrite tests**
 
 ```python
 def test_run_layout_matches_spec(tmp_path):
@@ -50,21 +50,21 @@ def test_run_layout_matches_spec(tmp_path):
 
 Test ordinary XML, candidate XML, selected-best iteration naming, final alias output, report SHA binding, and failure when an existing non-empty run directory would be overwritten.
 
-- [ ] **Step 2: Run tests and confirm missing workflow/layout**
+- [x] **Step 2: Run tests and confirm missing workflow/layout**
 
 Run: `python3 -m pytest tests/unit/artifacts/test_layout.py tests/unit/artifacts/test_writer.py tests/integration/test_workflow_artifacts.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 3: Implement atomic writes and complete lineage**
+- [x] **Step 3: Implement atomic writes and complete lineage**
 
 Write each JSON/XML to a temporary sibling, fsync, then rename. `run-summary.json` lists candidate ID, parent, iteration, XML/report paths, hashes, validation statuses, runtime compatibility, acceptance/rejection, selected_best, proven_optimal, restrictions, and final selection. Never label a file `optimal`.
 
-- [ ] **Step 4: Implement solve and verify workflow services**
+- [x] **Step 4: Implement solve and verify workflow services**
 
 `execute_solve` resolves inputs, loads topology, builds plan, solves, composes, runs pre-lowering validation, lowers only valid schedules, completes validation, writes every candidate result, and optionally tunes/validates online according to input. Invalid pre-lowering candidates receive reports but no XML. `execute_verify` parses a supplied XML and sidecar, reconstructs its typed program, runs the same validation pipeline, and optionally tunes. Both enforce wall-clock budgets.
 
-- [ ] **Step 5: Run artifact tests**
+- [x] **Step 5: Run artifact tests**
 
 Run: `python3 -m pytest tests/unit/artifacts/test_layout.py tests/unit/artifacts/test_writer.py tests/integration/test_workflow_artifacts.py -q`
 

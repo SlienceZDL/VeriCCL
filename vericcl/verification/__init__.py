@@ -22,6 +22,7 @@ from vericcl.verification.pipeline import (
     VerificationOutcome,
     validate_and_lower_candidate,
     verify_candidate,
+    verify_candidate_outcome,
 )
 from vericcl.verification.resource_events import (
     ResourceInterval,
@@ -58,4 +59,5 @@ __all__ = [
     "verify_schedule_semantics",
     "validate_and_lower_candidate",
     "verify_candidate",
+    "verify_candidate_outcome",
 ]

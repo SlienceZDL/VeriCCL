@@ -431,6 +431,20 @@ def verify_candidate(
     ).report
 
 
+def verify_candidate_outcome(
+    schedule: Schedule,
+    artifact: XmlArtifact,
+    inputs: ResolvedInput,
+    topology: Topology,
+) -> VerificationOutcome:
+    return _verify_candidate_outcome(
+        schedule,
+        artifact,
+        inputs,
+        topology,
+    )
+
+
 def validate_and_lower_candidate(
     schedule: Schedule,
     inputs: ResolvedInput,
