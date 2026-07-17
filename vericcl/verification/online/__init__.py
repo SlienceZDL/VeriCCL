@@ -28,6 +28,32 @@ from vericcl.verification.online.statistics import (
     PerformanceHistory,
     summarize_runs,
 )
+from vericcl.verification.online.clock_sync import (
+    AlignedTimestamp,
+    ClockAlignment,
+    ClockOrdering,
+    ClockSyncSample,
+    ClockTransform,
+    align_clocks,
+    parse_clock_sync_output,
+)
+from vericcl.verification.online.trace_analysis import (
+    BottleneckRecord,
+    PhysicalTransferInterval,
+    StepWaitAnalysis,
+    TraceAnalysis,
+    WaitClass,
+    WaitDurations,
+    analyze_trace,
+    decompose_waits,
+    pair_endpoints,
+)
+from vericcl.verification.online.trace_format import (
+    RawStepTraceRecord,
+    StepTraceRecord,
+    encode_raw_trace,
+    parse_trace,
+)
 
 
 __all__ = [
@@ -35,6 +61,12 @@ __all__ = [
     "CalibrationPoint",
     "CalibrationRequest",
     "CalibrationResult",
+    "AlignedTimestamp",
+    "BottleneckRecord",
+    "ClockAlignment",
+    "ClockOrdering",
+    "ClockSyncSample",
+    "ClockTransform",
     "EnvironmentSignature",
     "NcclTestMeasurement",
     "NcclTestRequest",
@@ -42,11 +74,25 @@ __all__ = [
     "NcclTestsHelpValidator",
     "PerformanceHistory",
     "PerformanceStatistics",
+    "PhysicalTransferInterval",
+    "RawStepTraceRecord",
+    "StepTraceRecord",
+    "StepWaitAnalysis",
+    "TraceAnalysis",
+    "WaitClass",
+    "WaitDurations",
+    "align_clocks",
+    "analyze_trace",
     "build_nccl_tests_command",
     "build_calibration_artifact",
     "build_calibration_artifacts",
     "derive_calibrated_curve",
+    "decompose_waits",
+    "encode_raw_trace",
     "environment_signature_sha256",
     "parse_nccl_tests_output",
+    "parse_clock_sync_output",
+    "parse_trace",
+    "pair_endpoints",
     "summarize_runs",
 ]

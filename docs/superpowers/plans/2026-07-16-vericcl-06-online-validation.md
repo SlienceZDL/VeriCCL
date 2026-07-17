@@ -206,11 +206,11 @@ Expected: all patch contract and dry-run tests pass.
 - Produces: `align_clocks(records_by_rank: Mapping[int, Sequence[StepTraceRecord]], samples: Sequence[ClockSyncSample]) -> ClockAlignment`
 - Produces: `analyze_trace(records: Sequence[StepTraceRecord], sidecar: TraceSidecar, alignment: ClockAlignment) -> TraceAnalysis`
 
-- [ ] **Step 1: Write sidecar and binary round-trip tests**
+- [x] **Step 1: Write sidecar and binary round-trip tests**
 
 Assert `(rank,tb_id,step_index)` maps to transfer ID, endpoint type, atom IDs, flow ID, lane, and full semantic predecessor IDs. Assert truncated records, bad magic/version, missing sidecar entries, and overflow flags invalidate the trace.
 
-- [ ] **Step 2: Write endpoint pairing and wait-formula tests**
+- [x] **Step 2: Write endpoint pairing and wait-formula tests**
 
 ```python
 def test_physical_interval_uses_both_endpoints():
@@ -227,25 +227,25 @@ def test_wait_decomposition_uses_semantic_predecessors():
     assert result.transfer_duration == 10
 ```
 
-- [ ] **Step 3: Write clock uncertainty tests**
+- [x] **Step 3: Write clock uncertainty tests**
 
 Use multi-point CPU/GPU samples to fit an affine transform per rank. Assert cross-rank comparisons whose difference is below the combined uncertainty are marked unordered, not forced into a false sequence.
 
-- [ ] **Step 4: Run tests and confirm missing trace modules**
+- [x] **Step 4: Run tests and confirm missing trace modules**
 
 Run: `python3 -m pytest tests/unit/online/test_trace_format.py tests/unit/online/test_clock_sync.py tests/unit/online/test_trace_analysis.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 5: Implement semantic-ready reconstruction and pair analysis**
+- [x] **Step 5: Implement semantic-ready reconstruction and pair analysis**
 
 Compute semantic readiness as the maximum physical end of every sidecar predecessor, not only XML `depid/deps`. Pair send and receive/rrc by transfer ID, require both endpoints, and compute physical start/end with max. Associate every bottleneck with transfer, atom, flow, rank, TB, step, lane, and wait class.
 
-- [ ] **Step 6: Implement clock-sync helper and uncertainty propagation**
+- [x] **Step 6: Implement clock-sync helper and uncertainty propagation**
 
 The CUDA helper records multiple host-before/GPU-timer/host-after samples per process and exchanges host reference samples across MPI ranks. Python fits per-rank transforms, records residual and round-trip uncertainty, and refuses ordering decisions below that bound.
 
-- [ ] **Step 7: Run trace tests**
+- [x] **Step 7: Run trace tests**
 
 Run: `python3 -m pytest tests/unit/online/test_trace_format.py tests/unit/online/test_clock_sync.py tests/unit/online/test_trace_analysis.py -q`
 

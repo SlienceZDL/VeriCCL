@@ -41,3 +41,20 @@ and their overhead is not performance data.
 The patch fixes `MSCCL_CHUNKSTEPS=4` and `MSCCL_SLICESTEPS=4`. Use the runtime
 parameter guidance in `Vericcl-work-document.md` to keep each XML step at the
 intended software slice granularity.
+
+## Clock synchronization helper
+
+Build and run the MPI/CUDA helper before parsing cross-rank traces:
+
+```bash
+nvcc -ccbin mpicxx -O2 -std=c++11 \
+  runtime/msccl-trace/tools/vericcl_clock_sync.cu \
+  -o runtime/msccl-trace/tools/vericcl_clock_sync
+mpirun -np "$NRANKS" runtime/msccl-trace/tools/vericcl_clock_sync 16 \
+  > vericcl-clock-sync.txt
+```
+
+Each process emits host-bracketed GPU timer samples and an MPI-derived offset
+to rank 0's monotonic clock. Python fitting retains both bracket and MPI
+round-trip uncertainty; comparisons within the combined bound remain
+unordered.

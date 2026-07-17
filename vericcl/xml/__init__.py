@@ -37,6 +37,13 @@ from vericcl.xml.threadblocks import (
     ThreadblockProgram,
     XmlStep,
 )
+from vericcl.xml.trace_sidecar import (
+    TraceSidecar,
+    TraceStepMetadata,
+    build_trace_sidecar,
+    load_trace_sidecar,
+    write_trace_sidecar,
+)
 
 __all__ = [
     "AggregateValue",
@@ -56,13 +63,17 @@ __all__ = [
     "ThreadblockProgram",
     "TransferDAG",
     "TransferNode",
+    "TraceSidecar",
+    "TraceStepMetadata",
     "XmlStep",
     "XmlArtifact",
     "build_buffer_plan",
     "build_transfer_dag",
+    "build_trace_sidecar",
     "check_msccl_compatibility",
     "lower_endpoints",
     "lower_to_xml",
+    "load_trace_sidecar",
     "emit_xml",
     "normalize_xml",
     "artifact_xml_filename",
@@ -73,4 +84,5 @@ __all__ = [
     "validate_xml",
     "verify_atom_granularity",
     "verify_buffer_liveness",
+    "write_trace_sidecar",
 ]
