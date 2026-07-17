@@ -302,6 +302,10 @@ def test_shared_resource_serializes_different_links_in_the_same_slot():
 
     assert transfers[0].ed_time <= transfers[1].st_time
     assert transfers[0].transfer_id in transfers[1].predecessor_ids
+    assert schedule.metadata["resource_slots"] == {
+        transfer.transfer_id: {"shared-egress": 0}
+        for transfer in schedule.transfers
+    }
 
 
 def test_batching_reuses_one_tree_for_up_to_channel_count_payloads():

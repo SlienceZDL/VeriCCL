@@ -423,9 +423,11 @@ def construct_candidate(
             resource_last=resource_last,
         )
     members_by_edge = {}
+    demand_by_tree = {}
     for demand in demands:
         path = selected_paths[demand.demand_id]
         tree_key = _tree_key(demand)
+        demand_by_tree.setdefault(tree_key, demand)
         for src, dst in zip(path, path[1:]):
             key = (tree_key, src, dst)
             members_by_edge.setdefault(key, set()).update(
@@ -499,6 +501,19 @@ def construct_candidate(
                 draft.transfer_id: tuple(
                     sorted(draft.semantic_predecessor_ids)
                 )
+                for draft in drafts
+            },
+            "resource_slots": {
+                draft.transfer_id: {
+                    resource_id: draft.channel
+                    for resource_id in problem.topology.link(
+                        _physical_key(
+                            demand_by_tree[draft.tree_key],
+                            draft.src_rank,
+                            draft.dst_rank,
+                        )
+                    ).resource_ids
+                }
                 for draft in drafts
             },
             "tree_contributors": {

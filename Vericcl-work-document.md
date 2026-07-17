@@ -320,6 +320,8 @@ c.MILP：参考原代码与TACCL代码，将硬约束、atom输入和选择的�
 
 多种策略采用固定角色和固定流水线，用户只控制是否启用，不允许通过输入任意改变执行顺序。统一流程为：规范化CollectiveSpec、拓扑和atom输入；应用手动分层，或在未提供手动分层时执行自动分层；应用禁用atom、拓扑合法性、精确对称性和最短路径候选剪枝；通过批量构造和生成树产生可行候选及MILP warm start；使用MILP优化并保留生成树候选用于超时回退和最终比较；合成局部阶段并建立全局依赖；最后执行XML降低和完整验证。
 
+Solve Orchestrator在启动后端前重新生成规范化PlanDAG，并拒绝与请求中PlanDAG不一致的过期或冲突计划。`TuningOverlay.temporary_forbidden`与用户禁用项取并集，`channel_count`作为本轮固定K；调优参数不得删除原始硬约束。每个全局候选的`node_schedules`必须覆盖全部PlanNode，局部MILP候选只有在channel数K一致时才能组合。当前多节点模型独立选择局部路径，再由Composer按全局资源重排，因此必须记录`independent_node_composition`限制并设置`search_space_restricted=true`，不得由局部最优状态推导全局最优证明。候选稳定标识包含规范化请求签名，避免不同输入或调优迭代产生相同candidate ID。
+
 手动分层优先于自动分层，但非法手动分层必须报错。生成树与MILP同时启用时表示“构造可行候选及warm start，再执行MILP优化”，不得解释为相互覆盖的后端；两者均禁用时属于无有效求解后端。最短路径、批量构造或其他可能排除全局最优解的策略必须在报告中设置`search_space_restricted = true`并记录限制内容。任何策略均不得静默覆盖其他策略的硬约束，约束冲突必须报告涉及的策略及具体对象。
 
 链路性能模型以`invbw = alpha + beta`为输入一致性关系。若三者同时输入但不一致，以`invbw`为权威值，设置`beta_effective = invbw - alpha`并报告参数不一致。未校准时，并发度`K`下每个slice采用保守持续时间`D(K) = alpha + K * beta_effective`；校准后使用`b_safe(K) = min_{1<=k<=K}(B_link(k)/k)`和`D(K) = alpha + S/b_safe(K)`。channel数量通过MILP外层离散搜索，默认`K_max = 32`。相反方向可以并行，不同channel可以重叠，但共享有向链路及NIC等资源的总带宽。
@@ -331,6 +333,8 @@ c.MILP：参考原代码与TACCL代码，将硬约束、atom输入和选择的�
 1. `latency`首先最小化所有最终atom的最大`ed_time`，再按字典序最小化物理通信操作数和总路径跳数。
 2. `throughput`首先最小化有向链路及共享资源的最大稳态归一化负载，再最小化所有最终atom的最大`ed_time`。对资源`q`，归一化负载定义为`L_q = sum_i(D_i(K))/C_slot(q,K)`，其中分子只累计实际使用该资源的物理传输持续时间，`C_slot`为该资源在固定K模型中的可并行slot数；因此`L_q`和`max_q(L_q)`的单位均为微秒，表示资源拥塞时间，不再除以候选makespan。该定义与MILP吞吐目标、`maximum_normalized_resource_load`指标及候选排序完全一致，避免把人为延长调度误判为更低负载。
 3. `auto`先求解latency候选并通过动态并发事件模拟得到当前`total_size_bytes`和`slice_size_bytes`下的验证完成时间，同时计算吞吐候选的理论下界。只有吞吐候选理论上可能显著改善当前完成时间时才继续求解throughput候选。若生成两个候选，则统一通过动态并发事件模拟，并选择验证完成时间较小的候选；完成时间相同时依次选择通信操作数更少、总路径跳数更少且稳定标识顺序更小的候选。
+
+在动态并发事件模拟模块尚未执行或不可用的求解阶段，Orchestrator使用全局合成调度的保守makespan执行同一比较规则，并在SolveResult中记录`comparison=conservative_schedule_makespan`；验证模块完成后必须以模拟结果重新比较，不能把该临时比较写成已验证性能结论。若全局求解预算在latency候选完成后耗尽，则保留latency候选并跳过下界LP和throughput模型。
 
 吞吐候选的理论下界正式命名为`throughput_time_lower_bound`，表示当前有限消息大小下throughput模式在现有保守性能模型中可能达到的最小完成时间，不表示带宽。统一使用微秒作为`alpha`、`beta`、`invbw`、atom时间、验证完成时间和该下界的内部单位；`B_link(k)`使用字节/微秒，报告可换算为GB/s；改善比例为无量纲值。
 
@@ -347,6 +351,8 @@ throughput\_time\_lower\_bound=\max(LB_{resource},LB_{dependency})
 MILP达到求解时间上限时，若Gurobi已经得到可行incumbent，则提取该调度并依次执行完整集合通信语义检查、BDD机会分析、动态并发事件模拟和XML验证；必要分析与验证完成后，该候选可以参与latency/throughput候选比较。结果必须记录目标值、第一优先级目标的best bound和MIP gap、求解时间、模型总数及确定性的`model_index`，并设置`proven_optimal = false`。多目标模型不能使用普通单目标`ObjBound/MIPGap`属性，必须在第一优化pass结束时通过Gurobi多目标callback保存对应bound和gap；若该pass因超时未正常结束，则使用MIP callback保存的最后incumbent和bound计算gap。若没有可行incumbent，则在启用生成树或构造式求解器时执行回退；回退仍未得到可验证调度时，仅将该候选标记为失败，不影响其他候选。输入参数`require_proven_optimal`用于要求最终结果必须具有最优性证明。最终性能选择状态`selected_best`与最优性证明状态`proven_optimal`相互独立，禁止将“当前已验证候选中性能最好”表述为“已证明全局最优”。
 
 求解时间同时受全局预算和单模型预算控制。`total_solve_timeout_s`默认值为10800秒，覆盖一次`solve`调用中的分层子问题、外层channel数搜索、latency/throughput候选和回退过程；`per_model_timeout_s`默认值为1800秒。每个新模型的实际时间上限为`min(per_model_timeout_s, remaining_total_solve_time)`。全局预算耗尽后不再启动新模型，但必须保留并验证已经得到的incumbent或构造式候选。全局预算按墙钟时间计算，不累计并行模型的CPU时间。
+
+多个PlanNode顺序进入局部模型搜索时，Orchestrator按尚未启动的节点数分配当前剩余墙钟预算；模型提前结束后，未使用时间由后续节点继续使用。auto下界LP使用同一剩余预算并设置独立的per-model上限，不得在latency阶段结束后重新获得一份完整总预算。
 
 `mip_gap`默认值为`1e-4`。该值与TACCL调度模型使用的Gurobi默认值及SyCCL参数类默认值一致；TACCL路由模型使用`1e-9`，SyCCL公开示例配置使用`1e-3`，均可由用户显式覆盖。非零`mip_gap`终止只设置`within_requested_gap = true`，不设置`proven_optimal = true`。当`require_proven_optimal = true`时，实际传给Gurobi的相对gap必须为0；若在时间预算内未获得严格最优状态，则本次求解失败，而不是返回近似最优结果。
 

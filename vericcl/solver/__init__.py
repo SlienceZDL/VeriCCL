@@ -16,6 +16,7 @@ from vericcl.solver.model import (
     SolverMetrics,
 )
 from vericcl.solver.objectives import rank_candidates
+from vericcl.solver.orchestrator import solve
 from vericcl.solver.search import allocate_model_threads, search_models
 
 __all__ = [
@@ -34,6 +35,7 @@ __all__ = [
     "construct_candidate",
     "rank_candidates",
     "search_models",
+    "solve",
     "solve_milp",
     "throughput_time_lower_bound",
 ]

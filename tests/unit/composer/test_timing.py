@@ -4,10 +4,12 @@ import pytest
 
 from vericcl.composer import compose, recompute_earliest_times
 from vericcl.errors import SemanticError
+from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.topology.model import (
     DirectedLink,
     LinkKey,
     PerformanceCurve,
+    SharedResource,
     Topology,
 )
 
@@ -136,3 +138,82 @@ def test_recompute_rejects_path_operation_missing_from_schedule():
             incomplete,
             _topology((0, 1), (1, 2)),
         )
+
+
+def test_recompute_serializes_distinct_links_in_one_shared_resource_slot():
+    curve = PerformanceCurve(1.0, 2.0, {})
+    keys = (LinkKey(0, 1), LinkKey(0, 2))
+    topology = Topology(
+        rank_count=3,
+        links={
+            key: DirectedLink(
+                key=key,
+                max_channels=1,
+                performance=curve,
+                resource_ids=("nic",),
+            )
+            for key in keys
+        },
+        shared_resources={
+            "nic": SharedResource("nic", keys, 1, curve)
+        },
+        node_membership={0: 0, 1: 0, 2: 0},
+        gateways=frozenset(),
+        warnings=(),
+    )
+    transfers = []
+    for transfer_id, dst_rank in (("branch-a", 1), ("branch-b", 2)):
+        atom = Atom(
+            slice_id=0,
+            slice_size_bytes=1024,
+            path=(
+                PathStage(
+                    0,
+                    "SEND",
+                    (Symbol(0, dst_rank, 0.0),),
+                ),
+            ),
+            st_time=0.0,
+            ed_time=2.0,
+        )
+        transfers.append(
+            Transfer(
+                transfer_id=transfer_id,
+                kind="SEND",
+                src_rank=0,
+                dst_rank=dst_rank,
+                channel=0,
+                stage_id=0,
+                member_slice_ids=frozenset({0}),
+                atoms=(atom,),
+                st_time=0.0,
+                ed_time=2.0,
+                predecessor_ids=frozenset(),
+            )
+        )
+    schedule = Schedule(
+        schedule_id="shared-resource",
+        transfers=tuple(transfers),
+        final_state_ids=(),
+        rank_count=3,
+        slice_count=1,
+        slice_size_bytes=1024,
+        metadata={
+            "path_scope": "global",
+            "semantic_predecessors": {
+                transfer.transfer_id: () for transfer in transfers
+            },
+            "resource_slots": {
+                transfer.transfer_id: {"nic": 0}
+                for transfer in transfers
+            },
+        },
+    )
+
+    recomputed = recompute_earliest_times(schedule, topology)
+    by_id = {
+        transfer.transfer_id: transfer for transfer in recomputed.transfers
+    }
+
+    assert by_id["branch-a"].ed_time <= by_id["branch-b"].st_time
+    assert "branch-a" in by_id["branch-b"].predecessor_ids

@@ -44,8 +44,8 @@ def _node_schedules(
     for node_id, candidate in candidates.items():
         if not isinstance(candidate, SolveCandidate):
             raise SemanticError("candidates must contain SolveCandidate values")
-        if set(candidate.node_schedules) != {node_id}:
-            raise SemanticError("candidate does not contain one complete node schedule")
+        if node_id not in candidate.node_schedules:
+            raise SemanticError("candidate does not contain the plan node schedule")
         schedule = candidate.node_schedules[node_id]
         if (
             schedule.rank_count != plan.rank_count
