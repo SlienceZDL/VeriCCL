@@ -37,7 +37,7 @@
 - Produces: `parse_nccl_tests_output(text: str, expected_bytes: int) -> tuple[NcclTestRun, ...]`
 - Produces: `summarize_runs(samples_us: Sequence[float]) -> PerformanceStatistics`
 
-- [ ] **Step 1: Write exact command tests**
+- [x] **Step 1: Write exact command tests**
 
 ```python
 def test_allreduce_command_uses_exact_size_and_statistics_counts():
@@ -53,25 +53,25 @@ def test_broadcast_command_sets_exact_root():
     assert command[-2:] == ("-r", "0")
 ```
 
-- [ ] **Step 2: Write parser and robust-statistics tests**
+- [x] **Step 2: Write parser and robust-statistics tests**
 
 Use captured stdout fixtures with 20 samples. Assert median, nearest-rank P95, mean, population standard deviation, CV, wrong-count rejection, and unstable CV retry decision. Test both in-place and out-of-place columns when present.
 
-- [ ] **Step 3: Run tests and confirm missing online modules**
+- [x] **Step 3: Run tests and confirm missing online modules**
 
 Run: `python3 -m pytest tests/unit/online/test_nccl_tests.py tests/unit/online/test_statistics.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement operator-to-binary mapping and validated arguments**
+- [x] **Step 4: Implement operator-to-binary mapping and validated arguments**
 
 Map to `broadcast_perf`, `reduce_perf`, `all_gather_perf`, `all_reduce_perf`, `alltoall_perf`, and `reduce_scatter_perf`. Use exact `-b/-e`, `-w 5`, `-n 20`, `-c 1`, `-g 1`, datatype, reduction op, and root where relevant. Before execution, run `<binary> --help` once per binary and reject a requested option not supported by the installed nccl-tests version.
 
-- [ ] **Step 5: Implement deterministic statistics and retry policy**
+- [x] **Step 5: Implement deterministic statistics and retry policy**
 
 Retain every raw sample and round. Retry when CV exceeds 0.05, at most three rounds total. After the last unstable round, return all rounds and `stable=False`; do not choose the best single run.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run: `python3 -m pytest tests/unit/online/test_nccl_tests.py tests/unit/online/test_statistics.py -q`
 
