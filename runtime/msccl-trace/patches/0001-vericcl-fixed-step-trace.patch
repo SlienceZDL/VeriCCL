@@ -1,0 +1,467 @@
+diff --git a/src/collectives/device/msccl_interpreter.h b/src/collectives/device/msccl_interpreter.h
+index dabba68..70d5539 100644
+--- a/src/collectives/device/msccl_interpreter.h
++++ b/src/collectives/device/msccl_interpreter.h
+@@ -82,6 +82,35 @@ namespace {
+     }
+   }
+ 
++  inline __device__ int16_t vericclTracePeer(
++      uint8_t type, int recvPeer, int sendPeer) {
++    if (type == MSCCL_SEND) return (int16_t)sendPeer;
++    if (type == MSCCL_RECV || type == MSCCL_RECV_COPY_SEND ||
++        type == MSCCL_RECV_REDUCE_SEND ||
++        type == MSCCL_RECV_REDUCE_COPY ||
++        type == MSCCL_RECV_REDUCE_COPY_SEND) {
++      return (int16_t)recvPeer;
++    }
++    return -1;
++  }
++
++  inline __device__ VericclRawStepTraceRecord* vericclTraceReserve(
++      struct mscclDevCommInfo* traceInfo) {
++    if (traceInfo == NULL || traceInfo->traceRecords == NULL ||
++        traceInfo->traceRecordCount == NULL ||
++        traceInfo->traceOverflow == NULL || traceInfo->traceCapacity == 0) {
++      return NULL;
++    }
++    const unsigned long long traceCapacity = traceInfo->traceCapacity;
++    const unsigned long long traceIndex =
++        atomicAdd(traceInfo->traceRecordCount, 1ULL);
++    if (traceIndex < traceCapacity) {
++      return traceInfo->traceRecords + traceIndex;
++    }
++    atomicExch(traceInfo->traceOverflow, 1U);
++    return NULL;
++  }
++
+   template<typename T, typename RedOp, typename Proto>
+   __device__ __forceinline__ void runInterpreter(ncclWorkElem *args, int sizeMultiplier) {
+     const int tid = threadIdx.x;
+@@ -124,11 +153,9 @@ namespace {
+     // this still needs more work. when we make a way around the queue, the flag might have been set to undesired values. will be fixed in subsequent versions.
+     const int64_t workIndex = ncclShmem.mscclShmem.workIndex;
+     volatile struct mscclFlag* mscclFlags = ncclShmem.mscclShmem.flags;
+-
+-    int loopcount = 0;
+-    uint64_t stime = 0;
+-    uint64_t wtime = 0;
+-    uint64_t otime = 0;
++    struct mscclDevCommInfo* traceCommInfo = ncclShmem.comm.mscclInfo;
++    const bool traceEnabled =
++        traceCommInfo != NULL && traceCommInfo->traceRecords != NULL;
+ 
+     for (ssize_t gridOffset = 0, iter = 0; gridOffset < sizePerMscclChunk; gridOffset += chunkSize, iter++) {
+       ssize_t realChunkSize;
+@@ -146,12 +173,14 @@ namespace {
+       int step = 0;
+       for (int i = 0; i < mscclTB->nsteps; i++){
+         struct mscclTransfer* msccltran = &mscclTB->transfers[i];
++        uint64_t tbReach = 0;
++        uint64_t dependencyDone = 0;
++        if (traceEnabled && tid == 0) tbReach = mscclTraceClock();
++        if (traceEnabled) barrier(nthreads);
+         // first wait if there is a dependence
+         int16_t numDependences = msccltran->numDependences;
+         if (numDependences > 0){
+           NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DEP_CHECK_ENTRY, msccltran->numDependences);
+-          
+-          uint64_t time1 = mscclTraceClock();
+ 
+           if (tid < numDependences){
+             int16_t dependentPointer = msccltran->depencePointer;
+@@ -165,12 +194,11 @@ namespace {
+           }
+           step += numDependences-1;
+           barrier(nthreads);
+-
+-          uint64_t time2 = mscclTraceClock();
+-          stime += time2 - time1;
+-
+           NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DEP_CHECK_EXIT, msccltran->numDependences);
++        } else if (traceEnabled) {
++          barrier(nthreads);
+         }
++        if (traceEnabled && tid == 0) dependencyDone = mscclTraceClock();
+ 
+         srcPointer = (msccltran->srcbuffer == MSCCL_INPUT_BUFFER) ? thisInput : ((msccltran->srcbuffer == MSCCL_OUTPUT_BUFFER) ? thisOutput : thisScratch);
+         dstPointer = (msccltran->dstbuffer == MSCCL_INPUT_BUFFER) ? thisInput : ((msccltran->dstbuffer == MSCCL_OUTPUT_BUFFER) ? thisOutput : thisScratch);
+@@ -181,43 +209,27 @@ namespace {
+           dstoffset = gridOffset + (ssize_t) (msccltran->dstoffset+c) * sizePerMscclChunk;
+           int thisCount = min(mscclMaxAllowedCount, count-c);
+           int thisNelem = nelem*thisCount;
+-          MscclTraceInfo traceInfo;
+-          traceInfo.rank = rank;
+-          traceInfo.bid = bid;
+-          traceInfo.channelId = channelId;
+-          traceInfo.protoId = Proto::Id;
+-          traceInfo.opType = msccltran->type;
+-          traceInfo.resourceMask = mscclTraceResourceMask(msccltran->type);
+-          traceInfo.recvPeer = recvPeer;
+-          traceInfo.sendPeer = sendPeer;
+-          traceInfo.iter = iter;
+-          traceInfo.transferIndex = i;
+-          traceInfo.step = step;
+-          traceInfo.chunkOffset = gridOffset;
+-          traceInfo.countIndex = c;
+-          traceInfo.srcBuffer = msccltran->srcbuffer;
+-          traceInfo.dstBuffer = msccltran->dstbuffer;
+-          traceInfo.srcOffset = (long long)srcoffset;
+-          traceInfo.dstOffset = (long long)dstoffset;
+-          traceInfo.elemCount = thisNelem;
++          VericclRawStepTraceRecord* rawTrace = NULL;
++          uint64_t transferStart = 0;
++          if (traceEnabled && tid == 0) {
++            rawTrace = vericclTraceReserve(traceCommInfo);
++          }
++          if (traceEnabled) {
++            barrier(nthreads);
++            if (tid == 0) transferStart = mscclTraceClock();
++            barrier(nthreads);
++          }
+           if (msccltran->type == MSCCL_SEND){
+             __syncthreads();
+-            uint64_t time1 = mscclTraceClock();
+-            prims.sendWithBarrier(srcoffset, thisNelem, &wtime, &traceInfo); // LL.send is the only situation where there is no barrier at the end.
++            prims.sendWithBarrier(srcoffset, thisNelem); // LL.send is the only situation where there is no barrier at the end.
+             __syncthreads();
+-            uint64_t time2 = mscclTraceClock();
+-            otime += time2 - time1;
+           }
+           else if (msccltran->type == MSCCL_RECV){
+             __syncthreads();
+-            uint64_t time1 = mscclTraceClock();
+-            prims.recv(dstoffset, thisNelem, 0, &wtime, &traceInfo);
++            prims.recv(dstoffset, thisNelem, 0);
+             __syncthreads();
+-            uint64_t time2 = mscclTraceClock();
+-            otime += time2 - time1;
+           }
+           else if (msccltran->type == MSCCL_REDUCE) {
+-            uint64_t deviceStart = mscclTraceClock();
+             int numReductions = msccltran->numReductions;
+             if (thisNelem < nthreads){
+               NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_REDUCE_ENTRY, thisNelem*sizeof(T));
+@@ -246,30 +258,45 @@ namespace {
+               }
+               prims.reduce(srcs, numReductions, &dst, 1, thisNelem);
+             }
+-            mscclTracePrint(&traceInfo, 0, deviceStart, mscclTraceClock());
+             if (c == 0) step += (numReductions-1); // only advance step once!
+           } else if (msccltran->type == MSCCL_RECV_COPY_SEND)
+-            prims.recvCopySend(dstoffset, thisNelem, false, &wtime, &traceInfo);
++            prims.recvCopySend(dstoffset, thisNelem, false);
+           else if (msccltran->type == MSCCL_RECV_REDUCE_SEND)
+-            prims.recvReduceSend(srcoffset, thisNelem, false, &wtime, &traceInfo);
++            prims.recvReduceSend(srcoffset, thisNelem, false);
+           else if (msccltran->type == MSCCL_RECV_REDUCE_COPY_SEND)
+-            prims.recvReduceCopySend(srcoffset, dstoffset, thisNelem, false, &wtime, &traceInfo);
++            prims.recvReduceCopySend(srcoffset, dstoffset, thisNelem, false);
+           else if (msccltran->type == MSCCL_RECV_REDUCE_COPY)
+           {
+             __syncthreads();
+-            uint64_t time1 = mscclTraceClock();
+-            prims.recvReduceCopy(srcoffset, dstoffset, thisNelem, 0, &wtime, &traceInfo);
++            prims.recvReduceCopy(srcoffset, dstoffset, thisNelem, 0);
+             __syncthreads();
+-            uint64_t time2 = mscclTraceClock();
+-            otime += time2 - time1;
+           }
+           else if (msccltran->type == MSCCL_LOCAL_COPY) {
+-            uint64_t deviceStart = mscclTraceClock();
+             prims.localCopy(srcPointer+srcoffset, dstPointer+dstoffset, thisNelem);
+-            mscclTracePrint(&traceInfo, 0, deviceStart, mscclTraceClock());
+           }
+           else
+             return;
++          if (traceEnabled) {
++            barrier(nthreads);
++            if (tid == 0 && rawTrace != NULL) {
++              rawTrace->rank = (uint32_t)rank;
++              rawTrace->tb_id = (uint16_t)bid;
++              rawTrace->step_index = (uint16_t)i;
++              rawTrace->endpoint_type = (uint16_t)msccltran->type;
++              rawTrace->peer = vericclTracePeer(
++                  msccltran->type, recvPeer, sendPeer);
++              rawTrace->channel = (uint16_t)channelId;
++              rawTrace->iteration = (uint32_t)iter;
++              rawTrace->tb_reach = tbReach;
++              rawTrace->dependency_done = dependencyDone;
++              rawTrace->transfer_start = transferStart;
++              rawTrace->transfer_end = mscclTraceClock();
++              rawTrace->flags =
++                  (uint32_t)mscclTraceResourceMask(msccltran->type);
++              rawTrace->reserved = 0;
++            }
++            barrier(nthreads);
++          }
+         }
+         if (msccltran->has_dependence && tid == nthreads-1){
+ 	        if (needsFence) __threadfence();
+@@ -277,9 +304,6 @@ namespace {
+         }
+         step++;
+       }
+-      ++loopcount;
+     }
+-    __syncthreads();
+-    if(tid==0)printf("\n===============================Rank:%d,Bid:%d,Count:%d|SyncTime:%llu,OtherTime:%llu,Wtime:%llu=================================\n",rank,bid,loopcount,(unsigned long long)stime,(unsigned long long)otime,(unsigned long long)wtime);
+   }
+ }
+diff --git a/src/collectives/device/primitives.h b/src/collectives/device/primitives.h
+index 8f4b6be..61fe8c7 100644
+--- a/src/collectives/device/primitives.h
++++ b/src/collectives/device/primitives.h
+@@ -51,18 +51,10 @@ __device__ __forceinline__ uint64_t mscclTraceClock() {
+ __device__ __forceinline__ void mscclTracePrint(
+     const MscclTraceInfo* trace, int sliceIndex, uint64_t startClockTicks,
+     uint64_t endClockTicks) {
+-#if defined(ENABLE_MSCCL_TIMELINE_TRACE)
+-  if (trace != NULL && threadIdx.x == 0) {
+-    printf(
+-        "MSCCLTRACE|rank=%d|bid=%d|channel=%d|proto=%d|op=%d|mask=%d|recv_peer=%d|send_peer=%d|iter=%d|transfer=%d|step=%d|chunk=%d|count=%d|slice=%d|srcbuf=%d|dstbuf=%d|srcoff=%lld|dstoff=%lld|nelem=%d|start=%llu|end=%llu\n",
+-        trace->rank, trace->bid, trace->channelId, trace->protoId,
+-        trace->opType, trace->resourceMask, trace->recvPeer, trace->sendPeer,
+-        trace->iter, trace->transferIndex, trace->step, trace->chunkOffset,
+-        trace->countIndex, sliceIndex, trace->srcBuffer, trace->dstBuffer,
+-        trace->srcOffset, trace->dstOffset, trace->elemCount,
+-        (unsigned long long)startClockTicks, (unsigned long long)endClockTicks);
+-  }
+-#endif
++  (void)trace;
++  (void)sliceIndex;
++  (void)startClockTicks;
++  (void)endClockTicks;
+ }
+ 
+ /* Protocol classes: ProtoSimple, ProtoLL, ProtoLL128
+diff --git a/src/collectives/device/prims_simple.h b/src/collectives/device/prims_simple.h
+index b8b87b3..015f520 100644
+--- a/src/collectives/device/prims_simple.h
++++ b/src/collectives/device/prims_simple.h
+@@ -185,10 +185,11 @@ class Primitives<
+         NPKIT_GPU_PRIMS_WAIT_BEGIN(tid);
+ 
+         uint64_t waitStart = 0, waitEnd = 0, dataStart = 0, dataEnd = 0;
+-        if (tid == 0) waitStart = mscclTraceClock();
++        if (tid == 0 && (wtime != NULL || trace != NULL))
++          waitStart = mscclTraceClock();
+         waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(dstIx, remoteIx, offset, sliceSize);
+         subBarrier();
+-        if (tid == 0) {
++        if (tid == 0 && (wtime != NULL || trace != NULL)) {
+           waitEnd = mscclTraceClock();
+           if (wtime != NULL) *wtime += waitEnd - waitStart;
+           if (sliceSize > 0) dataStart = waitEnd;
+@@ -223,8 +224,10 @@ class Primitives<
+              sliceSize);
+         }
+         barrier(); // This barrier has a counterpart in following loop
+-        if (tid == 0 && sliceSize > 0) dataEnd = mscclTraceClock();
+-        if (sliceSize > 0) mscclTracePrint(trace, slice, dataStart, dataEnd);
++        if (tid == 0 && trace != NULL && sliceSize > 0)
++          dataEnd = mscclTraceClock();
++        if (trace != NULL && sliceSize > 0)
++          mscclTracePrint(trace, slice, dataStart, dataEnd);
+         if (Send && (flags & RolePostSend) && index == 0) __threadfence_system();
+         __syncwarp();
+         postPeer<Recv, Send>();
+diff --git a/src/include/msccl.h b/src/include/msccl.h
+index 05c7674..2487c94 100644
+--- a/src/include/msccl.h
++++ b/src/include/msccl.h
+@@ -2,6 +2,7 @@
+ #define MSCCL_H_
+ 
+ #include <stdint.h>
++#include "vericcl_trace_format.h"
+ 
+ #define MSCCL_MAX_NUM_STEPS 256
+ #define MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL 32
+@@ -10,8 +11,8 @@
+ #define MSCCL_MAX_COUNT 72 // make sure this does not overflow wrt the size of mscclWorkElem::mscclMaxAllowCount
+ #define MSCCL_MAX_REDUCE_FUSION 16
+ 
+-#define MSCCL_SLICESTEPS (NCCL_STEPS/4)
+-#define MSCCL_CHUNKSTEPS (NCCL_STEPS/2)
++#define MSCCL_SLICESTEPS 4
++#define MSCCL_CHUNKSTEPS 4
+ 
+ static_assert(MAXCHANNELS*MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL >= MSCCL_MAX_NUM_THREAD_BLOCKS);
+ static_assert(MSCCL_MAX_NUM_STEPS <= 256, "MSCCL interpreter doesn't allow for more than nthreads dependences");
+@@ -141,6 +142,10 @@ struct mscclDevCommInfo {
+   struct mscclFlag* flags;
+   // declaration for scratchBuffer. This is only to be accessed by the host
+   void* scratchBuffer;
++  VericclRawStepTraceRecord* traceRecords;
++  unsigned long long* traceRecordCount;
++  unsigned int* traceOverflow;
++  unsigned long long traceCapacity;
+ };
+ 
+ struct mscclRegistration {
+@@ -163,6 +168,8 @@ struct mscclHostCommInfo {
+   int inMSCCLConnectionSetupPhase;
+   uint32_t workIndex;
+   int flagsNeedReset;
++  int traceEnabled;
++  char* traceFilePrefix;
+ };
+ 
+ // Stride copy for 2D alltoall
+diff --git a/src/init.cc b/src/init.cc
+index e36aecc..6db7152 100644
+--- a/src/init.cc
++++ b/src/init.cc
+@@ -26,6 +26,8 @@
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
++#include <stdio.h>
++#include <stdlib.h>
+ 
+ #define STR2(v) #v
+ #define STR(v) STR2(v)
+@@ -111,6 +113,113 @@ void NCCL_NO_OPTIMIZE commPoison(ncclComm_t comm) {
+ 
+ #undef NCCL_NO_OPTIMIZE
+ 
++static ncclResult_t vericclTraceInit(ncclComm_t comm) {
++  struct mscclHostCommInfo* hostInfo = &comm->mscclHostComm;
++  struct mscclDevCommInfo* traceInfo = &hostInfo->mscclDevComm;
++  const char* enabled = getenv("VERICCL_TRACE_ENABLE");
++  if (enabled == NULL || enabled[0] == '\0' || strcmp(enabled, "0") == 0) {
++    return ncclSuccess;
++  }
++
++  unsigned long long capacity = 1048576ULL;
++  const char* recordsValue = getenv("VERICCL_TRACE_RECORDS");
++  if (recordsValue != NULL && recordsValue[0] != '\0') {
++    char* end = NULL;
++    errno = 0;
++    capacity = strtoull(recordsValue, &end, 10);
++    if (errno != 0 || end == recordsValue || *end != '\0' || capacity == 0 ||
++        capacity > SIZE_MAX / sizeof(VericclRawStepTraceRecord)) {
++      WARN("Invalid VERICCL_TRACE_RECORDS value: %s", recordsValue);
++      return ncclInvalidArgument;
++    }
++  }
++
++  const char* prefix = getenv("VERICCL_TRACE_FILE_PREFIX");
++  if (prefix == NULL || prefix[0] == '\0') prefix = "vericcl-trace";
++  hostInfo->traceFilePrefix = strdup(prefix);
++  if (hostInfo->traceFilePrefix == NULL) return ncclSystemError;
++
++  traceInfo->traceCapacity = capacity;
++  NCCLCHECK(ncclCudaCalloc(
++      &traceInfo->traceRecords, (size_t)capacity));
++  NCCLCHECK(ncclCudaCalloc(&traceInfo->traceRecordCount, 1));
++  NCCLCHECK(ncclCudaCalloc(&traceInfo->traceOverflow, 1));
++  hostInfo->traceEnabled = 1;
++  return ncclSuccess;
++}
++
++static ncclResult_t vericclTraceFlush(ncclComm_t comm) {
++  struct mscclHostCommInfo* hostInfo = &comm->mscclHostComm;
++  struct mscclDevCommInfo* traceInfo = &hostInfo->mscclDevComm;
++  if (!hostInfo->traceEnabled || traceInfo->traceRecords == NULL) {
++    return ncclSuccess;
++  }
++
++  unsigned long long reservedCount = 0;
++  unsigned int overflow = 0;
++  CUDACHECK(cudaMemcpy(
++      &reservedCount, traceInfo->traceRecordCount,
++      sizeof(reservedCount), cudaMemcpyDeviceToHost));
++  CUDACHECK(cudaMemcpy(
++      &overflow, traceInfo->traceOverflow,
++      sizeof(overflow), cudaMemcpyDeviceToHost));
++  const unsigned long long recordCount =
++      reservedCount < traceInfo->traceCapacity
++          ? reservedCount
++          : traceInfo->traceCapacity;
++  const size_t recordsBytes =
++      (size_t)recordCount * sizeof(VericclRawStepTraceRecord);
++  VericclRawStepTraceRecord* records = NULL;
++  if (recordsBytes > 0) {
++    records = (VericclRawStepTraceRecord*)malloc(recordsBytes);
++    if (records == NULL) return ncclSystemError;
++    cudaError_t copyResult = cudaMemcpy(
++        records, traceInfo->traceRecords, recordsBytes,
++        cudaMemcpyDeviceToHost);
++    if (copyResult != cudaSuccess) {
++      free(records);
++      return ncclUnhandledCudaError;
++    }
++  }
++
++  const size_t pathLength = strlen(hostInfo->traceFilePrefix) + 48;
++  char* path = (char*)malloc(pathLength);
++  if (path == NULL) {
++    free(records);
++    return ncclSystemError;
++  }
++  snprintf(
++      path, pathLength, "%s.rank-%d.bin",
++      hostInfo->traceFilePrefix, comm->rank);
++  FILE* output = fopen(path, "wb");
++  free(path);
++  if (output == NULL) {
++    free(records);
++    return ncclSystemError;
++  }
++
++  VericclRawTraceHeader header;
++  memset(&header, 0, sizeof(header));
++  header.magic = VERICCL_TRACE_MAGIC;
++  header.version = VERICCL_TRACE_VERSION;
++  header.header_size = (uint16_t)sizeof(header);
++  header.record_size = (uint32_t)sizeof(VericclRawStepTraceRecord);
++  header.rank = (uint32_t)comm->rank;
++  header.count = (uint64_t)recordCount;
++  header.capacity = (uint64_t)traceInfo->traceCapacity;
++  header.overflow = overflow ? VERICCL_TRACE_FLAG_OVERFLOW : 0;
++
++  bool writeOk = fwrite(&header, sizeof(header), 1, output) == 1;
++  if (writeOk && recordCount > 0) {
++    writeOk = fwrite(
++        records, sizeof(VericclRawStepTraceRecord),
++        (size_t)recordCount, output) == (size_t)recordCount;
++  }
++  if (fclose(output) != 0) writeOk = false;
++  free(records);
++  return writeOk ? ncclSuccess : ncclSystemError;
++}
++
+ static ncclResult_t commFree(ncclComm_t comm) {
+   if (comm == NULL)
+     return ncclSuccess;
+@@ -140,6 +249,20 @@ static ncclResult_t commFree(ncclComm_t comm) {
+   if (comm->bootstrap)
+     NCCLCHECK(bootstrapClose(comm->bootstrap));
+ 
++  ncclResult_t traceResult = vericclTraceFlush(comm);
++  if (traceResult != ncclSuccess) {
++    WARN("Failed to write VeriCCL trace for rank %d", comm->rank);
++  }
++  struct mscclDevCommInfo* traceInfo =
++      &comm->mscclHostComm.mscclDevComm;
++  if (traceInfo->traceRecords != NULL)
++    CUDACHECK(cudaFree(traceInfo->traceRecords));
++  if (traceInfo->traceRecordCount != NULL)
++    CUDACHECK(cudaFree(traceInfo->traceRecordCount));
++  if (traceInfo->traceOverflow != NULL)
++    CUDACHECK(cudaFree(traceInfo->traceOverflow));
++  free(comm->mscclHostComm.traceFilePrefix);
++
+   CUDACHECK(cudaFree(comm->mscclHostComm.mscclDevComm.flags));
+   CUDACHECK(cudaFree((ncclDevCommAndChannels*)comm->devComm));
+ 
+@@ -299,6 +422,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
+ 
+   // Allocating and copying MSCCL elements
+   NCCLCHECK(ncclCudaCalloc(&comm->mscclHostComm.mscclDevComm.flags, MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL * MAXCHANNELS));
++  NCCLCHECK(vericclTraceInit(comm));
+   comm->mscclHostComm.workIndex = 1; // start workIndex from 1 since flags are initialized to 0
+   comm->mscclHostComm.flagsNeedReset = 0; // since we just allocated them
+   NCCLCHECK(ncclCudaMemcpy(comm->hostDevComm.mscclInfo, &comm->mscclHostComm.mscclDevComm, 1));

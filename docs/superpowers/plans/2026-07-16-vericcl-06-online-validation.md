@@ -146,11 +146,11 @@ Expected: all tests pass.
 - Produces binary `VericclRawTraceHeader` and `VericclRawStepTraceRecord` format shared by C++ and Python
 - Produces environment controls `VERICCL_TRACE_ENABLE`, `VERICCL_TRACE_RECORDS`, and `VERICCL_TRACE_FILE_PREFIX`
 
-- [ ] **Step 1: Write a patch contract test**
+- [x] **Step 1: Write a patch contract test**
 
 The test parses the patch and asserts it removes per-step `MSCCLTRACE` printf use, sets literal `MSCCL_SLICESTEPS 4` and `MSCCL_CHUNKSTEPS 4`, adds fixed record/counter/overflow fields, records the four timestamps, checks buffer bounds atomically, and frees trace allocations on communicator teardown.
 
-- [ ] **Step 2: Define a stable raw binary record**
+- [x] **Step 2: Define a stable raw binary record**
 
 ```c
 typedef struct {
@@ -172,15 +172,15 @@ typedef struct {
 
 The final Python StepTraceRecord obtains `transfer_id` and full semantic metadata from the XML sidecar keyed by rank/TB/step; the raw runtime format does not duplicate long string IDs.
 
-- [ ] **Step 3: Build the patch against the reference interpreter locations**
+- [x] **Step 3: Build the patch against the reference interpreter locations**
 
 Patch `msccl.h` to add trace buffers to host/device comm state and literal chunk/slice steps. Patch `init.cc` to allocate the fixed device record buffer/counter when enabled and free it on destroy. Patch `msccl_interpreter.h` so thread 0 records TB reach before dependency polling, dependency completion after its barrier, primitive start immediately before the operation, and end after completion. Patch host teardown or an explicit flush path to copy records and header to `<prefix>.rank-<rank>.bin`. Remove aggregate printf timing from the trace build.
 
-- [ ] **Step 4: Add overflow and release-build behavior**
+- [x] **Step 4: Add overflow and release-build behavior**
 
 An atomic index reserves each record; indexes beyond capacity only set the overflow flag. When tracing is disabled, pointers are null and the interpreter executes no record writes. Patch documentation includes exact MSCCL rebuild commands and states that release performance measurements must use tracing disabled.
 
-- [ ] **Step 5: Verify patch application without modifying the reference tree**
+- [x] **Step 5: Verify patch application without modifying the reference tree**
 
 `verify_patch.py` copies only required baseline files to a temporary directory, applies the patch with `git apply --check` or `patch --dry-run`, verifies the shared struct layout, and scans patched source for per-step trace printf.
 
