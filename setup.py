@@ -21,6 +21,7 @@ setup(
     },
     install_requires=[
         "argcomplete",
+        "dd>=0.5.7,<0.6",
         "gurobipy",
         "lxml",
         "numpy",

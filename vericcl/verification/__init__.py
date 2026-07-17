@@ -1,6 +1,17 @@
+from vericcl.verification.bdd_backend import BDDAnalysisResult
+from vericcl.verification.bdd_flow import (
+    FlowReplacementHint,
+    analyze_flow_congestion,
+)
+from vericcl.verification.bdd_order import TBOrderHint, analyze_tb_order
 from vericcl.verification.constraints import (
     verify_schedule_constraints,
     verify_schedule_pre_lowering,
+)
+from vericcl.verification.flow_index import (
+    FlowRecord,
+    LaneState,
+    build_flow_index,
 )
 from vericcl.verification.model import (
     CheckResult,
@@ -20,15 +31,23 @@ from vericcl.verification.simulator import (
 
 
 __all__ = [
+    "BDDAnalysisResult",
     "CheckResult",
+    "FlowRecord",
+    "FlowReplacementHint",
+    "LaneState",
     "ResourceInterval",
     "ResourceTimeline",
     "SimulationEvent",
     "SimulationResult",
+    "TBOrderHint",
     "ValidationReport",
     "ValidationStatus",
+    "analyze_flow_congestion",
+    "analyze_tb_order",
+    "build_flow_index",
+    "simulate_schedule",
     "verify_schedule_constraints",
     "verify_schedule_pre_lowering",
     "verify_schedule_semantics",
-    "simulate_schedule",
 ]

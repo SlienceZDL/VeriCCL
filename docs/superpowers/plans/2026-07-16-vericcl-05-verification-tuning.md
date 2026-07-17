@@ -138,11 +138,11 @@ Expected: all tests pass.
 - Produces: `analyze_flow_congestion(schedule: Schedule, topology: Topology, inputs: ResolvedInput) -> BDDAnalysisResult`
 - Produces: `analyze_tb_order(tb_program: ThreadblockProgram, schedule: Schedule) -> BDDAnalysisResult`
 
-- [ ] **Step 1: Add the BDD dependency through an internal adapter**
+- [x] **Step 1: Add the BDD dependency through an internal adapter**
 
 Add runtime dependency `dd` to `setup.py`, but expose it only through `bdd_backend.py`. The adapter declares compact bit-vector variables, builds relations from integer IDs, performs union/intersection/difference/complement, enumerates satisfying ID tuples, and converts backend exceptions to `analysis_error`.
 
-- [ ] **Step 2: Write flow truncation and cross-endpoint resource tests**
+- [x] **Step 2: Write flow truncation and cross-endpoint resource tests**
 
 ```python
 def test_member_flows_stop_comparing_after_first_aggregate_merge():
@@ -156,21 +156,21 @@ def test_different_root_leaf_flows_share_lane_index():
     assert result.hints[0].bottleneck_lane == LaneKey(1, 2, 0)
 ```
 
-- [ ] **Step 3: Write waiting-opportunity and TB inversion tests**
+- [x] **Step 3: Write waiting-opportunity and TB inversion tests**
 
 Construct a non-leaf state with `ready_time < st_time` and an earlier compatible idle lane; assert a FlowReplacementHint includes source flow, candidate flow IDs, divergence rank, waiting transfer, wait interval, and earliest candidate start. For TB order, assert a later step that became ready first produces a swap hint only when no necessary order exists.
 
-- [ ] **Step 4: Run tests and confirm missing analysis modules**
+- [x] **Step 4: Run tests and confirm missing analysis modules**
 
 Run: `python3 -m pytest tests/unit/verification/test_flow_index.py tests/unit/verification/test_bdd_flow.py tests/unit/verification/test_bdd_order.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 5: Implement compact relations with external metadata**
+- [x] **Step 5: Implement compact relations with external metadata**
 
 BDD variables contain only encoded `flow_id`, `candidate_flow_id`, `demand_id`, and `lane_id` for flow analysis, or `tb_id`, `op_id`, and `step_index` for order analysis. Rank, time, paths, resource intervals, and transfer metadata stay in Python records. Candidate compatibility prefilters topology, forbidden atoms, logical demand, stage interface, and target semantics; it does not modify schedules.
 
-- [ ] **Step 6: Run BDD tests**
+- [x] **Step 6: Run BDD tests**
 
 Run: `python3 -m pytest tests/unit/verification/test_flow_index.py tests/unit/verification/test_bdd_flow.py tests/unit/verification/test_bdd_order.py -q`
 
