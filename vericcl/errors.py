@@ -14,5 +14,9 @@ class SolverUnavailableError(VeriCCLError):
     """Raised when a requested solver backend is unavailable."""
 
 
+class ConstructionInfeasibleError(VeriCCLError):
+    """Raised when a constructive solver cannot produce a legal schedule."""
+
+
 class RuntimeCompatibilityError(VeriCCLError):
     """Raised when an output cannot run on the selected runtime."""

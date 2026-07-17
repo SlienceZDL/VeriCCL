@@ -130,7 +130,7 @@ Expected: all tests pass.
 - Produces: `build_solver_problem(node: PlanNode, inputs: ResolvedInput, topology: Topology) -> SolverProblem`
 - Produces: `construct_candidate(problem: SolverProblem, channel_count: int) -> Schedule`
 
-- [ ] **Step 1: Write tests for forbidden members, shortest paths, and tree branching**
+- [x] **Step 1: Write tests for forbidden members, shortest paths, and tree branching**
 
 ```python
 def test_shared_transfer_is_removed_if_any_member_is_forbidden():
@@ -153,21 +153,21 @@ def test_local_contributor_does_not_create_self_transfer():
     assert all(transfer.src_rank != transfer.dst_rank for transfer in schedule.transfers)
 ```
 
-- [ ] **Step 2: Run tests and verify missing implementation**
+- [x] **Step 2: Run tests and verify missing implementation**
 
 Run: `python3 -m pytest tests/unit/solver/test_demands.py tests/unit/solver/test_constructive.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 3: Expand PlanNode interfaces into deterministic transfer demands**
+- [x] **Step 3: Expand PlanNode interfaces into deterministic transfer demands**
 
 Each demand identifies stage, root, required leaf, logical position, contributors, member slice IDs, allowed links, forbidden members, and candidate paths. AllGather expands into Broadcast demands; AllToAll creates one source-to-owner chain per slice. Reduction dual nodes remain marked for Phase 03 Task 5.
 
-- [ ] **Step 4: Port only reusable heuristics into a deterministic constructive backend**
+- [x] **Step 4: Port only reusable heuristics into a deterministic constructive backend**
 
 Build trees by earliest resource-ready time, then link duration, hop count, rank, and channel. Batch mode groups demands with identical root, legal path set, stage interface, and size; excess resource occupancy starts a new batch. The backend outputs a valid schedule or a typed infeasibility reason and may be used as MILP warm start.
 
-- [ ] **Step 5: Run focused tests**
+- [x] **Step 5: Run focused tests**
 
 Run: `python3 -m pytest tests/unit/solver/test_demands.py tests/unit/solver/test_constructive.py -q`
 

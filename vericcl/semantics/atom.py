@@ -298,9 +298,33 @@ class Schedule:
         self._validate_transfers()
 
     def _validate_transfers(self) -> None:
+        path_scope = self.metadata.get("path_scope", "global")
+        if path_scope not in {"global", "stage_suffix"}:
+            raise SemanticError(
+                "schedule.metadata.path_scope must be global or stage_suffix"
+            )
         transfer_ids = frozenset(
             transfer.transfer_id for transfer in self.transfers
         )
+        path_roots = {}
+        if path_scope == "stage_suffix":
+            raw_path_roots = self.metadata.get("path_roots")
+            if not isinstance(raw_path_roots, Mapping):
+                raise SemanticError(
+                    "stage_suffix schedule requires path_roots metadata"
+                )
+            path_roots = dict(raw_path_roots)
+            if set(path_roots) != transfer_ids:
+                raise SemanticError(
+                    "stage_suffix path_roots must cover every transfer exactly"
+                )
+            for transfer_id, root in path_roots.items():
+                _identifier(transfer_id, "schedule.metadata.path_roots")
+                _integer(root, "schedule.metadata.path_roots")
+                if root >= self.rank_count:
+                    raise SemanticError(
+                        "stage_suffix path root is outside the rank range"
+                    )
         global_slice_count = self.rank_count * self.slice_count
         for transfer in self.transfers:
             if transfer.src_rank >= self.rank_count or transfer.dst_rank >= self.rank_count:
@@ -316,7 +340,17 @@ class Schedule:
                     raise SemanticError(
                         "atom slice size does not match the schedule slice size"
                     )
+                if (
+                    path_scope == "stage_suffix"
+                    and atom.path[0].symbols[0].src_rank
+                    != path_roots[transfer.transfer_id]
+                ):
+                    raise SemanticError(
+                        "stage_suffix atom does not start at its declared root"
+                    )
                 atom.validate_path_prefix(
                     current_rank=transfer.dst_rank,
-                    slice_count=self.slice_count,
+                    slice_count=(
+                        self.slice_count if path_scope == "global" else None
+                    ),
                 )

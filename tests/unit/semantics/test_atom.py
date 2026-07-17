@@ -301,3 +301,45 @@ def test_schedule_freezes_nested_metadata():
     assert schedule.metadata["list"] == (1,)
     assert schedule.metadata["tuple"] == (2,)
     assert schedule.metadata["set"] == frozenset({3})
+
+
+def test_stage_suffix_requires_an_exact_declared_path_root():
+    transfer = make_transfer(member_slice_ids=frozenset({4}))
+
+    with pytest.raises(SemanticError, match="path_roots"):
+        Schedule(
+            "schedule",
+            (transfer,),
+            (),
+            2,
+            4,
+            1024,
+            {"path_scope": "stage_suffix"},
+        )
+    with pytest.raises(SemanticError, match="declared root"):
+        Schedule(
+            "schedule",
+            (transfer,),
+            (),
+            2,
+            4,
+            1024,
+            {
+                "path_scope": "stage_suffix",
+                "path_roots": {"transfer-0": 1},
+            },
+        )
+
+    schedule = Schedule(
+        "schedule",
+        (transfer,),
+        (),
+        2,
+        4,
+        1024,
+        {
+            "path_scope": "stage_suffix",
+            "path_roots": {"transfer-0": 0},
+        },
+    )
+    assert schedule.metadata["path_roots"]["transfer-0"] == 0
