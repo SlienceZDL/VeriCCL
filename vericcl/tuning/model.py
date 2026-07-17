@@ -1,9 +1,16 @@
 import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from enum import Enum
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Mapping, Optional, Tuple
 
 from vericcl.errors import SemanticError
 from vericcl.input.models import ForbiddenTransfer
+
+if TYPE_CHECKING:
+    from vericcl.input.models import ResolvedInput
+    from vericcl.semantics.atom import Schedule
+    from vericcl.topology.model import Topology
 
 
 def _identifier(value: object, field: str) -> str:
@@ -97,7 +104,8 @@ class TuningOverlay:
         forbidden = frozenset(self.temporary_forbidden)
         if not all(isinstance(item, ForbiddenTransfer) for item in forbidden):
             raise SemanticError(
-                "tuning_overlay.temporary_forbidden must contain ForbiddenTransfer values"
+                "tuning_overlay.temporary_forbidden must contain "
+                "ForbiddenTransfer values"
             )
         object.__setattr__(self, "temporary_forbidden", forbidden)
         object.__setattr__(
@@ -183,7 +191,9 @@ class TuningOverlay:
         try:
             items = tuple(value)
         except TypeError as error:
-            raise SemanticError("tuning_overlay.lane_order must be iterable") from error
+            raise SemanticError(
+                "tuning_overlay.lane_order must be iterable"
+            ) from error
         normalized = []
         for item in items:
             if not isinstance(item, tuple) or len(item) != 2:
@@ -201,3 +211,111 @@ class TuningOverlay:
         if len(normalized) != len(set(normalized)):
             raise SemanticError("tuning_overlay.lane_order must be unique")
         return tuple(sorted(normalized))
+
+    def validate_against(
+        self,
+        inputs: "ResolvedInput",
+        schedule: "Schedule",
+        topology: "Topology",
+    ) -> None:
+        from vericcl.input.models import ResolvedInput
+        from vericcl.semantics.atom import Schedule
+        from vericcl.topology.model import LinkKey, Topology
+
+        if not isinstance(inputs, ResolvedInput):
+            raise SemanticError("inputs must be a ResolvedInput")
+        if not isinstance(schedule, Schedule):
+            raise SemanticError("schedule must be a Schedule")
+        if not isinstance(topology, Topology):
+            raise SemanticError("topology must be a Topology")
+        if (
+            schedule.rank_count != inputs.rank_count
+            or topology.rank_count != inputs.rank_count
+        ):
+            raise SemanticError("overlay rank contract does not match")
+        if (
+            schedule.slice_count != inputs.hyperparameters.slice_count
+            or schedule.slice_size_bytes
+            != inputs.hyperparameters.slice_size_bytes
+        ):
+            raise SemanticError("overlay slice contract does not match")
+        if (
+            self.channel_count is not None
+            and self.channel_count > inputs.solver.max_channels
+        ):
+            raise SemanticError("overlay channel count exceeds solver limit")
+        if self.hierarchy_template is not None and (
+            not inputs.strategies.hierarchy
+            or inputs.strategies.manual_hierarchy
+        ):
+            raise SemanticError(
+                "overlay hierarchy template cannot replace hierarchy inputs"
+            )
+        slice_limit = schedule.rank_count * schedule.slice_count
+        stage_limit = inputs.atom_constraints.stage_num
+        if stage_limit is None:
+            stage_limit = max(
+                (
+                    transfer.stage_id + 1
+                    for transfer in schedule.transfers
+                ),
+                default=0,
+            )
+        for item in self.temporary_forbidden:
+            if (
+                item.slice_id < 0
+                or item.slice_id >= slice_limit
+                or item.src_rank < 0
+                or item.src_rank >= schedule.rank_count
+                or item.dst_rank < 0
+                or item.dst_rank >= schedule.rank_count
+                or item.stage_id < 0
+                or item.stage_id >= stage_limit
+                or LinkKey(item.src_rank, item.dst_rank) not in topology.links
+            ):
+                raise SemanticError("overlay forbidden transfer is outside the problem")
+
+
+class RepairStatus(str, Enum):
+    SUCCESS = "success"
+    INFEASIBLE = "infeasible"
+    TIMEOUT = "timeout"
+    INVALID = "invalid"
+    NOT_RUN = "not_run"
+
+
+@dataclass(frozen=True)
+class RepairResult:
+    status: RepairStatus
+    schedule: Optional["Schedule"]
+    changed_transfer_ids: frozenset[str]
+    selected_candidate_flow_id: Optional[str]
+    method: str
+    evidence: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        from vericcl.semantics.atom import Schedule
+
+        if not isinstance(self.status, RepairStatus):
+            raise SemanticError("repair_result.status must be a RepairStatus")
+        if self.status is RepairStatus.SUCCESS:
+            if not isinstance(self.schedule, Schedule):
+                raise SemanticError("successful repair requires a Schedule")
+        elif self.schedule is not None:
+            raise SemanticError("unsuccessful repair must not contain a Schedule")
+        changed = frozenset(self.changed_transfer_ids)
+        for transfer_id in changed:
+            _identifier(transfer_id, "repair_result.changed_transfer_ids")
+        object.__setattr__(self, "changed_transfer_ids", changed)
+        _optional_identifier(
+            self.selected_candidate_flow_id,
+            "repair_result.selected_candidate_flow_id",
+        )
+        _identifier(self.method, "repair_result.method")
+        if not isinstance(self.evidence, Mapping):
+            raise SemanticError("repair_result.evidence must be a mapping")
+        object.__setattr__(
+            self,
+            "evidence",
+            MappingProxyType(dict(self.evidence)),
+        )

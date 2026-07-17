@@ -194,29 +194,29 @@ Expected: all tests pass, including explicit `analysis_error` behavior.
 - Produces: `repair_flow_suffix(schedule: Schedule, hint: FlowReplacementHint, overlay: TuningOverlay, topology: Topology, inputs: ResolvedInput) -> RepairResult`
 - Produces: `solve_local_repair(schedule: Schedule, hint: FlowReplacementHint, impact: ImpactClosure, overlay: TuningOverlay, topology: Topology, inputs: ResolvedInput, budget: ModelBudget) -> RepairResult`
 
-- [ ] **Step 1: Write immutability and boundary tests**
+- [x] **Step 1: Write immutability and boundary tests**
 
 Assert overlay changes do not mutate ResolvedInput or the parent Schedule. Reject overlay changes to slice size, CollectiveSpec, manual hierarchy, user forbidden atoms, topology links, or shared resource membership.
 
-- [ ] **Step 2: Write fixed-point impact closure tests**
+- [x] **Step 2: Write fixed-point impact closure tests**
 
 Start from one changed transfer and assert the closure includes downstream semantic dependencies, later operations on the same lane, operations whose directed-link concurrency changes, shared-NIC operations, and recursively affected descendants until no new item is added.
 
-- [ ] **Step 3: Write suffix repair tests**
+- [x] **Step 3: Write suffix repair tests**
 
 Test preservation of the common prefix, replacement after the first divergence rank, missing leaf delivery repair, AggregateState contributor repair, shared-suffix deduplication, forbidden candidate rejection, and deterministic earliest-time recomputation.
 
-- [ ] **Step 4: Run pure-software tuning tests and confirm failure**
+- [x] **Step 4: Run pure-software tuning tests and confirm failure**
 
 Run: `python3 -m pytest tests/unit/tuning/test_overlay.py tests/unit/tuning/test_impact.py tests/unit/tuning/test_repair.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 5: Implement greedy repair and local MILP fallback**
+- [x] **Step 5: Implement greedy repair and local MILP fallback**
 
 Greedy cost orders legal suffixes by added transfer time, hops, lane wait, shared-resource load, repair count, then stable ID. If it fails and the hint has positive expected gain, build a local MILP containing only affected states, lanes, resources, and descendants while fixing the common prefix and unrelated order. Return success, infeasible, timeout, or invalid with evidence; never trigger global solve here.
 
-- [ ] **Step 6: Run tuning tests**
+- [x] **Step 6: Run tuning tests**
 
 Run: `python3 -m pytest tests/unit/tuning -q`
 
