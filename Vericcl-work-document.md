@@ -381,6 +381,12 @@ MILP达到求解时间上限时，若Gurobi已经得到可行incumbent，则提�
 ### (4)形式化验证器
 验证与调优子系统由语义验证、BDD机会分析、动态事件模拟、XML验证、在线校准、在线算子验证和候选修复等独立模块组成。其目标是在保持集合通信语义和用户约束不变的前提下诊断候选、生成修复并选择经过验证的最佳候选，同时控制增量分析和重算开销。
 
+当前`vericcl/verification/model.py`使用独立维度保存input、semantic、state、topology、timing、resource、buffer、endpoint、deadlock、XML、BDD、simulation、runtime和online结果。MSCCL执行兼容性warning、BDD `analysis_error`和online `failed`不覆盖集合通信语义状态；runtime warning以及BDD分析失败均禁止候选进入最终性能选择。所有问题使用稳定英文问题码、英文消息和不可变evidence。
+
+预降低验证从初始payload状态创建新的`PayloadLedger`，按依赖偏序重放每个Transfer，并将最终活跃状态与`required_outputs()`逐项比较。并发REDUCE按照相同目标Rank、相同逻辑地址、时间区间相交且不存在组内前驱的条件形成汇合组；组内贡献集合必须两两不相交，聚合状态ready time取该组全部传输结束时间的最大值。该分组不依赖transfer ID是否相邻，不会把可并行贡献错误转为串行状态依赖。
+
+结构约束分别检查可派生完整端点对的成员元数据、atom路径操作覆盖、物理操作去重、单向链路与channel、共享传输中的禁用slice、前驱ready time、同一lane区间不重叠，以及共享资源固定slot容量。实际`s/r/rrc` EndpointProgram配对仍在BufferPlan生成后验证；预降低阶段只验证Transfer具有唯一生成该端点对所需的完整元数据。`verify_schedule_pre_lowering()`保留semantic、state、endpoint、topology、timing和resource的独立结果，避免聚合状态掩盖具体失败维度。
+
 [1]在线验证[可选]：在线验证分为链路校准和算子验证。链路校准使用独立基准XML测量不同channel并发度下的`B_link(k)`；算子验证通过当前XML对应的单个`nccl-tests`基础测试采集逐step时间、总算法带宽和总完成时间。Broadcast、Reduce、AllGather、AllReduce、AllToAll和ReduceScatter分别使用对应的基础性能测试；Scatter和Gather不提供独立在线测试。每次测试只加载当前XML，不测试MSCCL多算法注册或应用级算子序列。固定128 MiB链路校准不能独立估计启动开销，因此`alpha`始终保留topo输入值。
 
 原始MSCCL v0.7.4和`nccl-tests`不直接导出XML step级时间，因此正式性能测试与step诊断必须分离。VeriCCL必须提供适配MSCCL v0.7.4的trace补丁、构建说明和trace读取器；启用在线算子验证时，该trace能力是强制要求。现有GPU `printf`式输出和TB级聚合等待时间不足以完成逐step分析，trace实现必须改用预分配的GPU定长事件缓冲区，kernel结束后统一复制到host，禁止在通信执行期间逐step调用GPU `printf`。

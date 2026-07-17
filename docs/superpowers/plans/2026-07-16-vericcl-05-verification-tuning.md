@@ -37,7 +37,7 @@
 - Produces: `verify_schedule_constraints(schedule: Schedule, inputs: ResolvedInput, topology: Topology) -> CheckResult`
 - Produces: `verify_schedule_pre_lowering(schedule: Schedule, inputs: ResolvedInput, topology: Topology) -> tuple[CheckResult, ...]`
 
-- [ ] **Step 1: Write status-separation tests**
+- [x] **Step 1: Write status-separation tests**
 
 ```python
 def test_warning_does_not_replace_semantic_status():
@@ -52,25 +52,25 @@ def test_bdd_analysis_error_blocks_selection_without_marking_semantics_invalid()
     assert not report.eligible_for_selection
 ```
 
-- [ ] **Step 2: Write semantic and constraint negative tests**
+- [x] **Step 2: Write semantic and constraint negative tests**
 
 Cover missing final contributor, duplicate reduction contributor, inactive state reuse, wrong logical address, forbidden member in shared transfer, absent directed link, `st_time < ready_time`, same-lane overlap, exceeded fixed shared-resource K, and missing paired endpoint metadata.
 
-- [ ] **Step 3: Run tests and confirm missing verification modules**
+- [x] **Step 3: Run tests and confirm missing verification modules**
 
 Run: `python3 -m pytest tests/unit/verification/test_model.py tests/unit/verification/test_semantics.py tests/unit/verification/test_constraints.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement dimensioned results and exact state replay**
+- [x] **Step 4: Implement dimensioned results and exact state replay**
 
 `ValidationReport` contains independent input, semantic, state, topology, timing, resource, buffer, endpoint, deadlock, XML, BDD, simulation, runtime, and online results. Replay Schedule transfers through a fresh PayloadLedger and compare exact final states with `required_outputs()`.
 
-- [ ] **Step 5: Implement structural constraint checks**
+- [x] **Step 5: Implement structural constraint checks**
 
 Validate topology and forbidden items, transfer pairing metadata, ready/start/end causality, non-overlapping lane intervals, resource occupancy, path-prefix continuity, unique IDs, and no unaccounted physical duplicate for member atoms. Diagnostics include stable IDs and English messages.
 
-- [ ] **Step 6: Run focused tests**
+- [x] **Step 6: Run focused tests**
 
 Run: `python3 -m pytest tests/unit/verification/test_model.py tests/unit/verification/test_semantics.py tests/unit/verification/test_constraints.py -q`
 
