@@ -243,29 +243,29 @@ Expected: pass with Gurobi, otherwise explicit `not_run`.
 - Produces: `tune(initial: SolveCandidate, context: TuningContext) -> TuningResult`
 - Produces: `build_validation_json(report: ValidationReport) -> str`
 
-- [ ] **Step 1: Write candidate acceptance and rejection tests**
+- [x] **Step 1: Write candidate acceptance and rejection tests**
 
 Test strict simulated improvement without online data, statistical threshold with online medians/CVs, rejection on any correctness failure, rejection on BDD `analysis_error`, retention of runtime-incompatible candidates for offline analysis only, exact candidate signature deduplication, and selection of best historical candidate rather than last candidate.
 
-- [ ] **Step 2: Write report completeness and SHA binding tests**
+- [x] **Step 2: Write report completeness and SHA binding tests**
 
 Assert every report includes normalized input hash, requested/applied strategies and parameters, overlay, hierarchy plan, channels, BufferPlan summary, solver metrics, all validation dimensions, candidate lineage, rejection reason, selected_best, proven_optimal, search_space_restricted, runtime_compatible, XML SHA-256, and BDD/simulation evidence.
 
-- [ ] **Step 3: Run tests and confirm missing pipeline**
+- [x] **Step 3: Run tests and confirm missing pipeline**
 
 Run: `python3 -m pytest tests/unit/tuning/test_engine.py tests/unit/artifacts/test_reports.py tests/integration/test_verify_and_tune.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement the required validation order**
+- [x] **Step 4: Implement the required validation order**
 
 Run semantic/state/topology/timing/resource checks before XML lowering; only a pre-lowering-valid schedule may build BufferPlan and endpoints. Then run BufferPlan/liveness, endpoint/TB/deadlock/XML checks, compatibility warning, BDD analysis, and dynamic simulation. Retain structured failures at the stage where they occur. A BDD opportunity is a successful analysis result.
 
-- [ ] **Step 5: Implement bounded iterative tuning**
+- [x] **Step 5: Implement bounded iterative tuning**
 
 Use at most 20 iterations and the remaining verification wall-clock budget. Generate candidates from BDD flow/order hints and permitted overlay dimensions, run incremental simulation first, then complete validation only for improved candidates. Preserve every rejected candidate and reason. Mark selected_best only after comparing all fully validated history.
 
-- [ ] **Step 6: Run Phase 05 regression and coverage**
+- [x] **Step 6: Run Phase 05 regression and coverage**
 
 Run: `python3 -m pytest -m 'phase05 and not gurobi' --cov=vericcl.verification --cov=vericcl.tuning --cov=vericcl.artifacts --cov-report=term-missing -q`
 

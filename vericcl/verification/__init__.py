@@ -18,6 +18,11 @@ from vericcl.verification.model import (
     ValidationReport,
     ValidationStatus,
 )
+from vericcl.verification.pipeline import (
+    VerificationOutcome,
+    validate_and_lower_candidate,
+    verify_candidate,
+)
 from vericcl.verification.resource_events import (
     ResourceInterval,
     ResourceTimeline,
@@ -43,6 +48,7 @@ __all__ = [
     "TBOrderHint",
     "ValidationReport",
     "ValidationStatus",
+    "VerificationOutcome",
     "analyze_flow_congestion",
     "analyze_tb_order",
     "build_flow_index",
@@ -50,4 +56,6 @@ __all__ = [
     "verify_schedule_constraints",
     "verify_schedule_pre_lowering",
     "verify_schedule_semantics",
+    "validate_and_lower_candidate",
+    "verify_candidate",
 ]

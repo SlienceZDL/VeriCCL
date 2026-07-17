@@ -5,13 +5,20 @@ from vericcl.tuning.model import (
 )
 
 __all__ = [
+    "CandidateAssessment",
+    "CandidateProposal",
     "ImpactClosure",
     "RepairResult",
     "RepairStatus",
     "TuningOverlay",
+    "TuningContext",
+    "TuningHistoryEntry",
+    "TuningResult",
+    "OnlinePerformance",
     "compute_impact_closure",
     "repair_flow_suffix",
     "solve_local_repair",
+    "tune",
 ]
 
 
@@ -28,4 +35,16 @@ def __getattr__(name):
         from vericcl.tuning.local_milp import solve_local_repair
 
         return solve_local_repair
+    if name in {
+        "CandidateAssessment",
+        "CandidateProposal",
+        "OnlinePerformance",
+        "TuningContext",
+        "TuningHistoryEntry",
+        "TuningResult",
+        "tune",
+    }:
+        from vericcl.tuning import engine
+
+        return getattr(engine, name)
     raise AttributeError("module {!r} has no attribute {!r}".format(__name__, name))
