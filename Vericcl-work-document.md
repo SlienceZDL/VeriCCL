@@ -387,6 +387,10 @@ MILP达到求解时间上限时，若Gurobi已经得到可行incumbent，则提�
 
 结构约束分别检查可派生完整端点对的成员元数据、atom路径操作覆盖、物理操作去重、单向链路与channel、共享传输中的禁用slice、前驱ready time、同一lane区间不重叠，以及共享资源固定slot容量。实际`s/r/rrc` EndpointProgram配对仍在BufferPlan生成后验证；预降低阶段只验证Transfer具有唯一生成该端点对所需的完整元数据。`verify_schedule_pre_lowering()`保留semantic、state、endpoint、topology、timing和resource的独立结果，避免聚合状态掩盖具体失败维度。
 
+当前`vericcl/verification/simulator.py`按照实际XML执行条件执行确定性的离散事件模拟。求解得到的`st_time`只用于确定同一lane和共享资源slot内的稳定顺序，不作为运行时定时器；Transfer只有在完整前驱及semantic前驱完成、位于lane和资源slot队首且资源容量可用时才能启动。相反方向的有向链路维护独立active set，同一有向链路的不同channel共享链路active set，NIC等共享资源跨成员链路维护统一active set。
+
+每次start或complete事件改变并发度后，模拟器使用当前链路与共享资源并发度重新计算保守`D(K)`，并按照已经完成的归一化传输工作更新剩余时长；该过程不把多个channel解释为额外总带宽。每个`transfer_id`只计一次物理工作，重复成员atom只作为语义元数据。事件记录实际start/end、semantic ready time、排队等待和稳定事件顺序；`ResourceTimeline`覆盖每条有向链路及共享资源的busy/idle区间和active transfer集合。零开销传输在同一时间戳完成，不生成零长度资源区间。
+
 [1]在线验证[可选]：在线验证分为链路校准和算子验证。链路校准使用独立基准XML测量不同channel并发度下的`B_link(k)`；算子验证通过当前XML对应的单个`nccl-tests`基础测试采集逐step时间、总算法带宽和总完成时间。Broadcast、Reduce、AllGather、AllReduce、AllToAll和ReduceScatter分别使用对应的基础性能测试；Scatter和Gather不提供独立在线测试。每次测试只加载当前XML，不测试MSCCL多算法注册或应用级算子序列。固定128 MiB链路校准不能独立估计启动开销，因此`alpha`始终保留topo输入值。
 
 原始MSCCL v0.7.4和`nccl-tests`不直接导出XML step级时间，因此正式性能测试与step诊断必须分离。VeriCCL必须提供适配MSCCL v0.7.4的trace补丁、构建说明和trace读取器；启用在线算子验证时，该trace能力是强制要求。现有GPU `printf`式输出和TB级聚合等待时间不足以完成逐step分析，trace实现必须改用预分配的GPU定长事件缓冲区，kernel结束后统一复制到host，禁止在通信执行期间逐step调用GPU `printf`。

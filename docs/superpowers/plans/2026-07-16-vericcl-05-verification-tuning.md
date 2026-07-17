@@ -88,7 +88,7 @@ Expected: all tests pass.
 - Produces: `SimulationEvent`, `SimulationResult`, `ResourceTimeline`
 - Produces: `simulate_schedule(schedule: Schedule, topology: Topology) -> SimulationResult`
 
-- [ ] **Step 1: Write concurrency and direction tests**
+- [x] **Step 1: Write concurrency and direction tests**
 
 ```python
 def test_opposite_directions_progress_in_parallel():
@@ -101,21 +101,21 @@ def test_two_channels_share_total_directed_link_bandwidth():
     assert result.completion_time_us >= conservative_shared_bandwidth_time_us()
 ```
 
-- [ ] **Step 2: Add deterministic event-order and dependency tests**
+- [x] **Step 2: Add deterministic event-order and dependency tests**
 
 Test equal-time event tie-breaking, REDUCE join readiness as max predecessor end, shared NIC occupancy, idle lane with unavailable semantic data, and transfer duration changes when active concurrency K changes.
 
-- [ ] **Step 3: Run tests and verify missing simulator**
+- [x] **Step 3: Run tests and verify missing simulator**
 
 Run: `python3 -m pytest tests/unit/verification/test_simulator.py tests/property/test_simulator_resources.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement a deterministic discrete-event engine**
+- [x] **Step 4: Implement a deterministic discrete-event engine**
 
 Maintain semantic-ready queues, lane heads, directed-link active sets, and shared-resource active sets. At every event, recompute conservative duration using current calibrated K, advance the earliest stable event, and update downstream readiness. Deduplicate member atoms by transfer ID. Record resource busy/idle intervals, queue waits, and completion time in microseconds.
 
-- [ ] **Step 5: Run simulator tests**
+- [x] **Step 5: Run simulator tests**
 
 Run: `python3 -m pytest tests/unit/verification/test_simulator.py tests/property/test_simulator_resources.py -q`
 
