@@ -127,6 +127,8 @@ AggregateState的物理值不能仅以`logical_slice_index`标识，因为同一
 
 每个显式`cpy`作为LocalOpNode进入依赖图，并放入`send=-1, recv=-1`的本地TB。BufferPlan生成后必须执行BufferLivenessVerifier，检查所有读取均发生在初始化或写入之后、`rrc`执行前接收端累加器已经存在、活跃ValueKey没有错误复用同一物理位置、原地别名不会覆盖尚未发送的数据、非原地输入不会被修改、最终contributors和输出地址满足CollectiveSpec，以及`i_chunks`、`o_chunks`和`s_chunks`覆盖全部实际offset。完整BufferPlan、别名关系、scratch峰值和每个显式复制的原因必须写入逐XML验证报告。
 
+当前实现由`vericcl/xml/model.py`、`buffers.py`和`liveness.py`完成上述边界。BufferPlan按照最终output、算子特定原地别名和scratch活跃区间的顺序确定地址；非原地归约使用显式`cpy`初始化`rrc`累加器；原地AllToAll在接收覆盖仍被并行发送读取的输入前，将相关发送统一重定向到保护用scratch。若多个REDUCE在求解调度中同时写入同一Rank和逻辑位置，BufferPlan根据稳定transfer顺序建立累加器版本和有效执行区间，后续Endpoint依赖图必须据此串行化共享`rrc`累加器；该规则不限制不同累加器、不同逻辑位置或无缓冲区冲突的有向链路并行。BufferLivenessVerifier在EndpointAtom降低前独立检查传输读写区间、累加器、别名冲突、最终contributors和全部buffer边界。
+
 公开atom定义保持不变。XML生成器在内部使用端点atom封装：
 
 ```text

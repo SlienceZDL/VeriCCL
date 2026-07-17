@@ -36,7 +36,7 @@
 - Produces: `build_buffer_plan(schedule: Schedule, inputs: ResolvedInput) -> BufferPlan`
 - Produces: `verify_buffer_liveness(schedule: Schedule, plan: BufferPlan, inputs: ResolvedInput) -> None`
 
-- [ ] **Step 1: Write exact six-operator offset tests**
+- [x] **Step 1: Write exact six-operator offset tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -55,17 +55,17 @@ def test_final_offsets(kind, rank, source, logical, expected):
     assert plan.final_ref(rank, source, logical).buffer_offset == expected
 ```
 
-- [ ] **Step 2: Write in-place and out-of-place hazard tests**
+- [x] **Step 2: Write in-place and out-of-place hazard tests**
 
 Test AllReduce `i[l]`/`o[l]` alias, AllGather `i[l]`/`o[r*N+l]` alias, Reduce root-only alias, ReduceScatter owner alias, AllToAll scratch preservation on overwrite, and non-in-place reduction input preservation through explicit `cpy`.
 
-- [ ] **Step 3: Run tests and confirm missing XML models**
+- [x] **Step 3: Run tests and confirm missing XML models**
 
 Run: `python3 -m pytest tests/unit/xml/test_buffer_offsets.py tests/unit/xml/test_buffer_liveness.py tests/property/test_buffer_aliasing.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement value identities and deterministic interval allocation**
+- [x] **Step 4: Implement value identities and deterministic interval allocation**
 
 ```python
 @dataclass(frozen=True, order=True)
@@ -117,11 +117,11 @@ class BufferPlan:
 
 Allocate final output addresses first, then required input aliases, then scratch by first-fit over sorted live intervals. Two active ValueKeys may share a PhysicalRef only when their intervals do not overlap. Each LocalCopy records source, destination, predecessor state, and an English reason.
 
-- [ ] **Step 5: Implement mandatory liveness checks**
+- [x] **Step 5: Implement mandatory liveness checks**
 
 Verify every read follows initialization or write, every `rrc` destination accumulator exists before reduction, live values do not collide, in-place data is not overwritten before its final send, out-of-place input remains unchanged, final addresses match CollectiveSpec, and all offsets fit declared chunk counts.
 
-- [ ] **Step 6: Run buffer tests**
+- [x] **Step 6: Run buffer tests**
 
 Run: `python3 -m pytest tests/unit/xml/test_buffer_offsets.py tests/unit/xml/test_buffer_liveness.py tests/property/test_buffer_aliasing.py -q`
 
