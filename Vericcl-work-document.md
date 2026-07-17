@@ -271,6 +271,10 @@ mpirun -np 8 \
 
 VeriCCL每次在线验证或实际执行只加载一个XML，不负责在同一communicator中注册或选择多个XML算法。MSCCL的算法注册数量及其他执行限制仅纳入离线兼容性提示，不扩展MSCCL运行时。在线验证只运行当前XML对应的`nccl-tests`基础测试，不构造包含多个集合通信算子的应用级工作负载。
 
+当前XML降低实现会在序列化前按Rank稳定重编号TB：先排列被其他TB依赖的TB，再排列其余TB，并保持两组内部的原TB顺序。该过程仅修改TB局部编号，step内容、TB内顺序、传输配对和依赖step均保持不变；重编号后重新执行端点事件模拟、XML发射与结构验证。生成的`XmlArtifact`随后独立检查step数、发送/接收TB数、Rank总TB数、channel数、缓冲区offset及被依赖TB编号，并据此设置`runtime_compatible`。每个兼容性问题记录英文问题码、Rank、TB或channel、当前值、限制值和受影响的`transfer_id`集合。
+
+兼容性建议不修改当前artifact、slice大小、channel数或逻辑调度。建议顺序固定为TB重编号、增加channel数和增大slice；后两者标记为需要重新求解。更大slice候选必须整除总数据量，AllToAll和ReduceScatter还必须保持全局slice数量能够被Rank数整除。文件命名辅助接口根据`runtime_compatible`选择`.xml`或`.candidate.xml`；结构化验证报告及执行接口将在验证与编排阶段接入该结果。
+
 ### (2)算子语义与分层合成
 
 设`c = rN + l`，其中`r`为源Rank，`l`为逻辑slice位置。六类直接求解和XML输出算子的最终语义如下：

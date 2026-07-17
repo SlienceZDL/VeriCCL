@@ -331,25 +331,25 @@ Expected: all tests pass and golden files contain no Chinese characters.
 - Produces: `check_msccl_compatibility(artifact: XmlArtifact) -> CompatibilityReport`
 - Produces: `recommend_runtime_compatible_inputs(inputs: ResolvedInput, artifact: XmlArtifact) -> tuple[Recommendation, ...]`
 
-- [ ] **Step 1: Write one test per confirmed MSCCL limit**
+- [x] **Step 1: Write one test per confirmed MSCCL limit**
 
 Cover 257 steps/TB, 33 send TBs/channel, 33 receive TBs/channel, 217 TBs/rank, 33 channels, offset 32768, and a dependent TB that cannot be renumbered into `0..127`. Assert each issue reports rank, TB/channel, current value, limit, and transfer IDs.
 
-- [ ] **Step 2: Write candidate naming and recommendation tests**
+- [x] **Step 2: Write candidate naming and recommendation tests**
 
 Assert a compatible artifact uses `.xml`; an incompatible artifact uses `.candidate.xml`, remains available for offline analysis, and recommends TB renumbering before channel or larger-slice changes. Larger slice candidates must divide total size and preserve `N % P == 0` where required.
 
-- [ ] **Step 3: Run tests and verify missing compatibility module**
+- [x] **Step 3: Run tests and verify missing compatibility module**
 
 Run: `python3 -m pytest tests/unit/xml/test_compatibility.py tests/unit/xml/test_recommendations.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement checks without turning them into solve constraints**
+- [x] **Step 4: Implement checks without turning them into solve constraints**
 
 Compatibility failures set `runtime_compatible=False` but do not invalidate logical schedules, stop BDD analysis, or mutate current slice size/channel count. Renumber dependent TBs only when content, order, and dependencies remain unchanged. Recommendations are next-run inputs, not current artifact edits.
 
-- [ ] **Step 5: Run Phase 04 regression and coverage**
+- [x] **Step 5: Run Phase 04 regression and coverage**
 
 Run: `python3 -m pytest -m phase04 --cov=vericcl.xml --cov-report=term-missing -q`
 

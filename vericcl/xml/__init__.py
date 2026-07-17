@@ -1,4 +1,10 @@
 from vericcl.xml.buffers import build_buffer_plan
+from vericcl.xml.compatibility import (
+    CompatibilityIssue,
+    CompatibilityReport,
+    check_msccl_compatibility,
+    renumber_dependent_threadblocks,
+)
 from vericcl.xml.dependencies import TransferDAG, TransferNode, build_transfer_dag
 from vericcl.xml.deadlock import DeadlockResult, simulate_endpoint_execution
 from vericcl.xml.endpoints import (
@@ -20,6 +26,11 @@ from vericcl.xml.model import (
 from vericcl.xml.list_scheduler import schedule_threadblocks
 from vericcl.xml.lower import XmlArtifact, lower_to_xml
 from vericcl.xml.parser import normalize_xml, validate_xml
+from vericcl.xml.recommendations import (
+    Recommendation,
+    artifact_xml_filename,
+    recommend_runtime_compatible_inputs,
+)
 from vericcl.xml.threadblocks import (
     Threadblock,
     ThreadblockKey,
@@ -30,6 +41,8 @@ from vericcl.xml.threadblocks import (
 __all__ = [
     "AggregateValue",
     "BufferPlan",
+    "CompatibilityIssue",
+    "CompatibilityReport",
     "DeadlockResult",
     "EndpointAtom",
     "EndpointProgram",
@@ -37,6 +50,7 @@ __all__ = [
     "LocalCopy",
     "PhysicalRef",
     "RawValue",
+    "Recommendation",
     "Threadblock",
     "ThreadblockKey",
     "ThreadblockProgram",
@@ -46,10 +60,14 @@ __all__ = [
     "XmlArtifact",
     "build_buffer_plan",
     "build_transfer_dag",
+    "check_msccl_compatibility",
     "lower_endpoints",
     "lower_to_xml",
     "emit_xml",
     "normalize_xml",
+    "artifact_xml_filename",
+    "recommend_runtime_compatible_inputs",
+    "renumber_dependent_threadblocks",
     "schedule_threadblocks",
     "simulate_endpoint_execution",
     "validate_xml",

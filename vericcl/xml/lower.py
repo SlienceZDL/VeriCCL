@@ -8,6 +8,10 @@ from vericcl.input.models import ResolvedInput
 from vericcl.semantics.atom import Schedule
 from vericcl.topology.model import LinkKey, Topology
 from vericcl.xml.buffers import build_buffer_plan
+from vericcl.xml.compatibility import (
+    check_msccl_compatibility,
+    renumber_dependent_threadblocks,
+)
 from vericcl.xml.deadlock import simulate_endpoint_execution
 from vericcl.xml.dependencies import build_transfer_dag
 from vericcl.xml.emitter import emit_xml
@@ -74,12 +78,13 @@ def lower_to_xml(
     endpoints = lower_endpoints(schedule, buffers)
     dag = build_transfer_dag(endpoints, schedule, buffers)
     threadblocks = schedule_threadblocks(endpoints, dag)
+    threadblocks = renumber_dependent_threadblocks(threadblocks)
     deadlock = simulate_endpoint_execution(threadblocks)
     if deadlock.deadlocked:
         raise SemanticError("threadblock program is deadlocked")
     xml_text = emit_xml(threadblocks, buffers, inputs)
     validate_xml(xml_text, threadblocks, buffers, inputs)
-    return XmlArtifact(
+    artifact = XmlArtifact(
         xml_text=xml_text,
         buffer_plan=buffers,
         endpoint_program=endpoints,
@@ -87,3 +92,4 @@ def lower_to_xml(
         sha256=hashlib.sha256(xml_text.encode("utf-8")).hexdigest(),
         runtime_compatible=True,
     )
+    return check_msccl_compatibility(artifact).apply(artifact)
