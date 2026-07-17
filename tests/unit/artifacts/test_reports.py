@@ -121,6 +121,20 @@ def test_report_contains_reproducibility_validation_and_xml_binding():
     assert decoded["bdd_evidence"]
     assert decoded["simulation_evidence"]
     assert decoded["tuning_strategy"]["kind"] == "flow_suffix"
+    assert decoded["runtime_recommendations"] == []
+    assert decoded["reproducibility"] == {
+        "deterministic_artifacts": True,
+        "limits": [
+            "environment_signature",
+            "hardware_measurement",
+            "parallel_solver_execution",
+            "solver_version",
+        ],
+        "solver_name": "test-solver",
+        "solver_seed": 0,
+        "solver_version": "1",
+        "thread_count": 1,
+    }
     assert verify_artifact_binding(
         value.artifact_binding_sha256,
         input_value.input_sha256,

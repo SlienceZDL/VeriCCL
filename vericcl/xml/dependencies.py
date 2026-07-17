@@ -257,6 +257,9 @@ def build_transfer_dag(
                 for stage in atom.path
                 for symbol in stage.symbols
             ]
+            if len(flattened) == 1:
+                continue
+            immediate_predecessor = None
             for stage_id, operator, symbol in flattened[:-1]:
                 key = (
                     atom.slice_id,
@@ -269,7 +272,12 @@ def build_transfer_dag(
                 predecessor = path_index.get(key)
                 if predecessor is None:
                     raise SemanticError("atom path predecessor is missing")
-                add_edge(predecessor, transfer.transfer_id, "path")
+                immediate_predecessor = predecessor
+            add_edge(
+                immediate_predecessor,
+                transfer.transfer_id,
+                "path",
+            )
 
     output_producers = defaultdict(set)
     exact_producers = defaultdict(set)

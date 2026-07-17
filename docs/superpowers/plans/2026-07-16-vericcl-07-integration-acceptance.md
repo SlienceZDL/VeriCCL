@@ -116,19 +116,19 @@ Expected: all tests pass.
 **Interfaces:**
 - Consumes: public CLI and artifact files only
 
-- [ ] **Step 1: Add six direct-operator end-to-end cases**
+- [x] **Step 1: Add six direct-operator end-to-end cases**
 
 For each operator, run a 2-rank tiny solve, parse final XML/report, replay semantic outputs, check `cnt=1`, exact chunk counts/offsets, endpoint pairs, lane order, no deadlock, and required validation dimensions. Run both in-place and out-of-place where supported.
 
-- [ ] **Step 2: Add confirmed gateway hierarchy case**
+- [x] **Step 2: Add confirmed gateway hierarchy case**
 
 Use two 4-rank nodes with only ranks 0 and 4 connected to NIC. Assert local Reduce to gateways, gateway RS+AG, local AG, no `[1,5]` link, no stage barrier, and exact final AllReduce contributors at every rank.
 
-- [ ] **Step 3: Add incompatibility and reproducibility cases**
+- [x] **Step 3: Add incompatibility and reproducibility cases**
 
 Force a 257-step TB and verify candidate XML plus recommendations while semantic/BDD analysis still completes. Repeat a deterministic pure-software solve with seed 0 and identical environment signature; assert canonical schedule/report sections and hashes match, while solver metadata states the documented reproducibility limits.
 
-- [ ] **Step 4: Run end-to-end tests**
+- [x] **Step 4: Run end-to-end tests**
 
 Run: `python3 -m pytest tests/e2e -q`
 

@@ -17,6 +17,7 @@ from vericcl.topology.model import Topology
 from vericcl.tuning.model import TuningOverlay
 from vericcl.verification.model import ValidationReport
 from vericcl.verification.pipeline import VerificationOutcome
+from vericcl.xml.recommendations import recommend_runtime_compatible_inputs
 
 
 def _mapping(value: object, field: str) -> Mapping[str, object]:
@@ -106,6 +107,25 @@ def _strategy_parameters(inputs: ResolvedInput) -> Mapping[str, object]:
     )
 
 
+def _reproducibility(candidate: SolveCandidate) -> Mapping[str, object]:
+    metrics = candidate.metrics
+    return MappingProxyType(
+        {
+            "solver_seed": metrics.solver_seed,
+            "thread_count": metrics.thread_count,
+            "solver_name": metrics.solver_name,
+            "solver_version": metrics.solver_version,
+            "deterministic_artifacts": True,
+            "limits": (
+                "environment_signature",
+                "hardware_measurement",
+                "parallel_solver_execution",
+                "solver_version",
+            ),
+        }
+    )
+
+
 def _buffer_plan(outcome: VerificationOutcome) -> Mapping[str, object]:
     if outcome.artifact is None:
         return MappingProxyType({})
@@ -153,6 +173,8 @@ class CandidateReport:
     bdd_evidence: Mapping[str, object]
     simulation_evidence: Mapping[str, object]
     tuning_strategy: Mapping[str, object]
+    runtime_recommendations: tuple
+    reproducibility: Mapping[str, object]
 
     def __post_init__(self) -> None:
         for field in (
@@ -165,6 +187,7 @@ class CandidateReport:
             "bdd_evidence",
             "simulation_evidence",
             "tuning_strategy",
+            "reproducibility",
         ):
             object.__setattr__(
                 self,
@@ -261,6 +284,11 @@ def build_candidate_report(
         bdd_evidence=dict(outcome.report.bdd.evidence),
         simulation_evidence=dict(outcome.report.simulation.evidence),
         tuning_strategy=tuning_strategy,
+        runtime_recommendations=recommend_runtime_compatible_inputs(
+            inputs,
+            outcome.artifact,
+        ),
+        reproducibility=_reproducibility(candidate),
     )
 
 
