@@ -190,6 +190,10 @@ def test_root_ready_delay_is_reported_when_alternative_flow_can_start_earlier():
     assert root_hint.divergence_rank == 0
     assert root_hint.wait_interval_us == pytest.approx((0.0, 2.0))
     assert root_hint.earliest_candidate_start_us == pytest.approx(0.0)
+    assert all(
+        lane != root_hint.bottleneck_lane
+        for lane in root_hint.candidate_first_lanes.values()
+    )
 
 
 def test_backend_exception_becomes_analysis_error(monkeypatch):

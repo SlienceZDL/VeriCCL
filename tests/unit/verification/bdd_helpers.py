@@ -205,6 +205,7 @@ def crossing_topology():
         LinkKey(src, dst)
         for src, dst in (
             (0, 1),
+            (0, 2),
             (4, 1),
             (1, 3),
             (3, 5),

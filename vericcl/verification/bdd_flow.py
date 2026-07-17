@@ -113,7 +113,6 @@ def _discover_candidates(
             if ready_time >= transfer.st_time:
                 continue
             duration = transfer.ed_time - transfer.st_time
-            current_suffix = flow.ranks[position:]
             for path_index, path in enumerate(
                 _candidate_paths(flow, position, topology, inputs)
             ):
@@ -124,7 +123,7 @@ def _discover_candidates(
                 )
                 for channel in range(channel_count):
                     first_lane = LaneKey(path[0], path[1], channel)
-                    if path == current_suffix and first_lane == flow.lanes[position]:
+                    if first_lane == flow.lanes[position]:
                         continue
                     earliest = index.lane(first_lane).earliest_start(
                         ready_time,
