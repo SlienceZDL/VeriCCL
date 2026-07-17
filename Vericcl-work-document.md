@@ -144,6 +144,8 @@ EndpointAtom = {
 
 每次物理传输使用唯一`transfer_id`，并生成一对端点atom：SEND生成源Rank的`s`端点和目标Rank的`r`端点，REDUCE生成源Rank的`s`端点和目标Rank的`rrc`端点。两个端点共享逻辑传输信息和传输时间区间，只有双方均满足依赖并到达各自TB队首时才允许开始传输。求解器、容量约束和BDD按`transfer_id`将端点对视为一次物理传输，避免重复计算链路容量和路径。
 
+当前`vericcl/xml/endpoints.py`保证每个Transfer只生成一个严格配对的通信端点组，重复slice atom作为该物理传输的成员元数据保留，不重复生成物理端点。`dependencies.py`在TB降低前统一建立TransferDAG，边来源包括求解调度前驱、完整语义前驱、atom路径前缀、AggregateState版本、显式`cpy`初始化和原地覆盖反依赖；relay接收和后继发送始终是两个独立节点，多贡献汇合不压缩为单一前驱。
+
 XML通信TB严格使用单向结构。通信TB按`(rank, direction, peer, channel)`划分，每个通信TB只能包含发送端点或接收端点，以及表达该TB消费依赖所需的`nop`；即使目标Rank和channel相同，`s`与`r/rrc`也必须位于不同通信TB。`cpy`使用独立本地TB。XML生成前必须联合安排端点对在两侧通信TB中的顺序，并执行死锁检测；在满足语义依赖和无死锁的前提下，最大限度保持求解器给出的时间顺序。
 
 端点排序采用同步列表调度。XML生成器首先根据`transfer_id`将配对的`s`与`r/rrc`端点临时收缩为一个`TransferNode`，并根据路径依赖、AggregateState汇合依赖、缓冲区依赖和跨TB依赖建立有向无环图。只有语义前驱均已调度的`TransferNode`才能进入就绪集合。每次选中一个节点后，生成器必须同时将两个端点追加到对应的发送TB和接收TB，保证同一有向链路和channel上的发送顺序与接收顺序一致。

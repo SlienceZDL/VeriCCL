@@ -261,6 +261,152 @@ def concurrent_reduce_star_schedule():
     )
 
 
+def send_relay_schedule():
+    first_stage = PathStage(
+        0,
+        "SEND",
+        (Symbol(0, 1, 0.0),),
+    )
+    relay_stage = PathStage(
+        0,
+        "SEND",
+        (Symbol(0, 1, 0.0), Symbol(1, 2, 1.0)),
+    )
+    first = _transfer(
+        "relay-first",
+        "SEND",
+        0,
+        1,
+        0,
+        (0,),
+        {0: (first_stage,)},
+        0.0,
+        1.0,
+    )
+    second = _transfer(
+        "relay-second",
+        "SEND",
+        1,
+        2,
+        0,
+        (0,),
+        {0: (relay_stage,)},
+        1.0,
+        2.0,
+        ("relay-first",),
+    )
+    outputs = required_outputs(
+        collective_spec(CollectiveKind.BROADCAST, root=0),
+        3,
+        1,
+    )
+    return Schedule(
+        schedule_id="send-relay",
+        transfers=(first, second),
+        final_state_ids=tuple(
+            "final-r{}-o{}".format(slot.rank, slot.offset)
+            for slot in sorted(outputs)
+        ),
+        rank_count=3,
+        slice_count=1,
+        slice_size_bytes=1024,
+        metadata={
+            "path_scope": "global",
+            "semantic_predecessors": {
+                "relay-first": (),
+                "relay-second": ("relay-first",),
+            },
+            "final_outputs": {
+                "r{:08d}-o{:08d}".format(slot.rank, slot.offset): tuple(
+                    sorted(contributors)
+                )
+                for slot, contributors in outputs.items()
+            },
+            "final_dependencies": {
+                "r00000000-o00000000": (),
+                "r00000001-o00000000": ("relay-first",),
+                "r00000002-o00000000": ("relay-second",),
+            },
+        },
+    )
+
+
+def allreduce_star_schedule():
+    reduce_schedule = concurrent_reduce_star_schedule()
+    reduce_ids = tuple(
+        transfer.transfer_id for transfer in reduce_schedule.transfers
+    )
+    transfers = list(reduce_schedule.transfers)
+    semantic = {transfer_id: () for transfer_id in reduce_ids}
+    for destination in range(1, 4):
+        transfer_id = "allreduce-send-{}".format(destination)
+        paths = {}
+        for member in range(4):
+            send_stage = PathStage(
+                1,
+                "SEND",
+                (Symbol(0, destination, 1.0),),
+            )
+            if member == 0:
+                paths[member] = (send_stage,)
+            else:
+                paths[member] = (
+                    PathStage(
+                        0,
+                        "REDUCE",
+                        (Symbol(member, 0, 0.0),),
+                    ),
+                    send_stage,
+                )
+        transfers.append(
+            _transfer(
+                transfer_id,
+                "SEND",
+                0,
+                destination,
+                1,
+                tuple(range(4)),
+                paths,
+                1.0,
+                2.0,
+                reduce_ids,
+            )
+        )
+        semantic[transfer_id] = reduce_ids
+    outputs = required_outputs(
+        collective_spec(CollectiveKind.ALL_REDUCE),
+        4,
+        1,
+    )
+    return Schedule(
+        schedule_id="allreduce-star",
+        transfers=tuple(transfers),
+        final_state_ids=tuple(
+            "final-r{}-o{}".format(slot.rank, slot.offset)
+            for slot in sorted(outputs)
+        ),
+        rank_count=4,
+        slice_count=1,
+        slice_size_bytes=1024,
+        metadata={
+            "path_scope": "global",
+            "semantic_predecessors": semantic,
+            "final_outputs": {
+                "r{:08d}-o{:08d}".format(slot.rank, slot.offset): tuple(
+                    sorted(contributors)
+                )
+                for slot, contributors in outputs.items()
+            },
+            "final_dependencies": {
+                "r{:08d}-o00000000".format(rank): (
+                    reduce_ids if rank == 0 else ("allreduce-send-{}".format(rank),)
+                )
+                for rank in range(4)
+            },
+        },
+    )
+
+
 def inplace_alltoall_overwrite_schedule():
     incoming = _transfer(
         "incoming",

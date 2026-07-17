@@ -140,7 +140,7 @@ Expected: all tests pass.
 - Produces: `lower_endpoints(schedule: Schedule, buffers: BufferPlan) -> EndpointProgram`
 - Produces: `build_transfer_dag(program: EndpointProgram, schedule: Schedule, buffers: BufferPlan) -> TransferDAG`
 
-- [ ] **Step 1: Write endpoint pairing tests**
+- [x] **Step 1: Write endpoint pairing tests**
 
 ```python
 def test_send_creates_s_and_r_pair():
@@ -155,17 +155,17 @@ def test_reduce_creates_s_and_rrc_pair():
     assert {endpoint.xml_type for endpoint in endpoints} == {EndpointType.SEND, EndpointType.RECV_REDUCE_COPY}
 ```
 
-- [ ] **Step 2: Write relay and multi-contributor dependency tests**
+- [x] **Step 2: Write relay and multi-contributor dependency tests**
 
 Assert a relay has a receive TransferNode followed by a distinct send TransferNode. Assert a consumer of three reduce contributors has three semantic predecessors before XML single-dependency lowering.
 
-- [ ] **Step 3: Run tests and verify missing endpoint modules**
+- [x] **Step 3: Run tests and verify missing endpoint modules**
 
 Run: `python3 -m pytest tests/unit/xml/test_endpoints.py tests/unit/xml/test_dependencies.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement endpoint records and exact pairs**
+- [x] **Step 4: Implement endpoint records and exact pairs**
 
 ```python
 @dataclass(frozen=True)
@@ -182,11 +182,11 @@ class EndpointAtom:
 
 Pair validation requires exactly two endpoints, opposite ranks, identical channel/time interval, compatible types, and identical transfer/member metadata. Capacity accounting remains on TransferNode, never on endpoints.
 
-- [ ] **Step 5: Build the complete pre-lowering dependency DAG**
+- [x] **Step 5: Build the complete pre-lowering dependency DAG**
 
 Include path dependencies, AggregateState joins, buffer initialization/copies, final copy dependencies, and all semantic predecessors. Reject missing IDs, cycles, or a dependency that crosses state versions incorrectly.
 
-- [ ] **Step 6: Run endpoint tests**
+- [x] **Step 6: Run endpoint tests**
 
 Run: `python3 -m pytest tests/unit/xml/test_endpoints.py tests/unit/xml/test_dependencies.py -q`
 
