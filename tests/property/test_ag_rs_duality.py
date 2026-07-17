@@ -1,0 +1,36 @@
+import pytest
+from hypothesis import given, strategies as st
+
+from vericcl.composer.dual import reverse_allgather_schedule
+
+from tests.unit.composer.helpers import (
+    reduce_spec,
+    reduce_target,
+    virtual_reduce_chain,
+)
+
+
+pytestmark = pytest.mark.phase03
+
+
+@given(st.integers(min_value=2, max_value=4))
+def test_chain_duality_preserves_every_contributor_once(rank_count):
+    reduced = reverse_allgather_schedule(
+        virtual_reduce_chain(rank_count),
+        reduce_spec(),
+        reduce_target(rank_count),
+    )
+    root_transfers = [
+        transfer for transfer in reduced.transfers if transfer.dst_rank == 0
+    ]
+
+    assert len(root_transfers) == 1
+    assert root_transfers[0].member_slice_ids == frozenset(
+        range(1, rank_count)
+    )
+    assert {
+        atom.slice_id for atom in root_transfers[0].atoms
+    } == root_transfers[0].member_slice_ids
+    assert all(
+        transfer.kind == "REDUCE" for transfer in reduced.transfers
+    )

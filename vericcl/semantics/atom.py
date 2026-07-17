@@ -306,6 +306,9 @@ class Schedule:
         transfer_ids = frozenset(
             transfer.transfer_id for transfer in self.transfers
         )
+        transfers_by_id = {
+            transfer.transfer_id: transfer for transfer in self.transfers
+        }
         path_roots = {}
         if path_scope == "stage_suffix":
             raw_path_roots = self.metadata.get("path_roots")
@@ -320,11 +323,24 @@ class Schedule:
                 )
             for transfer_id, root in path_roots.items():
                 _identifier(transfer_id, "schedule.metadata.path_roots")
-                _integer(root, "schedule.metadata.path_roots")
-                if root >= self.rank_count:
-                    raise SemanticError(
-                        "stage_suffix path root is outside the rank range"
-                    )
+                roots = root if isinstance(root, Mapping) else None
+                if roots is not None:
+                    roots = dict(roots)
+                    if set(roots) != set(
+                        transfers_by_id[transfer_id].member_slice_ids
+                    ):
+                        raise SemanticError(
+                            "per-atom path roots must cover transfer members"
+                        )
+                    values = roots.values()
+                else:
+                    values = (root,)
+                for value in values:
+                    _integer(value, "schedule.metadata.path_roots")
+                    if value >= self.rank_count:
+                        raise SemanticError(
+                            "stage_suffix path root is outside the rank range"
+                        )
         global_slice_count = self.rank_count * self.slice_count
         for transfer in self.transfers:
             if transfer.src_rank >= self.rank_count or transfer.dst_rank >= self.rank_count:
@@ -343,7 +359,14 @@ class Schedule:
                 if (
                     path_scope == "stage_suffix"
                     and atom.path[0].symbols[0].src_rank
-                    != path_roots[transfer.transfer_id]
+                    != (
+                        path_roots[transfer.transfer_id][atom.slice_id]
+                        if isinstance(
+                            path_roots[transfer.transfer_id],
+                            Mapping,
+                        )
+                        else path_roots[transfer.transfer_id]
+                    )
                 ):
                     raise SemanticError(
                         "stage_suffix atom does not start at its declared root"

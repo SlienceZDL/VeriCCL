@@ -6,6 +6,7 @@ from vericcl.planner.direct import (
     build_internal_gather,
     build_internal_scatter,
 )
+from vericcl.planner.dual import DualTree, extract_dual_trees
 from vericcl.planner.groups import (
     CommunicationGroups,
     discover_communication_groups,
@@ -21,6 +22,7 @@ from vericcl.planner.model import (
 
 __all__ = [
     "CommunicationGroups",
+    "DualTree",
     "LogicalValue",
     "PlanDAG",
     "PlanEdge",
@@ -31,5 +33,6 @@ __all__ = [
     "build_internal_gather",
     "build_internal_scatter",
     "discover_communication_groups",
+    "extract_dual_trees",
     "validate_manual_hierarchy",
 ]

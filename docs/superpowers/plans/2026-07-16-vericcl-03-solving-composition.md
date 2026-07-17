@@ -297,7 +297,7 @@ Expected: all tests pass.
 - Produces: `compose(plan: PlanDAG, candidates: Mapping[str, SolveCandidate]) -> Schedule`
 - Produces: `recompute_earliest_times(schedule: Schedule, topology: Topology) -> Schedule`
 
-- [ ] **Step 1: Write dual and no-barrier tests**
+- [x] **Step 1: Write dual and no-barrier tests**
 
 ```python
 def test_ag_edge_becomes_reduce_with_rebuilt_state():
@@ -313,21 +313,21 @@ def test_composer_pipelines_ready_slice_without_stage_barrier():
     assert stage_start(schedule, stage=1, slice_id=0) < stage_end(schedule, stage=0, slice_id=1)
 ```
 
-- [ ] **Step 2: Run tests and observe missing composer modules**
+- [x] **Step 2: Run tests and observe missing composer modules**
 
 Run: `python3 -m pytest tests/unit/composer/test_dual.py tests/unit/composer/test_compose.py tests/property/test_ag_rs_duality.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 3: Reverse AG trees by semantic state propagation**
+- [x] **Step 3: Reverse AG trees by semantic state propagation**
 
 Reverse each physical edge, replace SEND with REDUCE, create target-local initial states, merge only disjoint contributors, rebuild predecessor IDs, and recompute ready times from leaves to owners. Never reverse XML step order or reuse AG buffer offsets. Reject an AG tree whose reversal cannot satisfy exact target contributors.
 
-- [ ] **Step 4: Compose local schedules through exact interfaces**
+- [x] **Step 4: Compose local schedules through exact interfaces**
 
 Map local ranks and values to global IDs, deduplicate exact reused physical transfers by transfer ID, connect producer final states to consumer initial states, and recompute earliest start times from actual state readiness and resource availability. No stage-wide edge or barrier is inserted.
 
-- [ ] **Step 5: Run dual, composition, and property tests**
+- [x] **Step 5: Run dual, composition, and property tests**
 
 Run: `python3 -m pytest tests/unit/composer tests/property/test_ag_rs_duality.py -q`
 

@@ -35,6 +35,7 @@ class _DraftTransfer:
     st_time: float
     ed_time: float
     semantic_ready_time: float
+    semantic_predecessor_ids: FrozenSet[str]
     predecessor_ids: FrozenSet[str]
 
 
@@ -230,6 +231,7 @@ def _materialize_path(
         dependency = incoming_transfer.get((tree_key, src))
         if dependency is not None:
             predecessors.add(dependency)
+        semantic_predecessors = frozenset(predecessors)
         lane_predecessor = lane_last.get(lane)
         if lane_predecessor is not None:
             predecessors.add(lane_predecessor)
@@ -249,6 +251,7 @@ def _materialize_path(
             st_time=choice.start_time,
             ed_time=choice.end_time,
             semantic_ready_time=ready_time,
+            semantic_predecessor_ids=semantic_predecessors,
             predecessor_ids=frozenset(predecessors),
         )
         drafts.append(draft)
@@ -489,6 +492,12 @@ def construct_candidate(
                             )
                         ]
                     )
+                )
+                for draft in drafts
+            },
+            "semantic_predecessors": {
+                draft.transfer_id: tuple(
+                    sorted(draft.semantic_predecessor_ids)
                 )
                 for draft in drafts
             },

@@ -343,3 +343,46 @@ def test_stage_suffix_requires_an_exact_declared_path_root():
         },
     )
     assert schedule.metadata["path_roots"]["transfer-0"] == 0
+
+
+def test_stage_suffix_accepts_one_declared_root_per_member_atom():
+    atoms = (
+        make_atom(
+            slice_id=1,
+            symbols=(Symbol(1, 0, 2.0),),
+            operator="REDUCE",
+            st_time=2.0,
+            ed_time=4.0,
+        ),
+        make_atom(
+            slice_id=2,
+            symbols=(Symbol(2, 1, 0.0), Symbol(1, 0, 2.0)),
+            operator="REDUCE",
+            st_time=2.0,
+            ed_time=4.0,
+        ),
+    )
+    transfer = make_transfer(
+        member_slice_ids=frozenset({1, 2}),
+        atoms=atoms,
+        kind="REDUCE",
+        src_rank=1,
+        dst_rank=0,
+        st_time=2.0,
+        ed_time=4.0,
+    )
+
+    schedule = Schedule(
+        "schedule",
+        (transfer,),
+        (),
+        3,
+        1,
+        1024,
+        {
+            "path_scope": "stage_suffix",
+            "path_roots": {"transfer-0": {1: 1, 2: 2}},
+        },
+    )
+
+    assert schedule.metadata["path_roots"]["transfer-0"][2] == 2

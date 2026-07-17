@@ -965,6 +965,9 @@ def _build_schedule(
                 LinkKey(parent_rank, operation.link.src_rank),
             )
             predecessors[operation.key].add(identifiers[parent_key])
+    semantic_predecessors = {
+        key: set(values) for key, values in predecessors.items()
+    }
     lane_groups = {}
     resource_groups = {}
     for operation in operations:
@@ -1075,6 +1078,12 @@ def _build_schedule(
             "semantic_contributors": {
                 identifiers[operation.key]: tuple(
                     sorted(members_by_key[operation.key])
+                )
+                for operation in operations
+            },
+            "semantic_predecessors": {
+                identifiers[operation.key]: tuple(
+                    sorted(semantic_predecessors[operation.key])
                 )
                 for operation in operations
             },
