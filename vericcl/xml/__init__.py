@@ -7,6 +7,8 @@ from vericcl.xml.endpoints import (
     EndpointType,
     lower_endpoints,
 )
+from vericcl.xml.emitter import emit_xml
+from vericcl.xml.granularity import verify_atom_granularity
 from vericcl.xml.liveness import verify_buffer_liveness
 from vericcl.xml.model import (
     AggregateValue,
@@ -16,6 +18,8 @@ from vericcl.xml.model import (
     RawValue,
 )
 from vericcl.xml.list_scheduler import schedule_threadblocks
+from vericcl.xml.lower import XmlArtifact, lower_to_xml
+from vericcl.xml.parser import normalize_xml, validate_xml
 from vericcl.xml.threadblocks import (
     Threadblock,
     ThreadblockKey,
@@ -39,10 +43,16 @@ __all__ = [
     "TransferDAG",
     "TransferNode",
     "XmlStep",
+    "XmlArtifact",
     "build_buffer_plan",
     "build_transfer_dag",
     "lower_endpoints",
+    "lower_to_xml",
+    "emit_xml",
+    "normalize_xml",
     "schedule_threadblocks",
     "simulate_endpoint_execution",
+    "validate_xml",
+    "verify_atom_granularity",
     "verify_buffer_liveness",
 ]

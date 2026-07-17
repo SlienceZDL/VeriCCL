@@ -188,6 +188,8 @@ maxBytes = runtime_bytes + 1
 </algo>
 ```
 
+当前`vericcl/xml/emitter.py`按照Rank、TB ID和step顺序确定性输出Simple XML，所有step显式包含缓冲区、offset、`cnt`、依赖坐标和完成标志。普通`s/r`使用物理传输源地址和接收目标地址；`rrc`的`srcbuf/srcoff`使用接收Rank的本地累加器，`dstbuf/dstoff`使用新归约状态地址，与MSCCL `recvReduceCopy(inpIx, outIx)`一致；本地复制TB序列化为`send=-1, recv=-1, chan=0`。`parser.py`回读后逐项核对根属性、六类算子chunk几何、GPU/TB/step连续编号、单向TB、sidecar端点对、物理地址、局部依赖和buffer边界；校验过程不重排TB或step。`lower.py`依次执行BufferPlan、活跃期验证、端点化、TransferDAG、同步TB调度、队首死锁模拟、XML发射与回读验证，并使用SHA-256绑定最终文本。`granularity.py`独立验证运行时元素数、数据类型大小、`nchunksperloop`、slice大小和`NCCL_BUFFSIZE`满足一atom一step的完整传输粒度。
+
 ##### 3. MSCCL编译期参数
 
 `MSCCL_CHUNKSTEPS`和`MSCCL_SLICESTEPS`定义在MSCCL源码的`src/include/msccl.h`中。用户必须将两者都设为4，使`SlicePerChunk = 1`：

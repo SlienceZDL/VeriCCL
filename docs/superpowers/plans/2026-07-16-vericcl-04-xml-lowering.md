@@ -268,7 +268,7 @@ Expected: all tests pass.
 - Produces: `lower_to_xml(schedule: Schedule, inputs: ResolvedInput, topology: Topology) -> XmlArtifact`
 - Produces: `verify_atom_granularity(runtime_count: int, size_multiplier: int, datatype_size_bytes: int, nchunks_per_loop: int, slice_size_bytes: int, nccl_buffsize_bytes: int) -> None`
 
-- [ ] **Step 1: Write XML field and forbidden-op tests**
+- [x] **Step 1: Write XML field and forbidden-op tests**
 
 ```python
 def test_emitter_uses_exact_atom_granularity():
@@ -294,25 +294,25 @@ def test_runtime_geometry_preserves_one_atom_per_step():
     )
 ```
 
-- [ ] **Step 2: Write exact chunk-count and byte-range tests**
+- [x] **Step 2: Write exact chunk-count and byte-range tests**
 
 Test the six operator table, including AllGather `nchunksperloop=P*N` and `runtime_bytes=P*M`; test all other direct operators use their specified chunk counts and `runtime_bytes=M`. Assert `minBytes=runtime_bytes` and `maxBytes=runtime_bytes+1`.
 
-- [ ] **Step 3: Run tests and confirm missing emitter**
+- [x] **Step 3: Run tests and confirm missing emitter**
 
 Run: `python3 -m pytest tests/unit/xml/test_emitter.py tests/golden/test_xml_golden.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 4: Implement deterministic XML emission**
+- [x] **Step 4: Implement deterministic XML emission**
 
 Emit `<algo name="vericcl">`, exact coll/inplace/ngpus/nchannels/nchunksperloop/minBytes/maxBytes attributes, sorted GPUs, TB IDs, and sequential step indices. Emit `srcbuf/srcoff/dstbuf/dstoff/cnt/depid/deps/hasdep` for every step. Use `-1` offsets for NOP endpoints as required by the MSCCL schema. Never mutate the intermediate program during serialization.
 
-- [ ] **Step 5: Implement parse-back structural validation and golden normalization**
+- [x] **Step 5: Implement parse-back structural validation and golden normalization**
 
 Parse emitted XML, verify all references, contiguous TB/step IDs, single-direction TBs, known operations, offsets within declared buffers, one pair per transfer sidecar, and no `cnt>1`. Golden comparison ignores only insignificant XML whitespace; it does not reorder TBs or steps.
 
-- [ ] **Step 6: Run emitter and golden tests**
+- [x] **Step 6: Run emitter and golden tests**
 
 Run: `python3 -m pytest tests/unit/xml/test_emitter.py tests/golden/test_xml_golden.py -q`
 

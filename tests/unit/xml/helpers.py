@@ -394,6 +394,140 @@ def two_send_same_lane_schedule():
     )
 
 
+def two_rank_allreduce_schedule():
+    reduce_stage = PathStage(
+        0,
+        "REDUCE",
+        (Symbol(1, 0, 0.0),),
+    )
+    send_stage = PathStage(
+        1,
+        "SEND",
+        (Symbol(0, 1, 1.0),),
+    )
+    reduce_id = "allreduce-reduce"
+    send_id = "allreduce-send"
+    transfers = (
+        _transfer(
+            reduce_id,
+            "REDUCE",
+            1,
+            0,
+            0,
+            (1,),
+            {1: (reduce_stage,)},
+            0.0,
+            1.0,
+        ),
+        _transfer(
+            send_id,
+            "SEND",
+            0,
+            1,
+            1,
+            (0, 1),
+            {
+                0: (send_stage,),
+                1: (reduce_stage, send_stage),
+            },
+            1.0,
+            2.0,
+            (reduce_id,),
+        ),
+    )
+    outputs = required_outputs(
+        collective_spec(CollectiveKind.ALL_REDUCE),
+        2,
+        1,
+    )
+    return Schedule(
+        schedule_id="two-rank-allreduce",
+        transfers=transfers,
+        final_state_ids=("final-r0-o0", "final-r1-o0"),
+        rank_count=2,
+        slice_count=1,
+        slice_size_bytes=1024,
+        metadata={
+            "path_scope": "global",
+            "semantic_predecessors": {
+                reduce_id: (),
+                send_id: (reduce_id,),
+            },
+            "final_outputs": {
+                "r{:08d}-o{:08d}".format(slot.rank, slot.offset): tuple(
+                    sorted(contributors)
+                )
+                for slot, contributors in outputs.items()
+            },
+            "final_dependencies": {
+                "r00000000-o00000000": (reduce_id,),
+                "r00000001-o00000000": (send_id,),
+            },
+        },
+    )
+
+
+def two_rank_allgather_schedule():
+    transfers = []
+    semantic = {}
+    for source, destination in ((0, 1), (1, 0)):
+        transfer_id = "allgather-send-{}".format(source)
+        member = source
+        stage = PathStage(
+            0,
+            "SEND",
+            (Symbol(source, destination, 0.0),),
+        )
+        transfers.append(
+            _transfer(
+                transfer_id,
+                "SEND",
+                source,
+                destination,
+                0,
+                (member,),
+                {member: (stage,)},
+                0.0,
+                1.0,
+            )
+        )
+        semantic[transfer_id] = ()
+    outputs = required_outputs(
+        collective_spec(CollectiveKind.ALL_GATHER, inplace=True),
+        2,
+        1,
+    )
+    return Schedule(
+        schedule_id="two-rank-allgather",
+        transfers=tuple(transfers),
+        final_state_ids=tuple(
+            "final-r{}-o{}".format(slot.rank, slot.offset)
+            for slot in sorted(outputs)
+        ),
+        rank_count=2,
+        slice_count=1,
+        slice_size_bytes=1024,
+        metadata={
+            "path_scope": "global",
+            "semantic_predecessors": semantic,
+            "final_outputs": {
+                "r{:08d}-o{:08d}".format(slot.rank, slot.offset): tuple(
+                    sorted(contributors)
+                )
+                for slot, contributors in outputs.items()
+            },
+            "final_dependencies": {
+                "r{:08d}-o{:08d}".format(slot.rank, slot.offset): (
+                    ()
+                    if slot.rank == slot.offset
+                    else ("allgather-send-{}".format(slot.offset),)
+                )
+                for slot in outputs
+            },
+        },
+    )
+
+
 def allreduce_star_schedule():
     reduce_schedule = concurrent_reduce_star_schedule()
     reduce_ids = tuple(
