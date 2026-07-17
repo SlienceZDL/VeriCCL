@@ -187,7 +187,7 @@ Expected: all tests pass.
 - Produces: `GurobiAdapter.available() -> bool`
 - Produces: `solve_milp(problem: SolverProblem, channel_count: int, objective: ObjectiveMode, budget: ModelBudget, warm_start: Optional[Schedule]) -> SolveCandidate`
 
-- [ ] **Step 1: Write an adapter test that does not require Gurobi**
+- [x] **Step 1: Write an adapter test that does not require Gurobi**
 
 ```python
 def test_missing_gurobi_is_reported_without_import_failure(monkeypatch):
@@ -197,23 +197,23 @@ def test_missing_gurobi_is_reported_without_import_failure(monkeypatch):
         GurobiAdapter.require()
 ```
 
-- [ ] **Step 2: Write marked 2-rank feasibility and infeasibility tests**
+- [x] **Step 2: Write marked 2-rank feasibility and infeasibility tests**
 
 The feasible test solves a two-rank, two-slice Broadcast and asserts final delivery, `st_time >= ready_time`, and non-overlapping lane intervals. The infeasible test forbids the only directed link and asserts `SolveStatus.INFEASIBLE` without emitting a schedule.
 
-- [ ] **Step 3: Implement lazy Gurobi import and exact parameter configuration**
+- [x] **Step 3: Implement lazy Gurobi import and exact parameter configuration**
 
 Set `Seed=solver_seed`, `Threads=effective_threads`, `TimeLimit=model_budget.seconds`, `MIPGap=mip_gap`, deterministic output names, and no global module state. When `require_proven_optimal` is true, set `MIPGap=0.0`. Preserve solver status, incumbent, best bound, and actual gap independently.
 
-- [ ] **Step 4: Implement path, causality, state, lane, and shared-resource constraints**
+- [x] **Step 4: Implement path, causality, state, lane, and shared-resource constraints**
 
 Use binary edge/channel selection, continuous start/end/arrival variables, indicator constraints for selected edges, exact one-parent constraints for required non-root tree nodes, and flow conservation for chains. Assign every selected transfer to one of `K` slots for each shared resource; operations in the same resource slot use an ordering binary and cannot overlap. Transfer duration is fixed by the outer K model. Add final reachability constraints before objectives.
 
-- [ ] **Step 5: Extract a typed schedule and reject numerically invalid incumbents**
+- [x] **Step 5: Extract a typed schedule and reject numerically invalid incumbents**
 
 After solving, reconstruct paths and times, re-evaluate every hard constraint in Python with a documented tolerance, and reject any incumbent that violates topology, forbidden atoms, state semantics, lane order, resource slot capacity, or final reachability.
 
-- [ ] **Step 6: Run adapter and available MILP tests**
+- [x] **Step 6: Run adapter and available MILP tests**
 
 Run: `python3 -m pytest tests/unit/solver/test_gurobi_api.py -q`
 

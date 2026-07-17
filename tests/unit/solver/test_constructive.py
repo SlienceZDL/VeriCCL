@@ -162,6 +162,11 @@ def test_reduce_dual_does_not_create_root_self_transfer():
         transfer.src_rank != transfer.dst_rank
         for transfer in schedule.transfers
     )
+    assert schedule.transfers[0].member_slice_ids == frozenset({8})
+    assert {atom.slice_id for atom in schedule.transfers[0].atoms} == {8}
+    assert schedule.metadata["tree_contributors"][
+        schedule.transfers[0].transfer_id
+    ] == (0, 8)
     assert schedule.metadata["reduction_dual"]
 
 

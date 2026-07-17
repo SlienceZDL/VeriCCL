@@ -3,20 +3,17 @@ from typing import Dict, FrozenSet, List, Tuple
 
 from vericcl.errors import ConstructionInfeasibleError, SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
-from vericcl.solver.demands import CandidateEdge, SolverProblem, TransferDemand
-from vericcl.topology.model import LaneKey, LinkKey, PerformanceCurve
-from vericcl.topology.performance import (
-    safe_per_channel_bandwidth,
-    transfer_duration_us,
+from vericcl.solver.demands import SolverProblem, TransferDemand
+from vericcl.solver.scheduling import (
+    available_channel_count,
+    demand_batch_assignments,
+    fixed_transfer_duration_us,
+    physical_link_key,
 )
+from vericcl.topology.model import LaneKey, LinkKey
 
 
 TreeKey = Tuple[int, int, Tuple[int, ...], bool]
-BatchShape = Tuple[
-    int,
-    bool,
-    Tuple[Tuple[int, Tuple[Tuple[int, ...], ...], Tuple[LinkKey, ...]], ...],
-]
 
 
 @dataclass(frozen=True)
@@ -35,8 +32,6 @@ class _DraftTransfer:
     dst_rank: int
     channel: int
     stage_id: int
-    member_slice_ids: FrozenSet[int]
-    semantic_contributors: FrozenSet[int]
     st_time: float
     ed_time: float
     semantic_ready_time: float
@@ -58,56 +53,8 @@ def _tree_key(demand: TransferDemand) -> TreeKey:
     )
 
 
-def _batch_assignments(
-    problem: SolverProblem,
-    channel_count: int,
-) -> Dict[str, int]:
-    by_tree: Dict[TreeKey, List[TransferDemand]] = {}
-    for demand in problem.demands:
-        by_tree.setdefault(_tree_key(demand), []).append(demand)
-    by_shape: Dict[BatchShape, List[TreeKey]] = {}
-    for tree_key, demands in by_tree.items():
-        shape = (
-            tree_key[0],
-            tree_key[3],
-            tuple(
-                sorted(
-                    (
-                        demand.required_leaf_rank,
-                        demand.candidate_paths,
-                        tuple(sorted(demand.legal_links)),
-                    )
-                    for demand in demands
-                )
-            ),
-        )
-        by_shape.setdefault(shape, []).append(tree_key)
-    assignments = {}
-    next_batch = 0
-    for shape in sorted(by_shape):
-        trees = sorted(by_shape[shape])
-        batch_size = channel_count if problem.inputs.strategies.batching else 1
-        for index, tree_key in enumerate(trees):
-            batch_id = next_batch + index // batch_size
-            for demand in by_tree[tree_key]:
-                assignments[demand.demand_id] = batch_id
-        next_batch += (len(trees) + batch_size - 1) // batch_size
-    return assignments
-
-
 def _physical_key(demand: TransferDemand, src: int, dst: int) -> LinkKey:
-    return LinkKey(*demand.physical_link(src, dst))
-
-
-def _curve_duration(
-    curve: PerformanceCurve,
-    slice_size_bytes: int,
-    concurrency: int,
-) -> float:
-    if curve.is_calibrated:
-        bandwidth = safe_per_channel_bandwidth(curve, concurrency)
-        return curve.alpha_us + slice_size_bytes / bandwidth
-    return curve.alpha_us + concurrency * curve.beta_effective_us
+    return physical_link_key(demand, src, dst)
 
 
 def _usable_channels(
@@ -117,18 +64,13 @@ def _usable_channels(
     dst: int,
     requested: int,
 ) -> int:
-    physical = _physical_key(demand, src, dst)
-    edge = problem.topology.link(physical)
-    limits = [requested, edge.max_channels]
-    limits.extend(
-        problem.topology.shared_resources[resource_id].max_channels
-        for resource_id in edge.resource_ids
+    return available_channel_count(
+        problem,
+        demand,
+        src,
+        dst,
+        requested,
     )
-    available = sum(
-        CandidateEdge(src, dst, channel) in problem.candidate_edges
-        for channel in range(min(limits))
-    )
-    return min(min(limits), available)
 
 
 def _duration(
@@ -138,24 +80,13 @@ def _duration(
     dst: int,
     concurrency: int,
 ) -> float:
-    physical = _physical_key(demand, src, dst)
-    edge = problem.topology.link(physical)
-    durations = [
-        transfer_duration_us(
-            edge,
-            problem.slice_size_bytes,
-            concurrency,
-        )
-    ]
-    durations.extend(
-        _curve_duration(
-            problem.topology.shared_resources[resource_id].performance,
-            problem.slice_size_bytes,
-            concurrency,
-        )
-        for resource_id in edge.resource_ids
+    return fixed_transfer_duration_us(
+        problem,
+        demand,
+        src,
+        dst,
+        concurrency,
     )
-    return max(durations)
 
 
 def _choose_lane(
@@ -257,10 +188,6 @@ def _estimate_path(
     return ready, total_new_duration, len(path) - 1, path
 
 
-def _transfer_members(demand: TransferDemand) -> FrozenSet[int]:
-    return demand.contributors
-
-
 def _materialize_path(
     *,
     problem: SolverProblem,
@@ -319,8 +246,6 @@ def _materialize_path(
             dst_rank=dst,
             channel=choice.channel,
             stage_id=demand.stage_id,
-            member_slice_ids=_transfer_members(demand),
-            semantic_contributors=demand.contributors,
             st_time=choice.start_time,
             ed_time=choice.end_time,
             semantic_ready_time=ready_time,
@@ -359,6 +284,7 @@ def _transfer(
     drafts_by_edge: Dict[Tuple[TreeKey, int, int], _DraftTransfer],
     parents: Dict[Tuple[TreeKey, int], int],
     slice_size_bytes: int,
+    member_slice_ids: FrozenSet[int],
 ) -> Transfer:
     path = _tree_path_drafts(draft, drafts_by_edge, parents)
     symbols = tuple(
@@ -383,7 +309,7 @@ def _transfer(
             st_time=draft.st_time,
             ed_time=draft.ed_time,
         )
-        for slice_id in sorted(draft.member_slice_ids)
+        for slice_id in sorted(member_slice_ids)
     )
     return Transfer(
         transfer_id=draft.transfer_id,
@@ -392,7 +318,7 @@ def _transfer(
         dst_rank=draft.dst_rank,
         channel=draft.channel,
         stage_id=draft.stage_id,
-        member_slice_ids=draft.member_slice_ids,
+        member_slice_ids=member_slice_ids,
         atoms=atoms,
         st_time=draft.st_time,
         ed_time=draft.ed_time,
@@ -425,7 +351,7 @@ def construct_candidate(
     resource_ready = {}
     resource_last = {}
     selected_paths = {}
-    demand_batches = _batch_assignments(problem, channels)
+    demand_batches = demand_batch_assignments(problem, channels)
     batch_path_templates = {}
     demands = sorted(
         problem.demands,
@@ -493,12 +419,26 @@ def construct_candidate(
             resource_ready=resource_ready,
             resource_last=resource_last,
         )
+    members_by_edge = {}
+    for demand in demands:
+        path = selected_paths[demand.demand_id]
+        tree_key = _tree_key(demand)
+        for src, dst in zip(path, path[1:]):
+            key = (tree_key, src, dst)
+            members_by_edge.setdefault(key, set()).update(
+                demand.member_slice_ids
+            )
     transfers = tuple(
         _transfer(
             draft,
             drafts_by_edge,
             parents,
             problem.slice_size_bytes,
+            frozenset(
+                members_by_edge[
+                    (draft.tree_key, draft.src_rank, draft.dst_rank)
+                ]
+            ),
         )
         for draft in drafts
     )
@@ -539,7 +479,21 @@ def construct_candidate(
                 for demand_id, batch_id in sorted(demand_batches.items())
             },
             "semantic_contributors": {
-                draft.transfer_id: tuple(sorted(draft.semantic_contributors))
+                draft.transfer_id: tuple(
+                    sorted(
+                        members_by_edge[
+                            (
+                                draft.tree_key,
+                                draft.src_rank,
+                                draft.dst_rank,
+                            )
+                        ]
+                    )
+                )
+                for draft in drafts
+            },
+            "tree_contributors": {
+                draft.transfer_id: draft.tree_key[2]
                 for draft in drafts
             },
         },
