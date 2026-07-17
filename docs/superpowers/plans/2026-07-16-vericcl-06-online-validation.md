@@ -92,7 +92,7 @@ Expected: all tests pass.
 - Produces: `build_calibration_artifacts(request: CalibrationRequest, topology: Topology) -> tuple[XmlArtifact, ...]`
 - Produces: `derive_calibrated_curve(alpha_us: float, slice_size_bytes: int, points: Sequence[CalibrationPoint]) -> PerformanceCurve`
 
-- [ ] **Step 1: Write channel/wave allocation tests**
+- [x] **Step 1: Write channel/wave allocation tests**
 
 ```python
 def test_calibration_assigns_round_robin_channels_and_full_waves():
@@ -102,25 +102,25 @@ def test_calibration_assigns_round_robin_channels_and_full_waves():
     assert tail_transfer_count(artifact) == (128 % 3)
 ```
 
-- [ ] **Step 2: Write calibration formula and invalid-point tests**
+- [x] **Step 2: Write calibration formula and invalid-point tests**
 
 Assert `invbw=D_safe(1)`, `beta=max(invbw-alpha, epsilon)`, `B_link(k)=k*S/max(D_safe(k)-alpha,epsilon)`, and invalidity when `D_safe(k)<=alpha`. Assert `S` not dividing 128 MiB skips calibration without changing S.
 
-- [ ] **Step 3: Write exact environment cache tests**
+- [x] **Step 3: Write exact environment cache tests**
 
 Cover link class, topology signature, GPU/NIC, CUDA/NCCL/MSCCL versions, Simple protocol, slice size, 128 MiB, k, NCCL_BUFFSIZE, chunk/slice steps, and relevant path variables. Any mismatch invalidates the cache; `force_recalibrate=True` always bypasses it.
 
-- [ ] **Step 4: Run tests and confirm missing calibration modules**
+- [x] **Step 4: Run tests and confirm missing calibration modules**
 
 Run: `python3 -m pytest tests/unit/online/test_calibration_xml.py tests/unit/online/test_calibration.py tests/unit/online/test_calibration_cache.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 5: Implement one custom Broadcast XML per integer k**
+- [x] **Step 5: Implement one custom Broadcast XML per integer k**
 
 Use root 0, current S, `N_bench=128 MiB/S`, full slice transfers, `channel=l mod k`, and `wave=floor(l/k)`. Generate every k through `min(max_calibration_channels,32,N_bench)` without interpolation or early stop. Only full-wave trace intervals contribute to `D_safe(k)`; tail transfers still execute.
 
-- [ ] **Step 6: Run calibration tests**
+- [x] **Step 6: Run calibration tests**
 
 Run: `python3 -m pytest tests/unit/online/test_calibration_xml.py tests/unit/online/test_calibration.py tests/unit/online/test_calibration_cache.py -q`
 
