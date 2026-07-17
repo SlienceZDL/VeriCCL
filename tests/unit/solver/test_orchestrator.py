@@ -11,6 +11,7 @@ from vericcl.solver.cache import CandidateCache
 from vericcl.solver.lower_bounds import LowerBound
 from vericcl.solver.model import SolveRequest, SolveStatus
 from vericcl.solver.orchestrator import solve
+import vericcl.solver.orchestrator as orchestrator_module
 from vericcl.topology.loader import load_topology
 from vericcl.tuning.model import TuningOverlay
 
@@ -83,6 +84,29 @@ def test_constructive_only_returns_complete_global_candidate():
     assert "independent_node_composition" in (
         result.selected_candidate.restrictions
     )
+
+
+def test_explicit_workflow_budget_bounds_solver_deadline(monkeypatch):
+    request = replace(
+        _request(force_resolve=True),
+        wall_clock_budget_s=2.5,
+    )
+    captured = []
+
+    def no_candidates(request_value, problems, objective, deadline):
+        captured.append(deadline)
+        return ()
+
+    monkeypatch.setattr(orchestrator_module, "_monotonic", lambda: 100.0)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_solve_objective",
+        no_candidates,
+    )
+
+    solve(request, cache=CandidateCache())
+
+    assert captured == [pytest.approx(102.5)]
 
 
 def test_milp_without_incumbent_falls_back_to_constructive(

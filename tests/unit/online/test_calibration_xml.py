@@ -14,6 +14,7 @@ from vericcl.verification.online.calibration import CalibrationRequest
 from vericcl.verification.online.calibration_xml import (
     build_calibration_artifact,
     build_calibration_artifacts,
+    build_calibration_benchmark,
 )
 from vericcl.xml.endpoints import EndpointType
 
@@ -99,6 +100,23 @@ def test_calibration_builds_every_integer_concurrency_without_interpolation():
         ]
         for artifact in artifacts
     ) == ("1", "2", "3", "4")
+
+
+def test_calibration_benchmark_exposes_matching_schedule_and_inputs():
+    benchmark = build_calibration_benchmark(
+        _request(),
+        _topology(),
+        concurrency=2,
+    )
+
+    assert benchmark.schedule.metadata["calibration_concurrency"] == 2
+    assert benchmark.inputs.rank_count == 2
+    assert benchmark.inputs.hyperparameters.total_size_bytes == 128 * MIB
+    assert benchmark.artifact == build_calibration_artifact(
+        _request(),
+        _topology(),
+        concurrency=2,
+    )
 
 
 def test_nondivisible_benchmark_skips_without_changing_slice_size():

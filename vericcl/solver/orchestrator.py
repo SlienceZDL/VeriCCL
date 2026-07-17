@@ -539,9 +539,10 @@ def solve(
             message="MILP backend is unavailable",
         )
     try:
-        deadline = (
-            _monotonic() + request.inputs.solver.total_solve_timeout_s
-        )
+        solve_budget = float(request.inputs.solver.total_solve_timeout_s)
+        if request.wall_clock_budget_s is not None:
+            solve_budget = min(solve_budget, request.wall_clock_budget_s)
+        deadline = _monotonic() + solve_budget
         effective_inputs = _effective_inputs(request)
         problems = tuple(
             build_solver_problem(node, effective_inputs, request.topology)

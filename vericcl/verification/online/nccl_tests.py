@@ -36,23 +36,38 @@ def _binary(request: NcclTestRequest) -> str:
 def build_nccl_tests_command(
     request: NcclTestRequest,
 ) -> Tuple[str, ...]:
+    return _build_nccl_tests_command(request, warmup=5, checks=1)
+
+
+def build_nccl_tests_trace_command(
+    request: NcclTestRequest,
+) -> Tuple[str, ...]:
+    return _build_nccl_tests_command(request, warmup=0, checks=0)
+
+
+def _build_nccl_tests_command(
+    request: NcclTestRequest,
+    *,
+    warmup: int,
+    checks: int,
+) -> Tuple[str, ...]:
     if not isinstance(request, NcclTestRequest):
         raise SemanticError("request must be an NcclTestRequest")
     size = str(request.message_size_bytes)
     command = [
         _binary(request),
         "-g",
-        "1",
+        str(request.gpus_per_process),
         "-b",
         size,
         "-e",
         size,
         "-w",
-        "5",
+        str(warmup),
         "-n",
         "20",
         "-c",
-        "1",
+        str(checks),
         "-d",
         request.datatype,
     ]

@@ -29,6 +29,13 @@ from vericcl.verification.online.statistics import (
     PerformanceHistory,
     summarize_runs,
 )
+from vericcl.topology.model import LaneKey
+from vericcl.verification.online.trace_analysis import (
+    BottleneckRecord,
+    TraceAnalysis,
+    WaitClass,
+)
+from vericcl.xml.endpoints import EndpointType
 from vericcl.tuning.engine import (
     CandidateProposal,
     TuningHistoryEntry,
@@ -42,6 +49,7 @@ from vericcl.workflow import (
     _tuned_candidate,
     _tuning_records,
     _with_online_result,
+    _online_evidence,
 )
 
 from tests.unit.verification.helpers import inputs, topology
@@ -615,6 +623,98 @@ def test_tuning_record_adapter_attaches_stable_online_evidence(
 
     assert result.selected_candidate_id == initial.candidate_id
     assert records == ()
+
+
+def test_online_failure_code_is_not_reported_as_valid():
+    schedule = two_rank_allreduce_schedule()
+    outcome = validate_and_lower_candidate(schedule, inputs(), topology())
+    online = OnlineValidationResult(
+        context_schedule=schedule,
+        preflight_status=OnlineStageStatus.PASSED,
+        calibration_status=OnlineStageStatus.FAILED,
+        release_status=OnlineStageStatus.PASSED,
+        online_operator_validation=OnlineStageStatus.PASSED,
+        failure_code="calibration_failed",
+        failure_message="calibration failed",
+        runtime_environment={},
+        release_history=PerformanceHistory(
+            (summarize_runs((10.0,) * 20),)
+        ),
+        calibration=None,
+        trace_analysis=TraceAnalysis((), (), (), (), True),
+        trace_rank_files=(),
+        trace_clock_uncertainty_us=1.0,
+        requires_resolve=False,
+        online_tuning_allowed=False,
+        tuning_evidence=None,
+    )
+
+    updated = _with_online_result(outcome, online)
+
+    assert updated.report.online.status is ValidationStatus.FAILED
+    assert updated.report.online.code == "calibration_failed"
+
+
+def test_online_evidence_contains_full_statistics_and_bottleneck_identity():
+    schedule = two_rank_allreduce_schedule()
+    bottleneck = BottleneckRecord(
+        transfer_id="transfer-0",
+        stage_id=1,
+        endpoint_type=EndpointType.SEND,
+        atom_ids=("atom-0",),
+        flow_ids=("flow-0",),
+        rank=0,
+        tb_id=1,
+        step_index=2,
+        iteration=3,
+        lane=LaneKey(0, 1, 0),
+        wait_class=WaitClass.HEAD_OF_LINE,
+        duration_us=4.0,
+        ordering_confident=True,
+    )
+    result = OnlineValidationResult(
+        context_schedule=schedule,
+        preflight_status=OnlineStageStatus.PASSED,
+        calibration_status=OnlineStageStatus.NOT_RUN,
+        release_status=OnlineStageStatus.PASSED,
+        online_operator_validation=OnlineStageStatus.PASSED,
+        failure_code=None,
+        failure_message=None,
+        runtime_environment={},
+        release_history=PerformanceHistory(
+            (summarize_runs(tuple(float(value) for value in range(1, 21))),)
+        ),
+        calibration=None,
+        trace_analysis=TraceAnalysis((), (), (bottleneck,), (), True),
+        trace_rank_files=(),
+        trace_clock_uncertainty_us=1.0,
+        requires_resolve=False,
+        online_tuning_allowed=True,
+        tuning_evidence=OnlineTuningEvidence(
+            {"transfer-0": 4.0},
+            (bottleneck,),
+        ),
+    )
+
+    evidence = _online_evidence(result)
+
+    assert evidence["release_rounds"][0]["mean_us"] == pytest.approx(10.5)
+    assert "population_standard_deviation_us" in evidence[
+        "release_rounds"
+    ][0]
+    record = evidence["trace_analysis"]["bottlenecks"][0]
+    assert record["flow_ids"] == ("flow-0",)
+    assert record["rank"] == 0
+    assert record["tb_id"] == 1
+    assert record["step_index"] == 2
+    assert record["lane"] == {
+        "src_rank": 0,
+        "dst_rank": 1,
+        "channel": 0,
+    }
+    assert evidence["tuning_evidence"]["wait_us_by_transfer"] == {
+        "transfer-0": 4.0
+    }
 
 
 def test_online_runtime_incompatibility_is_reported_without_launch(tmp_path):

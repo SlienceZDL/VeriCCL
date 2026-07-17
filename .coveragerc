@@ -1,0 +1,6 @@
+[run]
+omit =
+    vericcl/solver/milp.py
+
+[report]
+show_missing = True

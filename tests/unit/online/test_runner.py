@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 
 import pytest
+import vericcl.verification.online.runner as runner_module
 
 from vericcl.errors import SemanticError
 from vericcl.semantics.collective import CollectiveKind
@@ -145,6 +146,29 @@ def test_subprocess_executor_runs_with_exact_environment_and_reports_errors():
         )
 
 
+def test_runner_shares_one_declining_wall_clock_budget(monkeypatch):
+    class Executor:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, request):
+            self.calls.append(request)
+            return ProcessResult(0, "ok", "")
+
+    ticks = iter((100.0, 101.0, 104.0, 106.0))
+    monkeypatch.setattr(runner_module, "_monotonic", lambda: next(ticks))
+    executor = Executor()
+    runner = NcclTestsRunner(executor, environment={}, timeout_s=5.0)
+
+    runner.run_auxiliary(("first",), "first", {})
+    runner.run_auxiliary(("second",), "second", {})
+
+    assert executor.calls[0].timeout_s == pytest.approx(4.0)
+    assert executor.calls[1].timeout_s == pytest.approx(1.0)
+    with pytest.raises(SemanticError, match="wall-clock budget"):
+        runner.run_auxiliary(("third",), "third", {})
+
+
 @pytest.mark.parametrize(
     "factory",
     (
@@ -180,7 +204,7 @@ def _clock_output():
     return "\n".join(rows)
 
 
-def _trace_fixture(tmp_path):
+def _trace_fixture(tmp_path, *, iterations=(0,)):
     schedule = two_rank_allreduce_schedule()
     inputs = resolved(CollectiveKind.ALL_REDUCE, ranks=2, slices=1)
     artifact = lower_to_xml(schedule, inputs, load_topology(inputs))
@@ -188,26 +212,29 @@ def _trace_fixture(tmp_path):
     prefix = tmp_path / "trace"
     for rank in range(2):
         records = []
-        for entry in sorted(sidecar.entries.values(), key=lambda item: item.key):
-            if entry.rank != rank:
-                continue
-            records.append(
-                RawStepTraceRecord(
-                    rank=rank,
-                    tb_id=entry.tb_id,
-                    step_index=entry.step_index,
-                    endpoint_type=entry.runtime_endpoint_type,
-                    peer=entry.peer,
-                    channel=entry.runtime_channel,
-                    iteration=0,
-                    tb_reach=10,
-                    dependency_done=20,
-                    transfer_start=30,
-                    transfer_end=40,
-                    flags=0,
-                    reserved=0,
+        for iteration in iterations:
+            for entry in sorted(
+                sidecar.entries.values(), key=lambda item: item.key
+            ):
+                if entry.rank != rank:
+                    continue
+                records.append(
+                    RawStepTraceRecord(
+                        rank=rank,
+                        tb_id=entry.tb_id,
+                        step_index=entry.step_index,
+                        endpoint_type=entry.runtime_endpoint_type,
+                        peer=entry.peer,
+                        channel=entry.runtime_channel,
+                        iteration=iteration,
+                        tb_reach=10,
+                        dependency_done=20,
+                        transfer_start=30,
+                        transfer_end=40,
+                        flags=0,
+                        reserved=0,
+                    )
                 )
-            )
         Path("{}.rank-{}.bin".format(prefix, rank)).write_bytes(
             encode_raw_trace(records, rank=rank)
         )
@@ -223,6 +250,43 @@ def test_default_trace_collector_parses_every_rank_and_analyzes(tmp_path):
     assert result.complete is True
     assert len(result.rank_files) == 2
     assert result.analysis.intervals
+
+
+def test_trace_collector_selects_only_twenty_measured_invocations(tmp_path):
+    request = replace(
+        _trace_fixture(tmp_path, iterations=tuple(range(21))),
+        measured_iterations=20,
+    )
+
+    result = collect_trace_files(request)
+
+    assert {
+        interval.iteration for interval in result.analysis.intervals
+    } == set(range(1, 21))
+
+
+def test_trace_collector_selects_requested_inplace_invocation_block(tmp_path):
+    request = replace(
+        _trace_fixture(tmp_path, iterations=tuple(range(42))),
+        measured_iterations=20,
+        inplace=True,
+    )
+
+    result = collect_trace_files(request)
+
+    assert {
+        interval.iteration for interval in result.analysis.intervals
+    } == set(range(22, 42))
+
+
+def test_trace_collector_rejects_unexpected_invocation_count(tmp_path):
+    request = replace(
+        _trace_fixture(tmp_path, iterations=tuple(range(20))),
+        measured_iterations=20,
+    )
+
+    with pytest.raises(SemanticError, match="invocation count"):
+        collect_trace_files(request)
 
 
 def test_default_trace_collector_rejects_missing_rank_file(tmp_path):

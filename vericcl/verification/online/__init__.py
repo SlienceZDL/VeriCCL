@@ -7,11 +7,15 @@ from vericcl.verification.online.calibration import (
     CalibrationPoint,
     CalibrationRequest,
     CalibrationResult,
+    apply_calibration_to_topology,
+    calibration_point_from_trace,
     derive_calibrated_curve,
 )
 from vericcl.verification.online.calibration_xml import (
+    CalibrationBenchmark,
     build_calibration_artifact,
     build_calibration_artifacts,
+    build_calibration_benchmark,
 )
 from vericcl.verification.online.model import (
     NcclTestMeasurement,
@@ -22,6 +26,7 @@ from vericcl.verification.online.model import (
 from vericcl.verification.online.nccl_tests import (
     NcclTestsHelpValidator,
     build_nccl_tests_command,
+    build_nccl_tests_trace_command,
     parse_nccl_tests_output,
 )
 from vericcl.verification.online.statistics import (
@@ -79,6 +84,7 @@ from vericcl.verification.online.pipeline import (
 
 __all__ = [
     "CalibrationCache",
+    "CalibrationBenchmark",
     "CalibrationPlan",
     "CalibrationPoint",
     "CalibrationRequest",
@@ -119,8 +125,12 @@ __all__ = [
     "attach_online_result_to_tuning_context",
     "analyze_trace",
     "build_nccl_tests_command",
+    "build_nccl_tests_trace_command",
     "build_calibration_artifact",
     "build_calibration_artifacts",
+    "build_calibration_benchmark",
+    "apply_calibration_to_topology",
+    "calibration_point_from_trace",
     "derive_calibrated_curve",
     "decompose_waits",
     "encode_raw_trace",

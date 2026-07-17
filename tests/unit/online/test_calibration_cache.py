@@ -110,3 +110,41 @@ def test_environment_signature_rejects_invalid_fields():
     ):
         with pytest.raises(SemanticError):
             replace(value, **changes)
+
+
+def test_file_backed_cache_persists_exact_points(tmp_path):
+    path = tmp_path / "calibration-cache.json"
+    signature = _signature()
+    point = _point()
+
+    CalibrationCache(path).put(signature, point)
+    reopened = CalibrationCache(path)
+
+    assert reopened.get(signature) == point
+    assert reopened.get(
+        replace(signature, gpu_model="A100")
+    ) is None
+
+
+def test_file_backed_cache_merges_concurrent_instances(tmp_path):
+    path = tmp_path / "calibration-cache.json"
+    first_signature = _signature(concurrency=4)
+    second_signature = _signature(concurrency=3)
+    first = CalibrationCache(path)
+    second = CalibrationCache(path)
+
+    first.put(first_signature, _point(4))
+    second.put(second_signature, _point(3))
+
+    reopened = CalibrationCache(path)
+    assert reopened.get(first_signature) == _point(4)
+    assert reopened.get(second_signature) == _point(3)
+    assert first.get(second_signature) == _point(3)
+
+
+def test_file_backed_cache_rejects_invalid_content(tmp_path):
+    path = tmp_path / "calibration-cache.json"
+    path.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(SemanticError, match="cache file"):
+        CalibrationCache(path)

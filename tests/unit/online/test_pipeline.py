@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
+import vericcl.verification.online.pipeline as pipeline_module
 
 from vericcl.errors import SemanticError
 from vericcl.semantics.collective import CollectiveKind
@@ -368,7 +369,27 @@ def test_release_and_trace_runs_are_separate_and_share_exact_parameters(tmp_path
     assert result.release_history.all_samples_us == (10.0,) * 20
     assert len(release_calls) == 20
     assert len(trace_calls) == 1
-    assert {call.command for call in calls} == {calls[0].command}
+    def timing_neutral(command):
+        normalized = list(command)
+        normalized[normalized.index("-w") + 1] = "<warmup>"
+        normalized[normalized.index("-c") + 1] = "<checks>"
+        return tuple(normalized)
+
+    assert {
+        timing_neutral(call.command) for call in calls
+    } == {timing_neutral(calls[0].command)}
+    assert release_calls[0].command[
+        release_calls[0].command.index("-w") + 1
+    ] == "5"
+    assert release_calls[0].command[
+        release_calls[0].command.index("-c") + 1
+    ] == "1"
+    assert trace_calls[0].command[
+        trace_calls[0].command.index("-w") + 1
+    ] == "0"
+    assert trace_calls[0].command[
+        trace_calls[0].command.index("-c") + 1
+    ] == "0"
     assert all(call.environment["NCCL_ALGO"] == "MSCCL" for call in calls)
     assert all(call.environment["NCCL_BUFFSIZE"] == "2048" for call in calls)
     assert all(
@@ -379,6 +400,29 @@ def test_release_and_trace_runs_are_separate_and_share_exact_parameters(tmp_path
     )
     assert result.online_tuning_allowed is True
     assert result.tuning_evidence is not None
+
+
+def test_trace_capacity_is_raised_to_cover_both_timing_blocks(tmp_path):
+    executor = FakeExecutor()
+    context = _context(
+        tmp_path,
+        executor=executor,
+        trace_record_capacity=1,
+    )
+
+    result = run_online_validation(context)
+
+    entries_per_rank = max(
+        sum(
+            1
+            for step in context.artifact.tb_program.steps_by_id.values()
+            if step.rank == rank
+        )
+        for rank in range(context.inputs.rank_count)
+    )
+    assert int(result.runtime_environment["VERICCL_TRACE_RECORDS"]) >= (
+        42 * entries_per_rank
+    )
 
 
 def test_incomplete_or_uncertain_trace_cannot_drive_online_tuning(tmp_path):
@@ -478,6 +522,31 @@ def test_unstable_calibration_blocks_tuning_but_not_operator_validation(tmp_path
     assert result.release_status is OnlineStageStatus.PASSED
     assert result.online_operator_validation is OnlineStageStatus.PASSED
     assert result.online_tuning_allowed is False
+
+
+def test_calibration_elapsed_time_reduces_shared_operator_budget(
+    tmp_path,
+    monkeypatch,
+):
+    context = _context(
+        tmp_path,
+        timeout_s=5.0,
+        calibration_plan=_calibration_plan(
+            CalibrationCache(),
+            lambda signature: _point(stable=False),
+        ),
+    )
+    ticks = iter((0.0, 6.0))
+    monkeypatch.setattr(
+        pipeline_module,
+        "_monotonic",
+        lambda: next(ticks),
+    )
+
+    result = run_online_validation(context)
+
+    assert result.release_status is OnlineStageStatus.FAILED
+    assert result.failure_code == "online_timeout"
     assert result.requires_resolve is False
 
 
@@ -663,29 +732,30 @@ def test_preflight_validates_exact_xml_runtime_attributes(
 def _write_trace_and_collect(request):
     for rank in range(request.rank_count):
         records = []
-        for entry in sorted(
-            request.sidecar.entries.values(),
-            key=lambda item: item.key,
-        ):
-            if entry.rank != rank:
-                continue
-            records.append(
-                RawStepTraceRecord(
-                    rank=rank,
-                    tb_id=entry.tb_id,
-                    step_index=entry.step_index,
-                    endpoint_type=entry.runtime_endpoint_type,
-                    peer=entry.peer,
-                    channel=entry.runtime_channel,
-                    iteration=0,
-                    tb_reach=10,
-                    dependency_done=20,
-                    transfer_start=30,
-                    transfer_end=40,
-                    flags=0,
-                    reserved=0,
+        for iteration in range(21):
+            for entry in sorted(
+                request.sidecar.entries.values(),
+                key=lambda item: item.key,
+            ):
+                if entry.rank != rank:
+                    continue
+                records.append(
+                    RawStepTraceRecord(
+                        rank=rank,
+                        tb_id=entry.tb_id,
+                        step_index=entry.step_index,
+                        endpoint_type=entry.runtime_endpoint_type,
+                        peer=entry.peer,
+                        channel=entry.runtime_channel,
+                        iteration=iteration,
+                        tb_reach=10,
+                        dependency_done=20,
+                        transfer_start=30,
+                        transfer_end=40,
+                        flags=0,
+                        reserved=0,
+                    )
                 )
-            )
         Path("{}.rank-{}.bin".format(request.file_prefix, rank)).write_bytes(
             encode_raw_trace(records, rank=rank)
         )

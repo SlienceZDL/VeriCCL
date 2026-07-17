@@ -91,6 +91,8 @@ def test_patch_uses_fixed_buffers_and_removes_device_printf_trace():
     assert "dependency_done" in added_lines
     assert "transfer_start" in added_lines
     assert "transfer_end" in added_lines
+    assert "rawTrace->iteration = (uint32_t)workIndex;" in added_lines
+    assert "rawTrace->iteration = (uint32_t)iter;" not in added_lines
     assert "VERICCL_TRACE_ENABLE" in added_lines
     assert "VERICCL_TRACE_RECORDS" in added_lines
     assert "VERICCL_TRACE_FILE_PREFIX" in added_lines

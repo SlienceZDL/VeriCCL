@@ -1,5 +1,6 @@
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -7,10 +8,18 @@ import pytest
 import vericcl.workflow as workflow_module
 from vericcl.workflow import RunContext, execute_solve, execute_verify
 from vericcl.errors import SemanticError
+from vericcl.verification.model import CheckResult, ValidationStatus
 from vericcl.verification.online.pipeline import (
+    OnlineCalibrationOutcome,
     OnlineStageStatus,
     OnlineValidationResult,
 )
+from vericcl.verification.online.calibration import (
+    CalibrationPoint,
+    CalibrationRequest,
+    derive_calibrated_curve,
+)
+from vericcl.verification.online.statistics import summarize_runs
 
 
 pytestmark = pytest.mark.phase07
@@ -319,3 +328,342 @@ def test_online_result_is_written_without_discarding_offline_xml(
     report = json.loads(selected.report_path.read_text(encoding="utf-8"))
     assert report["validation"]["online"]["status"] == expected
     assert any(result.layout.traces.glob("candidate-*/online-input.xml"))
+
+
+def test_online_runtime_warning_writes_failure_without_launch_crash(
+    tmp_path,
+    monkeypatch,
+):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+    original = workflow_module.validate_and_lower_candidate
+
+    def runtime_warning(schedule, inputs, topology_value):
+        outcome = original(schedule, inputs, topology_value)
+        return replace(
+            outcome,
+            report=replace(
+                outcome.report,
+                runtime=CheckResult(
+                    dimension="runtime",
+                    status=ValidationStatus.WARNING,
+                    code="msccl_runtime_incompatible",
+                    message="runtime incompatible",
+                    evidence={},
+                ),
+            ),
+            artifact=replace(outcome.artifact, runtime_compatible=False),
+        )
+
+    monkeypatch.setattr(
+        workflow_module,
+        "validate_and_lower_candidate",
+        runtime_warning,
+    )
+    result = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="online-runtime-warning",
+            online=True,
+            online_context_factory=lambda *args: pytest.fail(
+                "runtime launch must not run"
+            ),
+        )
+    )
+
+    selected = next(
+        item
+        for item in result.candidates
+        if item.candidate_id == result.final_candidate_id
+    )
+    assert selected.validation["online"] == "failed"
+    assert selected.runtime_compatible is False
+
+
+def test_online_verify_handles_missing_runtime_result_without_crash(
+    tmp_path,
+    monkeypatch,
+):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+    solved = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="verify-none-source",
+        )
+    )
+    selected = next(
+        item
+        for item in solved.candidates
+        if item.candidate_id == solved.final_candidate_id
+    )
+
+    def unavailable(**kwargs):
+        return (
+            workflow_module._with_online_failure(
+                kwargs["outcome"],
+                "online_runtime_incompatible",
+                "runtime incompatible",
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(workflow_module, "_run_online_candidate", unavailable)
+    verified = execute_verify(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="verify-none",
+            xml_path=selected.xml_path,
+            sidecar_path=selected.schedule_path,
+            online=True,
+            online_context_factory=lambda *args: None,
+        )
+    )
+
+    assert verified.candidates[0].validation["online"] == "failed"
+
+
+def test_stable_online_calibration_updates_topology_and_resolves_again(
+    tmp_path,
+    monkeypatch,
+):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+    request = CalibrationRequest(
+        "intra_node",
+        1024 * 1024,
+        1,
+        "float",
+    )
+    point = CalibrationPoint(
+        1,
+        summarize_runs((10.0,) * 20),
+        full_wave_count=128,
+        tail_transfer_count=0,
+    )
+    calibration = OnlineCalibrationOutcome(
+        request=request,
+        points=(point,),
+        curve=derive_calibrated_curve(1.0, 1024 * 1024, (point,)),
+        cache_hit_concurrencies=(),
+        stable=True,
+    )
+    online_calls = []
+
+    def online_result(context):
+        online_calls.append(context)
+        if len(online_calls) == 1:
+            return OnlineValidationResult(
+                context_schedule=context.schedule,
+                preflight_status=OnlineStageStatus.PASSED,
+                calibration_status=OnlineStageStatus.REQUIRES_RESOLVE,
+                release_status=OnlineStageStatus.NOT_RUN,
+                online_operator_validation=OnlineStageStatus.NOT_RUN,
+                failure_code=None,
+                failure_message=None,
+                runtime_environment={},
+                release_history=None,
+                calibration=calibration,
+                trace_analysis=None,
+                trace_rank_files=(),
+                trace_clock_uncertainty_us=None,
+                requires_resolve=True,
+                online_tuning_allowed=False,
+                tuning_evidence=None,
+            )
+        return OnlineValidationResult(
+            context_schedule=context.schedule,
+            preflight_status=OnlineStageStatus.PASSED,
+            calibration_status=OnlineStageStatus.NOT_RUN,
+            release_status=OnlineStageStatus.PASSED,
+            online_operator_validation=OnlineStageStatus.PASSED,
+            failure_code=None,
+            failure_message=None,
+            runtime_environment={},
+            release_history=None,
+            calibration=None,
+            trace_analysis=None,
+            trace_rank_files=(),
+            trace_clock_uncertainty_us=1.0,
+            requires_resolve=False,
+            online_tuning_allowed=False,
+            tuning_evidence=None,
+        )
+
+    solve_calls = []
+    original_solve = workflow_module.solve
+
+    def counted_solve(request_value):
+        solve_calls.append(request_value)
+        return original_solve(request_value)
+
+    monkeypatch.setattr(workflow_module, "run_online_validation", online_result)
+    monkeypatch.setattr(workflow_module, "solve", counted_solve)
+    result = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="online-calibration",
+            online=True,
+            online_context_factory=lambda artifact, schedule, *args: type(
+                "FakeOnlineContext",
+                (),
+                {"artifact": artifact, "schedule": schedule},
+            )(),
+        )
+    )
+
+    assert len(solve_calls) == 2
+    calibrated_topology = solve_calls[1].topology
+    calibrated_link = calibrated_topology.links[
+        next(iter(calibrated_topology.links))
+    ]
+    assert calibrated_link.performance.is_calibrated
+    assert all(call.wall_clock_budget_s is not None for call in solve_calls)
+    assert solve_calls[1].wall_clock_budget_s <= (
+        solve_calls[0].wall_clock_budget_s
+    )
+    assert len(online_calls) == 2
+    assert len(result.candidates) == 2
+    strategies = {
+        json.loads(item.report_path.read_text(encoding="utf-8"))[
+            "tuning_strategy"
+        ]["kind"]
+        for item in result.candidates
+    }
+    assert strategies == {"initial_solve", "calibrated_resolve"}
+    initial_ids = {
+        item.candidate_id
+        for item in result.candidates
+        if json.loads(item.report_path.read_text(encoding="utf-8"))[
+            "tuning_strategy"
+        ]["kind"] == "initial_solve"
+    }
+    selected_artifact = next(
+        item
+        for item in result.candidates
+        if item.candidate_id == result.final_candidate_id
+    )
+    assert selected_artifact.parent_candidate_id in initial_ids
+    selected = next(
+        item
+        for item in result.candidates
+        if item.candidate_id == result.final_candidate_id
+    )
+    report = json.loads(selected.report_path.read_text(encoding="utf-8"))
+    evidence = report["validation"]["online"]["evidence"]
+    assert evidence["calibration_status"] == "passed"
+    assert evidence["requires_resolve"] is False
+    assert evidence["calibration"]["link_class"] == "intra_node"
+    assert evidence["calibration"]["points"][0]["p95_us"] == 10.0
+    assert "mean_us" in evidence["calibration"]["points"][0]
+    assert "population_standard_deviation_us" in evidence[
+        "calibration"
+    ]["points"][0]
+
+
+def test_online_verify_runs_operator_after_calibration_and_requires_resolve(
+    tmp_path,
+    monkeypatch,
+):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+    solved = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="verify-calibration-source",
+        )
+    )
+    selected = next(
+        item
+        for item in solved.candidates
+        if item.candidate_id == solved.final_candidate_id
+    )
+    request = CalibrationRequest("intra_node", 1024 * 1024, 1, "float")
+    point = CalibrationPoint(
+        1,
+        summarize_runs((10.0,) * 20),
+        full_wave_count=128,
+        tail_transfer_count=0,
+    )
+    calibration = OnlineCalibrationOutcome(
+        request=request,
+        points=(point,),
+        curve=derive_calibrated_curve(1.0, 1024 * 1024, (point,)),
+        cache_hit_concurrencies=(1,),
+        stable=True,
+    )
+    calls = []
+
+    def online_result(context):
+        calls.append(context)
+        return OnlineValidationResult(
+            context_schedule=context.schedule,
+            preflight_status=OnlineStageStatus.PASSED,
+            calibration_status=(
+                OnlineStageStatus.REQUIRES_RESOLVE
+                if len(calls) == 1
+                else OnlineStageStatus.NOT_RUN
+            ),
+            release_status=(
+                OnlineStageStatus.NOT_RUN
+                if len(calls) == 1
+                else OnlineStageStatus.PASSED
+            ),
+            online_operator_validation=(
+                OnlineStageStatus.NOT_RUN
+                if len(calls) == 1
+                else OnlineStageStatus.PASSED
+            ),
+            failure_code=None,
+            failure_message=None,
+            runtime_environment={},
+            release_history=None,
+            calibration=calibration if len(calls) == 1 else None,
+            trace_analysis=None,
+            trace_rank_files=(),
+            trace_clock_uncertainty_us=(
+                None if len(calls) == 1 else 1.0
+            ),
+            requires_resolve=len(calls) == 1,
+            online_tuning_allowed=False,
+            tuning_evidence=None,
+        )
+
+    monkeypatch.setattr(workflow_module, "run_online_validation", online_result)
+    verified = execute_verify(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="verify-calibration",
+            xml_path=selected.xml_path,
+            sidecar_path=selected.schedule_path,
+            online=True,
+            online_context_factory=lambda artifact, schedule, *args: type(
+                "FakeOnlineContext",
+                (),
+                {"artifact": artifact, "schedule": schedule},
+            )(),
+        )
+    )
+
+    assert len(calls) == 2
+    report = json.loads(verified.final_report.read_text(encoding="utf-8"))
+    online = report["validation"]["online"]
+    assert online["status"] == "valid"
+    assert online["evidence"]["requires_resolve"] is True
+    assert online["evidence"]["calibration"][
+        "cache_hit_concurrencies"
+    ] == [1]

@@ -44,6 +44,15 @@ def request():
     )
 
 
+def test_solve_request_validates_optional_wall_clock_budget():
+    value = request()
+
+    assert replace(value, wall_clock_budget_s=2.5).wall_clock_budget_s == 2.5
+    for invalid in (0, -1, True, float("inf")):
+        with pytest.raises(SemanticError, match="wall clock budget"):
+            replace(value, wall_clock_budget_s=invalid)
+
+
 def metrics(status=SolveStatus.FEASIBLE):
     return SolverMetrics(
         status=status,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Tuple
 
 from vericcl.errors import SemanticError
@@ -21,6 +22,13 @@ from vericcl.verification.online.calibration import (
 from vericcl.verification.constraints import verify_schedule_pre_lowering
 from vericcl.verification.model import ValidationStatus
 from vericcl.xml.lower import XmlArtifact, lower_to_xml
+
+
+@dataclass(frozen=True)
+class CalibrationBenchmark:
+    artifact: XmlArtifact
+    schedule: Schedule
+    inputs: ResolvedInput
 
 
 def _validate_problem(
@@ -184,6 +192,27 @@ def build_calibration_artifact(
         or concurrency > _concurrency_limit(request, topology)
     ):
         raise SemanticError("calibration concurrency is outside the limit")
+    return build_calibration_benchmark(
+        request,
+        topology,
+        concurrency=concurrency,
+    ).artifact
+
+
+def build_calibration_benchmark(
+    request: CalibrationRequest,
+    topology: Topology,
+    *,
+    concurrency: int,
+) -> CalibrationBenchmark:
+    _validate_problem(request, topology)
+    if (
+        isinstance(concurrency, bool)
+        or not isinstance(concurrency, int)
+        or concurrency < 1
+        or concurrency > _concurrency_limit(request, topology)
+    ):
+        raise SemanticError("calibration concurrency is outside the limit")
     schedule = _schedule(request, concurrency)
     inputs = _inputs(request)
     checks = verify_schedule_pre_lowering(schedule, inputs, topology)
@@ -198,10 +227,10 @@ def build_calibration_artifact(
                 ", ".join(check.code for check in failed)
             )
         )
-    return lower_to_xml(
-        schedule,
-        inputs,
-        topology,
+    return CalibrationBenchmark(
+        artifact=lower_to_xml(schedule, inputs, topology),
+        schedule=schedule,
+        inputs=inputs,
     )
 
 

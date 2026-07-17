@@ -6,6 +6,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import time
 from types import MappingProxyType
 from typing import Callable, Mapping, Optional, Tuple
 
@@ -37,7 +38,10 @@ from vericcl.verification.online.runner import (
     collect_trace_files,
     process_environment,
 )
-from vericcl.verification.online.statistics import PerformanceHistory
+from vericcl.verification.online.statistics import (
+    MEASUREMENT_SAMPLE_COUNT,
+    PerformanceHistory,
+)
 from vericcl.verification.online.trace_analysis import (
     BottleneckRecord,
     TraceAnalysis,
@@ -48,6 +52,7 @@ from vericcl.xml.trace_sidecar import TraceSidecar, build_trace_sidecar
 
 EXPECTED_MSCCL_CHUNK_STEPS = 4
 EXPECTED_MSCCL_SLICE_STEPS = 4
+_monotonic = time.monotonic
 
 
 class OnlineStageStatus(str, Enum):
@@ -533,8 +538,20 @@ def _validate_request(context: OnlineContext, root) -> None:
         _fail("xml_size_range_mismatch", "XML size range is not exact")
 
 
-def _runtime_values(context: OnlineContext, xml_path: Path) -> Mapping[str, str]:
+def _runtime_values(
+    context: OnlineContext,
+    xml_path: Path,
+    sidecar: TraceSidecar,
+) -> Mapping[str, str]:
     prefix = str(context.trace_file_prefix)
+    entries_per_rank = max(
+        sum(1 for entry in sidecar.entries.values() if entry.rank == rank)
+        for rank in range(context.inputs.rank_count)
+    )
+    trace_capacity = max(
+        context.trace_record_capacity,
+        2 * (MEASUREMENT_SAMPLE_COUNT + 1) * entries_per_rank,
+    )
     expected = {
         "NCCL_ALGO": "MSCCL",
         "NCCL_BUFFSIZE": str(2 * context.schedule.slice_size_bytes),
@@ -542,11 +559,15 @@ def _runtime_values(context: OnlineContext, xml_path: Path) -> Mapping[str, str]
         "MSCCL_XML_FILES": str(xml_path),
         "VERICCL_EXPECTED_MSCCL_CHUNKSTEPS": str(context.chunk_steps),
         "VERICCL_EXPECTED_MSCCL_SLICESTEPS": str(context.slice_steps),
-        "VERICCL_TRACE_RECORDS": str(context.trace_record_capacity),
+        "VERICCL_TRACE_RECORDS": str(trace_capacity),
         "VERICCL_TRACE_FILE_PREFIX": prefix,
     }
     for key, value in expected.items():
-        if key in context.environment and context.environment[key] != value:
+        if (
+            key != "VERICCL_TRACE_RECORDS"
+            and key in context.environment
+            and context.environment[key] != value
+        ):
             _fail(
                 "runtime_environment_conflict",
                 "runtime environment conflicts with {}".format(key),
@@ -646,12 +667,6 @@ def _preflight(context: OnlineContext) -> _Prepared:
         "clock_sync_binary_missing",
         "clock sync binary",
     )
-    additions = _runtime_values(context, xml_path)
-    release_additions = dict(additions)
-    release_additions["VERICCL_TRACE_ENABLE"] = "0"
-    trace_additions = dict(additions)
-    trace_additions["VERICCL_TRACE_ENABLE"] = "1"
-    exported_keys = tuple(sorted(trace_additions))
     try:
         sidecar = build_trace_sidecar(context.artifact, context.schedule)
     except SemanticError as error:
@@ -659,6 +674,12 @@ def _preflight(context: OnlineContext) -> _Prepared:
             "trace_sidecar_failed",
             "trace sidecar could not be built: {}".format(error),
         )
+    additions = _runtime_values(context, xml_path, sidecar)
+    release_additions = dict(additions)
+    release_additions["VERICCL_TRACE_ENABLE"] = "0"
+    trace_additions = dict(additions)
+    trace_additions["VERICCL_TRACE_ENABLE"] = "1"
+    exported_keys = tuple(sorted(trace_additions))
     return _Prepared(
         release_environment=process_environment(release_additions),
         trace_environment=process_environment(trace_additions),
@@ -690,7 +711,6 @@ def _calibrate(plan: CalibrationPlan) -> OnlineCalibrationOutcome:
                 raise SemanticError("calibration callback returned an invalid point")
             if point.concurrency != signature.concurrency:
                 raise SemanticError("calibration point concurrency differs")
-            plan.cache.put(signature, point)
         else:
             hits.append(signature.concurrency)
         benchmark_slices = plan.request.benchmark_slice_count
@@ -704,6 +724,8 @@ def _calibrate(plan: CalibrationPlan) -> OnlineCalibrationOutcome:
             raise SemanticError(
                 "calibration point wave geometry differs from the request"
             )
+        if signature.concurrency not in hits:
+            plan.cache.put(signature, point)
         points.append(point)
     normalized = tuple(points)
     stable = all(point.stable for point in normalized)
@@ -753,6 +775,7 @@ def _tuning_evidence(analysis: TraceAnalysis) -> OnlineTuningEvidence:
 def run_online_validation(context: OnlineContext) -> OnlineValidationResult:
     if not isinstance(context, OnlineContext):
         raise SemanticError("online validation requires an OnlineContext")
+    online_started = _monotonic()
     try:
         prepared = _preflight(context)
     except _PreflightFailure as error:
@@ -775,6 +798,20 @@ def run_online_validation(context: OnlineContext) -> OnlineValidationResult:
             calibration_blocks_tuning = True
             calibration_error = str(error)
         else:
+            if (
+                context.timeout_s is not None
+                and _monotonic() - online_started >= context.timeout_s
+            ):
+                return _result(
+                    context,
+                    preflight_status=OnlineStageStatus.PASSED,
+                    calibration_status=OnlineStageStatus.FAILED,
+                    release_status=OnlineStageStatus.FAILED,
+                    failure_code="online_timeout",
+                    failure_message="online wall-clock budget expired",
+                    runtime_environment=prepared.release_environment,
+                    calibration=calibration,
+                )
             if calibration.skipped_reason is not None:
                 calibration_status = OnlineStageStatus.NOT_RUN
                 calibration_blocks_tuning = True
@@ -791,12 +828,26 @@ def run_online_validation(context: OnlineContext) -> OnlineValidationResult:
                 calibration_status = OnlineStageStatus.UNSTABLE
                 calibration_blocks_tuning = True
 
+    operator_timeout = context.timeout_s
+    if operator_timeout is not None:
+        operator_timeout -= _monotonic() - online_started
+        if operator_timeout <= 0.0:
+            return _result(
+                context,
+                preflight_status=OnlineStageStatus.PASSED,
+                calibration_status=calibration_status,
+                release_status=OnlineStageStatus.FAILED,
+                failure_code="online_timeout",
+                failure_message="online wall-clock budget expired",
+                runtime_environment=prepared.release_environment,
+                calibration=calibration,
+            )
     runner = NcclTestsRunner(
         context.executor,
         environment=prepared.release_environment,
         launcher_prefix=prepared.launcher_prefix,
         cwd=context.cwd,
-        timeout_s=context.timeout_s,
+        timeout_s=operator_timeout,
     )
     try:
         history = runner.measure(context.request)
@@ -876,6 +927,8 @@ def run_online_validation(context: OnlineContext) -> OnlineValidationResult:
                 rank_count=context.inputs.rank_count,
                 clock_sync_output=clock_result.stdout,
                 max_clock_uncertainty_us=context.max_clock_uncertainty_us,
+                measured_iterations=20,
+                inplace=context.request.inplace,
             )
         )
         if not isinstance(trace, TraceCollectionResult):

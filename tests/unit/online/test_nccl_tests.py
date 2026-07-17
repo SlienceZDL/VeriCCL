@@ -14,6 +14,7 @@ from vericcl.verification.online.model import (
 from vericcl.verification.online.nccl_tests import (
     NcclTestsHelpValidator,
     build_nccl_tests_command,
+    build_nccl_tests_trace_command,
     parse_nccl_tests_output,
 )
 
@@ -63,6 +64,31 @@ def test_allreduce_command_uses_exact_size_and_statistics_counts():
         "-o",
         "sum",
     )
+
+
+def test_local_multi_gpu_command_uses_one_process_with_two_gpus():
+    command = build_nccl_tests_command(
+        _request(
+            CollectiveKind.ALL_REDUCE,
+            reduction_op="sum",
+            gpus_per_process=2,
+        )
+    )
+
+    assert command[1:3] == ("-g", "2")
+
+
+def test_trace_command_excludes_warmup_and_correctness_collectives():
+    command = build_nccl_tests_trace_command(
+        _request(
+            CollectiveKind.ALL_REDUCE,
+            reduction_op="sum",
+        )
+    )
+
+    assert command[command.index("-w") + 1] == "0"
+    assert command[command.index("-n") + 1] == "20"
+    assert command[command.index("-c") + 1] == "0"
 
 
 def test_broadcast_command_sets_exact_root():
@@ -217,6 +243,8 @@ def test_request_and_command_reject_invalid_boundaries():
         _request("invalid")
     with pytest.raises(SemanticError, match="positive integer"):
         _request(CollectiveKind.ALL_GATHER, message_size_bytes=0)
+    with pytest.raises(SemanticError, match="positive integer"):
+        _request(CollectiveKind.ALL_GATHER, gpus_per_process=0)
     with pytest.raises(SemanticError, match="whitespace"):
         _request(CollectiveKind.ALL_GATHER, datatype="float 32")
     with pytest.raises(SemanticError, match="boolean"):

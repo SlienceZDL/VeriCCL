@@ -130,6 +130,7 @@ class SolveRequest:
     solver_version: str = "unknown"
     model_version: str = "1"
     environment_signature: str = "unknown"
+    wall_clock_budget_s: Optional[float] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.inputs, ResolvedInput):
@@ -160,6 +161,21 @@ class SolveRequest:
             self.environment_signature,
             "solve_request.environment_signature",
         )
+        if self.wall_clock_budget_s is not None:
+            if (
+                isinstance(self.wall_clock_budget_s, bool)
+                or not isinstance(self.wall_clock_budget_s, (int, float))
+                or not math.isfinite(float(self.wall_clock_budget_s))
+                or self.wall_clock_budget_s <= 0.0
+            ):
+                raise SemanticError(
+                    "solve request wall clock budget must be positive"
+                )
+            object.__setattr__(
+                self,
+                "wall_clock_budget_s",
+                float(self.wall_clock_budget_s),
+            )
 
 
 @dataclass(frozen=True)

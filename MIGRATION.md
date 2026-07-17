@@ -17,3 +17,5 @@
 旧拓扑转换器继续识别外部格式标识`LEGACY_TACCL_TOPOLOGY_FORMAT`。所有必须保留的旧标识由`vericcl.provenance.ALLOWED_TACCL_REFERENCES`集中说明，未列入允许清单的源代码引用会使测试失败。
 
 旧示例、模板和参考XML仅用于格式转换、回归测试及来源追踪，不参与新工作流的运行时导入。完整迁移前历史可通过Git提交记录获取。
+
+新命令、输出目录和退出码见`README.md`；MSCCL参数见`docs/runtime-configuration.md`；候选与验证字段见`docs/validation-report.md`。

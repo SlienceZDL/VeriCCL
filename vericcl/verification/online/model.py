@@ -83,6 +83,7 @@ class NcclTestRequest:
     root: Optional[int]
     inplace: bool
     binary_directory: Optional[str] = None
+    gpus_per_process: int = 1
 
     def __post_init__(self) -> None:
         try:
@@ -95,6 +96,10 @@ class NcclTestRequest:
         _positive_integer(
             self.message_size_bytes,
             "nccl_test_request.message_size_bytes",
+        )
+        _positive_integer(
+            self.gpus_per_process,
+            "nccl_test_request.gpus_per_process",
         )
         _identifier(self.datatype, "nccl_test_request.datatype")
         if not isinstance(self.inplace, bool):

@@ -184,7 +184,7 @@ index dabba68..70d5539 100644
 +              rawTrace->peer = vericclTracePeer(
 +                  msccltran->type, recvPeer, sendPeer);
 +              rawTrace->channel = (uint16_t)channelId;
-+              rawTrace->iteration = (uint32_t)iter;
++              rawTrace->iteration = (uint32_t)workIndex;
 +              rawTrace->tb_reach = tbReach;
 +              rawTrace->dependency_done = dependencyDone;
 +              rawTrace->transfer_start = transferStart;

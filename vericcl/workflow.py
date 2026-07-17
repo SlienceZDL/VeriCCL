@@ -46,6 +46,10 @@ from vericcl.verification.online.pipeline import (
     attach_online_result_to_tuning_context,
     run_online_validation,
 )
+from vericcl.verification.online.calibration import (
+    CalibrationResult,
+    apply_calibration_to_topology,
+)
 from vericcl.verification.pipeline import (
     VerificationOutcome,
     validate_and_lower_candidate,
@@ -58,7 +62,7 @@ _monotonic = time.monotonic
 
 
 OnlineContextFactory = Callable[
-    [XmlArtifact, Schedule, ResolvedInput, Path, Path, bool, float],
+    [XmlArtifact, Schedule, ResolvedInput, Path, Path, bool, float, bool],
     OnlineContext,
 ]
 
@@ -175,6 +179,7 @@ class _CandidateRecord:
     candidate: SolveCandidate
     schedule: Schedule
     outcome: VerificationOutcome
+    topology: object
     overlay: Optional[TuningOverlay]
     tuning_strategy: dict
     accepted: bool
@@ -252,8 +257,94 @@ def _rejection_reason(outcome: VerificationOutcome) -> Optional[str]:
     return "offline_validation_failed"
 
 
+def _lane_evidence(lane) -> Optional[dict]:
+    if lane is None:
+        return None
+    return {
+        "src_rank": lane.src_rank,
+        "dst_rank": lane.dst_rank,
+        "channel": lane.channel,
+    }
+
+
+def _bottleneck_evidence(item) -> dict:
+    return {
+        "transfer_id": item.transfer_id,
+        "stage_id": item.stage_id,
+        "endpoint_type": item.endpoint_type.value,
+        "atom_ids": item.atom_ids,
+        "flow_ids": item.flow_ids,
+        "rank": item.rank,
+        "tb_id": item.tb_id,
+        "step_index": item.step_index,
+        "iteration": item.iteration,
+        "lane": _lane_evidence(item.lane),
+        "wait_class": item.wait_class.value,
+        "duration_us": item.duration_us,
+        "ordering_confident": item.ordering_confident,
+    }
+
+
+def _trace_analysis_evidence(analysis) -> Optional[dict]:
+    if analysis is None:
+        return None
+    return {
+        "intervals": tuple(
+            {
+                "transfer_id": interval.transfer_id,
+                "iteration": interval.iteration,
+                "physical_start_us": interval.physical_start_us,
+                "physical_end_us": interval.physical_end_us,
+                "start_uncertainty_us": (
+                    interval.physical_start.uncertainty_us
+                ),
+                "end_uncertainty_us": interval.physical_end.uncertainty_us,
+                "endpoint_order_uncertain": (
+                    interval.endpoint_order_uncertain
+                ),
+            }
+            for interval in analysis.intervals
+        ),
+        "step_waits": tuple(
+            {
+                "transfer_id": step.transfer_id,
+                "atom_ids": step.record.atom_ids,
+                "flow_ids": step.record.flow_ids,
+                "rank": step.record.rank,
+                "tb_id": step.record.tb_id,
+                "step_index": step.record.step_index,
+                "iteration": step.record.iteration,
+                "endpoint_type": step.record.endpoint_type.value,
+                "lane": _lane_evidence(step.record.lane),
+                "semantic_ready_us": step.semantic_ready_us,
+                "semantic_ready_uncertainty_us": (
+                    step.semantic_ready.uncertainty_us
+                ),
+                "head_of_line_wait_us": (
+                    step.waits.head_of_line_wait_us
+                ),
+                "dependency_wait_us": step.waits.dependency_wait_us,
+                "peer_resource_wait_us": (
+                    step.waits.peer_resource_wait_us
+                ),
+                "transfer_duration_us": (
+                    step.waits.transfer_duration_us
+                ),
+                "ordering_confident": step.ordering_confident,
+            }
+            for step in analysis.step_waits
+        ),
+        "bottlenecks": tuple(
+            _bottleneck_evidence(item) for item in analysis.bottlenecks
+        ),
+        "uncertain_comparisons": analysis.uncertain_comparisons,
+        "tuning_eligible": analysis.tuning_eligible,
+    }
+
+
 def _online_evidence(result: OnlineValidationResult) -> dict:
     history = result.release_history
+    calibration = result.calibration
     return {
         "preflight_status": result.preflight_status.value,
         "calibration_status": result.calibration_status.value,
@@ -271,6 +362,10 @@ def _online_evidence(result: OnlineValidationResult) -> dict:
                     "sample_count": value.sample_count,
                     "median_us": value.median_us,
                     "p95_us": value.p95_us,
+                    "mean_us": value.mean_us,
+                    "population_standard_deviation_us": (
+                        value.population_standard_deviation_us
+                    ),
                     "coefficient_of_variation": (
                         value.coefficient_of_variation
                     ),
@@ -279,11 +374,80 @@ def _online_evidence(result: OnlineValidationResult) -> dict:
                 for value in history.rounds
             )
         ),
+        "calibration": (
+            None
+            if calibration is None
+            else {
+                "link_class": calibration.request.link_class,
+                "slice_size_bytes": calibration.request.slice_size_bytes,
+                "benchmark_size_bytes": (
+                    calibration.request.benchmark_size_bytes
+                ),
+                "max_calibration_channels": (
+                    calibration.request.max_calibration_channels
+                ),
+                "cache_hit_concurrencies": (
+                    calibration.cache_hit_concurrencies
+                ),
+                "stable": calibration.stable,
+                "skipped_reason": calibration.skipped_reason,
+                "points": tuple(
+                    {
+                        "concurrency": point.concurrency,
+                        "median_us": (
+                            point.duration_statistics.median_us
+                        ),
+                        "p95_us": point.duration_statistics.p95_us,
+                        "mean_us": point.duration_statistics.mean_us,
+                        "population_standard_deviation_us": (
+                            point.duration_statistics.population_standard_deviation_us
+                        ),
+                        "coefficient_of_variation": (
+                            point.duration_statistics.coefficient_of_variation
+                        ),
+                        "stable": point.stable,
+                        "full_wave_count": point.full_wave_count,
+                        "tail_transfer_count": (
+                            point.tail_transfer_count
+                        ),
+                    }
+                    for point in calibration.points
+                ),
+                "curve": (
+                    None
+                    if calibration.curve is None
+                    else {
+                        "alpha_us": calibration.curve.alpha_us,
+                        "invbw_us": calibration.curve.invbw_us,
+                        "bandwidth_bytes_per_us": {
+                            str(concurrency): bandwidth
+                            for concurrency, bandwidth in (
+                                calibration.curve.bandwidth_bytes_per_us.items()
+                            )
+                        },
+                    }
+                ),
+            }
+        ),
         "trace_rank_files": tuple(
             str(path) for path in result.trace_rank_files
         ),
         "trace_clock_uncertainty_us": (
             result.trace_clock_uncertainty_us
+        ),
+        "trace_analysis": _trace_analysis_evidence(result.trace_analysis),
+        "tuning_evidence": (
+            None
+            if result.tuning_evidence is None
+            else {
+                "wait_us_by_transfer": dict(
+                    result.tuning_evidence.wait_us_by_transfer
+                ),
+                "bottleneck_priorities": tuple(
+                    _bottleneck_evidence(item)
+                    for item in result.tuning_evidence.bottleneck_priorities
+                ),
+            }
         ),
         "requires_resolve": result.requires_resolve,
         "online_tuning_allowed": result.online_tuning_allowed,
@@ -297,6 +461,7 @@ def _with_online_result(
     passed = (
         result.online_operator_validation is OnlineStageStatus.PASSED
         and result.release_status is OnlineStageStatus.PASSED
+        and result.failure_code is None
     )
     online = CheckResult(
         dimension="online",
@@ -351,6 +516,7 @@ def _run_online_candidate(
     factory: OnlineContextFactory,
     tuning_requested: bool,
     deadline: _Deadline,
+    calibrate: bool = True,
 ) -> tuple:
     if outcome.artifact is None or not outcome.report.runtime_compatible:
         return (
@@ -367,7 +533,10 @@ def _run_online_candidate(
             "workflow wall-clock budget expired before online validation"
         )
     token = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()[:12]
-    candidate_traces = layout.traces / "candidate-{}".format(token)
+    candidate_traces = layout.traces / "candidate-{}-{}".format(
+        token,
+        "calibration" if calibrate else "operator",
+    )
     candidate_traces.mkdir()
     xml_path = candidate_traces / "online-input.xml"
     atomic_write_text(xml_path, outcome.artifact.xml_text)
@@ -379,10 +548,51 @@ def _run_online_candidate(
         candidate_traces,
         tuning_requested,
         remaining,
+        calibrate,
     )
     result = run_online_validation(online_context)
     deadline.check("online validation")
     return _with_online_result(outcome, result), result
+
+
+def _applied_calibration(result: OnlineValidationResult) -> CalibrationResult:
+    calibration = result.calibration
+    if (
+        not result.requires_resolve
+        or calibration is None
+        or not calibration.stable
+        or calibration.curve is None
+        or calibration.skipped_reason is not None
+    ):
+        raise SemanticError("online resolve requires stable calibration")
+    return CalibrationResult(
+        request=calibration.request,
+        points=calibration.points,
+        curve=calibration.curve,
+        skipped_reason=None,
+    )
+
+
+def _merge_applied_calibration(
+    calibration_result: OnlineValidationResult,
+    operator_result: OnlineValidationResult,
+    *,
+    requires_resolve: bool = False,
+) -> OnlineValidationResult:
+    return replace(
+        operator_result,
+        calibration_status=OnlineStageStatus.PASSED,
+        calibration=calibration_result.calibration,
+        requires_resolve=requires_resolve,
+        online_tuning_allowed=(
+            False
+            if requires_resolve
+            else operator_result.online_tuning_allowed
+        ),
+        tuning_evidence=(
+            None if requires_resolve else operator_result.tuning_evidence
+        ),
+    )
 
 
 def _global_schedule(plan, candidate: SolveCandidate) -> Schedule:
@@ -504,6 +714,7 @@ def _tuning_records(
                     factory=online_factory,
                     tuning_requested=True,
                     deadline=deadline,
+                    calibrate=False,
                 )
         performance = None
         if (
@@ -549,6 +760,7 @@ def _tuning_records(
                 candidate=_tuned_candidate(initial, entry),
                 schedule=entry.schedule,
                 outcome=outcome,
+                topology=topology,
                 overlay=entry.overlay,
                 tuning_strategy=dict(entry.tuning_strategy),
                 accepted=entry.accepted and _offline_valid(outcome),
@@ -634,6 +846,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
         solver_version=context.solver_version,
         model_version=context.model_version,
         environment_signature=context.environment_signature,
+        wall_clock_budget_s=deadline.remaining(),
     )
     result = solve(request)
     deadline.check("solve")
@@ -651,6 +864,8 @@ def execute_solve(context: RunContext) -> RunArtifacts:
         result.selected_candidate_id,
     )
     online_result = None
+    calibration_message = None
+    lineage_records = []
     if context.online and final_candidate_id is not None:
         online_index = next(
             index
@@ -671,15 +886,116 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             updated_outcome if index == online_index else value
             for index, value in enumerate(outcomes)
         )
+        if online_result is not None and online_result.requires_resolve:
+            calibration_result = online_result
+            calibration_parent_candidate_id = final_candidate_id
+            lineage_records.extend(
+                _CandidateRecord(
+                    candidate=candidate,
+                    schedule=schedule,
+                    outcome=outcome,
+                    topology=topology,
+                    overlay=None,
+                    tuning_strategy={"kind": "initial_solve"},
+                    accepted=_offline_valid(outcome),
+                    rejection_reason=_rejection_reason(outcome),
+                )
+                for candidate, schedule, outcome in zip(
+                    result.candidates,
+                    schedules,
+                    outcomes,
+                )
+            )
+            topology = apply_calibration_to_topology(
+                topology,
+                _applied_calibration(calibration_result),
+            )
+            plan = build_plan(inputs, topology)
+            request = SolveRequest(
+                inputs=inputs,
+                topology=topology,
+                plan=plan,
+                solver_version=context.solver_version,
+                model_version=context.model_version,
+                environment_signature=context.environment_signature,
+                wall_clock_budget_s=deadline.remaining(),
+            )
+            result = solve(request)
+            result = replace(
+                result,
+                candidates=tuple(
+                    replace(
+                        candidate,
+                        parent_candidate_id=calibration_parent_candidate_id,
+                    )
+                    for candidate in result.candidates
+                ),
+            )
+            deadline.check("calibrated re-solve")
+            schedules = tuple(
+                _global_schedule(plan, candidate)
+                for candidate in result.candidates
+            )
+            outcomes = tuple(
+                validate_and_lower_candidate(schedule, inputs, topology)
+                for schedule in schedules
+            )
+            deadline.check("calibrated validation")
+            final_candidate_id = _select_final(
+                result.candidates,
+                outcomes,
+                result.selected_candidate_id,
+            )
+            online_result = None
+            if final_candidate_id is not None:
+                online_index = next(
+                    index
+                    for index, candidate in enumerate(result.candidates)
+                    if candidate.candidate_id == final_candidate_id
+                )
+                updated_outcome, operator_result = _run_online_candidate(
+                    candidate_id=final_candidate_id,
+                    schedule=schedules[online_index],
+                    outcome=outcomes[online_index],
+                    inputs=inputs,
+                    layout=layout,
+                    factory=context.online_context_factory,
+                    tuning_requested=context.tune,
+                    deadline=deadline,
+                    calibrate=False,
+                )
+                if operator_result is None:
+                    online_result = calibration_result
+                else:
+                    online_result = _merge_applied_calibration(
+                        calibration_result,
+                        operator_result,
+                    )
+                    updated_outcome = _with_online_result(
+                        updated_outcome,
+                        online_result,
+                    )
+                outcomes = tuple(
+                    updated_outcome if index == online_index else value
+                    for index, value in enumerate(outcomes)
+                )
+            calibration_message = "online_calibration_applied"
     hierarchy = _hierarchy_plan(plan)
     applied = _applied_strategies(inputs)
-    records = [
+    records = lineage_records + [
         _CandidateRecord(
             candidate=candidate,
             schedule=schedule,
             outcome=outcome,
+            topology=topology,
             overlay=None,
-            tuning_strategy={"kind": "initial_solve"},
+            tuning_strategy={
+                "kind": (
+                    "calibrated_resolve"
+                    if calibration_message is not None
+                    else "initial_solve"
+                )
+            },
             accepted=_offline_valid(outcome),
             rejection_reason=_rejection_reason(outcome),
         )
@@ -723,7 +1039,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
         write_candidate_artifact(
             layout,
             inputs,
-            topology,
+            record.topology,
             record.candidate,
             record.schedule,
             record.outcome,
@@ -747,9 +1063,26 @@ def execute_solve(context: RunContext) -> RunArtifacts:
         final_candidate_id=final_candidate_id,
         status=result.status.value,
         message=(
-            result.message
+            (
+                result.message
+                if calibration_message is None
+                else "{}; calibration={}".format(
+                    result.message,
+                    calibration_message,
+                )
+            )
             if tuning_message is None
-            else "{}; tuning={}".format(result.message, tuning_message)
+            else "{}; tuning={}".format(
+                (
+                    result.message
+                    if calibration_message is None
+                    else "{}; calibration={}".format(
+                        result.message,
+                        calibration_message,
+                    )
+                ),
+                tuning_message,
+            )
         ),
         started=started,
     )
@@ -848,11 +1181,34 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             tuning_requested=context.tune,
             deadline=deadline,
         )
+        if online_result is not None and online_result.requires_resolve:
+            calibration_result = online_result
+            outcome, operator_result = _run_online_candidate(
+                candidate_id=sidecar.candidate.candidate_id,
+                schedule=sidecar.schedule,
+                outcome=outcome,
+                inputs=inputs,
+                layout=layout,
+                factory=context.online_context_factory,
+                tuning_requested=False,
+                deadline=deadline,
+                calibrate=False,
+            )
+            if operator_result is None:
+                online_result = calibration_result
+            else:
+                online_result = _merge_applied_calibration(
+                    calibration_result,
+                    operator_result,
+                    requires_resolve=True,
+                )
+                outcome = _with_online_result(outcome, online_result)
     records = [
         _CandidateRecord(
             candidate=sidecar.candidate,
             schedule=sidecar.schedule,
             outcome=outcome,
+            topology=topology,
             overlay=sidecar.overlay,
             tuning_strategy={"kind": "verify_existing"},
             accepted=accepted,
@@ -889,7 +1245,7 @@ def execute_verify(context: RunContext) -> RunArtifacts:
         write_candidate_artifact(
             layout,
             inputs,
-            topology,
+            record.topology,
             record.candidate,
             record.schedule,
             record.outcome,

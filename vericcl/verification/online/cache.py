@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+import fcntl
+import json
+import os
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from vericcl.errors import SemanticError
 from vericcl.input.json_codec import sha256_json
 from vericcl.verification.online.calibration import CalibrationPoint
+from vericcl.verification.online.statistics import summarize_runs
 
 
 def _identifier(value: object, field: str) -> str:
@@ -120,8 +126,106 @@ def environment_signature_sha256(signature: EnvironmentSignature) -> str:
 
 
 class CalibrationCache:
-    def __init__(self) -> None:
+    def __init__(self, path: Optional[Path] = None) -> None:
         self._points: Dict[str, CalibrationPoint] = {}
+        self._path = None if path is None else Path(path)
+        if self._path is not None and self._path.exists():
+            with self._locked():
+                self._load()
+
+    @contextmanager
+    def _locked(self):
+        if self._path is None:
+            yield
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self._path.with_name(self._path.name + ".lock")
+        try:
+            with lock_path.open("a+", encoding="utf-8") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError as error:
+            raise SemanticError(
+                "calibration cache lock could not be acquired"
+            ) from error
+
+    def _load(self) -> None:
+        assert self._path is not None
+        try:
+            payload = json.loads(self._path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, dict)
+                or payload.get("schema_version") != 1
+                or not isinstance(payload.get("points"), dict)
+            ):
+                raise ValueError("invalid cache schema")
+            points = {}
+            for raw_digest, raw_point in payload["points"].items():
+                digest = _digest(raw_digest, "cache point digest")
+                if not isinstance(raw_point, dict):
+                    raise ValueError("invalid cache point")
+                point = CalibrationPoint(
+                    concurrency=raw_point["concurrency"],
+                    duration_statistics=summarize_runs(
+                        raw_point["samples_us"]
+                    ),
+                    full_wave_count=raw_point["full_wave_count"],
+                    tail_transfer_count=raw_point["tail_transfer_count"],
+                )
+                points[digest] = point
+        except (
+            KeyError,
+            OSError,
+            TypeError,
+            ValueError,
+            SemanticError,
+        ) as error:
+            raise SemanticError("calibration cache file is invalid") from error
+        self._points = points
+
+    def _persist(self) -> None:
+        if self._path is None:
+            return
+        payload = {
+            "schema_version": 1,
+            "points": {
+                digest: {
+                    "concurrency": point.concurrency,
+                    "samples_us": point.duration_statistics.samples_us,
+                    "full_wave_count": point.full_wave_count,
+                    "tail_transfer_count": point.tail_transfer_count,
+                }
+                for digest, point in sorted(self._points.items())
+            },
+        }
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._path.with_name(
+            "{}.tmp.{}".format(self._path.name, os.getpid())
+        )
+        try:
+            with temporary.open("w", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(payload, sort_keys=True, indent=2) + "\n"
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self._path)
+            directory_fd = os.open(str(self._path.parent), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError as error:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise SemanticError(
+                "calibration cache file could not be written"
+            ) from error
 
     def put(
         self,
@@ -136,7 +240,15 @@ class CalibrationCache:
             raise SemanticError(
                 "cache signature and point concurrency differ"
             )
-        self._points[environment_signature_sha256(signature)] = point
+        digest = environment_signature_sha256(signature)
+        if self._path is None:
+            self._points[digest] = point
+            return
+        with self._locked():
+            if self._path.exists():
+                self._load()
+            self._points[digest] = point
+            self._persist()
 
     def get(
         self,
@@ -150,4 +262,8 @@ class CalibrationCache:
             raise SemanticError("force_recalibrate must be a boolean")
         if force_recalibrate:
             return None
+        if self._path is not None:
+            with self._locked():
+                if self._path.exists():
+                    self._load()
         return self._points.get(environment_signature_sha256(signature))

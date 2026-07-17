@@ -41,6 +41,12 @@ set and later online analysis must reject it. Release performance measurements
 must run with `VERICCL_TRACE_ENABLE=0`; trace diagnostics are a separate run
 and their overhead is not performance data.
 
+The raw `iteration` field stores the MSCCL `workIndex`, which identifies one
+NCCL collective invocation. VeriCCL runs trace diagnostics with zero warmups,
+20 timed iterations, and correctness checks disabled. The collector excludes
+the setup invocation from each out-of-place or in-place timing block and sends
+exactly 20 measured invocations to trace analysis.
+
 The patch fixes `MSCCL_CHUNKSTEPS=4` and `MSCCL_SLICESTEPS=4`. Use the runtime
 parameter guidance in `Vericcl-work-document.md` to keep each XML step at the
 intended software slice granularity.

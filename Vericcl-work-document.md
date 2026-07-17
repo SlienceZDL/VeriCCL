@@ -301,7 +301,7 @@ Scatter和Gather只作为PlanDAG内部节点，不接受为独立求解目标。
 Composer根据每个slice或AggregateState的实际ready time执行事件驱动合成，不在阶段边界加入统一barrier。`semantic_predecessors`只记录状态因果关系，`predecessor_ids`在此基础上补充lane和共享资源的串行顺序；全局重排只允许改变后者，不得破坏语义依赖。阶段接口以Rank、逻辑地址和contributors精确连接；阶段内部根节点原地透传时，局部压缩offset可以与最终全局offset不同，但必须由相同Rank和完整contributors唯一对应。最终输出仍按全局CollectiveSpec的Rank、offset和contributors进行严格验证。
 
 ### (3)调度合成/求解器
-不同消息规模和执行环境对延迟、吞吐及求解开销的要求不同。VeriCCL使用统一atom接口组合剪枝、构造式生成树和MILP求解，并将所有候选降低为MSCCL XML；仓库根目录的`Allgather.n16-1MB_i8_v1.xml`作为现有格式参考。求解器必须记录搜索空间是否受限、候选是否经过完整验证以及是否具有最优性证明，不能将启发式或超时incumbent表述为全局最优。
+不同消息规模和执行环境对延迟、吞吐及求解开销的要求不同。VeriCCL使用统一atom接口组合剪枝、构造式生成树和MILP求解，并将所有候选降低为MSCCL XML；`vericcl/examples/legacy/Allgather.n16-1MB_i8_v1.xml`作为现有格式参考。求解器必须记录搜索空间是否受限、候选是否经过完整验证以及是否具有最优性证明，不能将启发式或超时incumbent表述为全局最优。
 
 [1]硬约束
 调度求解设置以下硬约束，具体实现参考TACCL、TE-CCL和SyCCL论文及代码：
@@ -395,7 +395,7 @@ MILP达到求解时间上限时，若Gurobi已经得到可行incumbent，则提�
 
 原始MSCCL v0.7.4和`nccl-tests`不直接导出XML step级时间，因此正式性能测试与step诊断必须分离。VeriCCL必须提供适配MSCCL v0.7.4的trace补丁、构建说明和trace读取器；启用在线算子验证时，该trace能力是强制要求。现有GPU `printf`式输出和TB级聚合等待时间不足以完成逐step分析，trace实现必须改用预分配的GPU定长事件缓冲区，kernel结束后统一复制到host，禁止在通信执行期间逐step调用GPU `printf`。
 
-每个XML step至少记录`rank`、`tb_id`、`step_index`、`transfer_id`、端点类型、peer、channel、iteration、`tb_reach_time`、`dependency_done_time`、`transfer_start_time`、`transfer_end_time`和trace状态标志。`tb_reach_time`表示TB完成前一step并开始处理当前step；`dependency_done_time`表示当前step的XML依赖全部满足；`transfer_start_time`表示peer、FIFO、credit和通信primitive均已就绪并实际开始数据操作；`transfer_end_time`表示完整slice的当前端点操作完成。`cpy`记录本地复制起止时间，`nop`记录依赖满足和完成时间。
+每个XML step至少记录`rank`、`tb_id`、`step_index`、`transfer_id`、端点类型、peer、channel、iteration、`tb_reach_time`、`dependency_done_time`、`transfer_start_time`、`transfer_end_time`和trace状态标志。原始记录中的`iteration`固定存储MSCCL `workIndex`，表示一次NCCL集合调用；不得使用XML step内部的`gridOffset/iter`代替，否则无法区分`nccl-tests`的重复调用。`tb_reach_time`表示TB完成前一step并开始处理当前step；`dependency_done_time`表示当前step的XML依赖全部满足；`transfer_start_time`表示peer、FIFO、credit和通信primitive均已就绪并实际开始数据操作；`transfer_end_time`表示完整slice的当前端点操作完成。`cpy`记录本地复制起止时间，`nop`记录依赖满足和完成时间。
 
 MSCCL只有执行到某个step时才检查其依赖，无法直接记录后续step本来可以更早就绪的时间。因此XML生成器必须输出sidecar，将`(rank, tb_id, step_index)`映射到`transfer_id`、atom、flow以及降低前的完整语义前驱集合。在线分析器使用全部语义前驱的实测物理完成时间重建：
 
@@ -427,15 +427,17 @@ transfer\_duration=physical\_end-physical\_start
 
 `head_of_line_wait`用于识别后续step已经ready但被较小step阻塞的TB队首等待；`dependency_wait`表示TB已经到达当前step但显式依赖尚未完成；`peer_resource_wait`表示依赖满足后仍在等待配对端点或通信资源；`transfer_duration`用于识别实际传输变慢和channel并发带宽下降。在线分析结果必须生成逐step trace、统一时间线和瓶颈报告，并将每个瓶颈关联到`transfer_id`、atom、flow、Rank、TB、step、lane及等待类型。
 
-正式的5次预热和20次性能测试使用未启用trace的release MSCCL；在线诊断另外执行一次相同XML、消息大小和参数的trace运行，trace结果不参与正式性能统计。MSCCL communicator初始化同时核对`VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4`和`VERICCL_EXPECTED_MSCCL_SLICESTEPS=4`，编译常量不一致时拒绝执行。启用在线算子验证时，逐step trace必须完整成功；trace失败不否定调度的离线语义正确性和MSCCL格式正确性，但必须设置`online_operator_validation = failed`，不得将该候选标记为在线验证完成，也不得根据不完整数据执行在线调优。未请求在线算子验证时不要求trace运行。
+正式的5次预热和20次性能测试使用未启用trace的release MSCCL；在线诊断另外执行一次相同XML、消息大小、数据类型、算子、root和原地模式的trace运行，并固定使用`-w 0 -n 20 -c 0`排除预热与正确性检查产生的额外集合调用。`nccl-tests`每个原地或非原地计时块包含一个setup调用和20个正式调用；收集器按`workIndex`选择请求模式对应的计时块，丢弃setup并只将20次正式调用送入分析。trace结果不参与正式性能统计。MSCCL communicator初始化同时核对`VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4`和`VERICCL_EXPECTED_MSCCL_SLICESTEPS=4`，编译常量不一致时拒绝执行。启用在线算子验证时，逐step trace必须完整成功；trace失败不否定调度的离线语义正确性和MSCCL格式正确性，但必须设置`online_operator_validation = failed`，不得将该候选标记为在线验证完成，也不得根据不完整数据执行在线调优。未请求在线算子验证时不要求trace运行。
+
+`VERICCL_TRACE_RECORDS`给出每Rank的用户配置下限。预检根据sidecar中该Rank的step数和最多两个计时块自动提升容量，最低为`42 * max_steps_per_rank`，避免小slice或大XML在正式采集前即发生确定性溢出。用户可以设置更大容量，但不能强制降低该安全下限。
 
 每轮在线验证默认预热5次并正式执行20次，使用正式执行时间的中位数作为调度时间，同时记录P95、均值、标准差和变异系数。每个统计样本来自一次独立`nccl-tests`进程输出；单个进程仍使用`-w 5 -n 20`，不得把一个聚合输出行中的内部迭代虚构为20个独立样本。变异系数超过5%时重新执行该轮，最多重测3轮；达到上限后保留全部样本并将`release_status`标记为`unstable`，该结果不得用于在线调优。测试必须启用`nccl-tests`正确性检查，并使用当前调度的精确消息大小、数据类型、归约操作、root和原地/非原地模式，不得使用最佳单次时间替代统计结果。
 
 完整且时钟误差合格的trace生成候选级`OnlineTuningEvidence`，其中保存逐`transfer_id`的实测等待总量和带完整定位信息的瓶颈优先级。该证据通过`attach_online_result_to_tuning_context`写入`TuningContext.online_trace_evidence[candidate_id]`；BDD flow替换和TB顺序提示优先处理实测等待更长、瓶颈优先级更高的候选，但替换、后缀修复、时间重排和完整验证流程不变。
 
-`B_link(k)`不依赖目标调度是否实际出现并发度`k`。VeriCCL预先为不同channel并发度生成基准测试XML，基准消息大小固定为128 MiB。机内链路只在`1机*2卡`环境测试，机间链路只在`2机*1卡`环境测试；其余逻辑链路根据拓扑中的精确同构关系复用对应链路类别的测量结果，不执行更大规模的链路基准测试。基准结果按机内和机间链路类别分别保存，并用于更新拓扑参数和重新求解。
+`B_link(k)`不依赖目标调度是否实际出现并发度`k`。VeriCCL预先为不同channel并发度生成基准测试XML，基准消息大小固定为128 MiB。机内链路只在`1机*2卡`环境测试，机间链路只在`2机*1卡`环境测试；其余逻辑链路仅在方向角色、gateway角色、链路参数、最大channel以及共享资源结构和参数均精确同构时复用测量结果，不执行更大规模的链路基准测试。任一同类链路不满足该条件时拒绝更新，禁止按机内/机间标签粗粒度传播。每次在线执行通过`VERICCL_CALIBRATION_LINK_CLASS`选择一个与当前硬件布局一致的代表类别，未选择类别继续使用topo输入中的保守参数。算子执行与校准分别维护MPI launcher和hostfile，机间校准不得改变机内算子的单进程`-g rank_count`几何。基准结果按链路类别和完整环境签名分别持久化；`solve --online`用稳定结果更新同类链路及同类共享资源后重新构建Plan并二次求解，同时保留首轮候选、校准后二次候选及其父子关系；`verify --online`不改写输入XML，而在报告中设置`requires_resolve=true`。
 
-基准XML使用当前任务的`slice_size_bytes = S`，基准slice数量为`N_bench = 128 MiB / S`。输入参数`max_calibration_channels`默认值为32，有效最大并发度为`K_effective = min(max_calibration_channels, 32, N_bench)`，保证每个活跃channel至少传输一个完整slice。VeriCCL为每个`k = 1..K_effective`生成独立基准XML并逐一测试，不使用插值、外推或提前停止。如果`S`不能整除128 MiB，则跳过该任务的在线链路校准并在报告中提示，不自动改变slice大小，也不使用其他slice大小的基准结果替代。
+基准XML使用当前任务的`slice_size_bytes = S`，基准slice数量为`N_bench = 128 MiB / S`。输入参数`max_calibration_channels`默认值为32，有效最大并发度为`K_effective = min(max_calibration_channels, 32, N_bench, link_max_channels)`，保证每个活跃channel至少传输一个完整slice。VeriCCL为每个`k = 1..K_effective`生成独立基准XML并逐一测试，不使用插值、外推或提前停止。更新后的链路与共享资源`max_channels`保守限制为`K_effective`，求解器不得使用未测并发度。如果`S`不能整除128 MiB，则跳过该任务的在线链路校准并在报告中提示，不自动改变slice大小，也不使用其他slice大小的基准结果替代。
 
 固定128 MiB消息和固定slice大小不能唯一分离实测启动开销与单slice传输开销，因此在线校准保留topo输入中的`alpha`。设并发度`k`下完整传输批次的P95耗时为`D_safe(k)`，则更新：
 
@@ -449,7 +451,7 @@ B_{link}(k)=\frac{kS}{\max(D_{safe}(k)-alpha, \epsilon)}
 
 求解器使用`b_safe(K) = min_{1<=k<=K}(B_link(k)/k)`以及`D(K) = alpha + S/b_safe(K)`计算保守并发开销。若`D_safe(k) <= alpha`，该测量点无效，保留原拓扑参数并在报告中记录。在线校准只更新`beta`、`invbw`和`B_link(k)`，不修改`alpha`。
 
-基准XML和测量结果均允许缓存。环境签名完全匹配时，VeriCCL默认自动复用已有测量结果，不重复运行基准测试。签名至少包含链路类别、拓扑签名、GPU和NIC型号、CUDA/NCCL/MSCCL版本、Simple协议、slice大小、128 MiB基准消息大小、channel并发度、`NCCL_BUFFSIZE`、MSCCL chunk/slice steps以及影响传输路径的关键环境变量。任一字段不匹配时缓存失效并重新测试。用户可以设置`force_recalibrate=true`忽略缓存并强制重测。
+基准XML和测量结果均允许缓存。环境签名完全匹配时，VeriCCL默认自动复用已有测量结果，不重复运行基准测试。签名至少包含链路类别、拓扑签名、GPU和NIC型号、CUDA/NCCL/MSCCL版本、Simple协议、slice大小、128 MiB基准消息大小、channel并发度、`NCCL_BUFFSIZE`、MSCCL chunk/slice steps、`CUDA_VISIBLE_DEVICES`、`LD_LIBRARY_PATH`以及全部输入的`NCCL_*`和`UCX_*`环境变量；hostfile与`NCCL_TOPO_FILE`同时记录规范路径和文件内容SHA-256。任一字段不匹配时缓存失效并重新测试。持久化缓存使用文件锁、锁内重读合并、同目录临时文件、原子替换及文件/目录`fsync`，避免并发CLI丢失测量点。用户可以设置`force_recalibrate=true`忽略缓存并强制重测。
 
 链路基准统一使用定制Broadcast XML和`broadcast_perf`。Rank 0作为root，将128 MiB数据按当前slice大小划分，并在并发度`k`下将slice分配到`k`个channel。该基准只激活root到目标Rank的单向传输，不包含REDUCE计算，也不同时激活反向链路。每类机内和机间链路只测试一个代表方向，反向链路及其他有向链路仅在拓扑证明其与代表链路精确同构时复用测量结果。
 
@@ -502,7 +504,7 @@ XML golden测试在规范化稳定标识后比较输出，检查buffer、offset�
 ## 3.工作流程
 
 ### (1)输入
-输入文件固定为`topo.json`、`sketch.json`和`atom.json`。`topo.json`沿用现有拓扑示例的Rank、单向链路、channel及性能参数，并扩展SyCCL风格的共享NIC等资源；存在的链路默认允许使用，不额外输入Rank顺序，通信组内及同构节点间均按Rank数字顺序映射。迁移前格式参考旧`./taccl/examples/`，迁移后的规范示例统一放在`./vericcl/examples/`。
+输入文件固定为`topo.json`、`sketch.json`和`atom.json`。`topo.json`沿用现有拓扑示例的Rank、单向链路、channel及性能参数，并扩展SyCCL风格的共享NIC等资源；存在的链路默认允许使用，不额外输入Rank顺序，通信组内及同构节点间均按Rank数字顺序映射。规范示例统一放在`vericcl/examples/{topo,sketch,atom}`，迁移保留的旧格式样本位于`vericcl/examples/legacy`。
 
 `sketch.json`包含唯一CollectiveSpec、`total_size_bytes`、`slice_size_bytes`、求解预算、目标模式、校准选项及其他超参数。`atom.json`包含布尔求解策略、可选手动分层、可选`stage_num`和禁用项`(slice_id, src, dst, stage_id)`；手动分层和禁用项均可为空。输入加载后必须生成不可变`resolved-input.json`，后续调优只能通过TuningOverlay派生候选，不得写回原始JSON。
 

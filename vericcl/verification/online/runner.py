@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import time
 from types import MappingProxyType
 from typing import Mapping, Optional, Protocol, Tuple
 
@@ -17,6 +18,7 @@ from vericcl.verification.online.model import NcclTestRequest
 from vericcl.verification.online.nccl_tests import (
     NcclTestsHelpValidator,
     build_nccl_tests_command,
+    build_nccl_tests_trace_command,
     parse_nccl_tests_output,
 )
 from vericcl.verification.online.statistics import (
@@ -29,6 +31,9 @@ from vericcl.verification.online.trace_analysis import (
 )
 from vericcl.verification.online.trace_format import parse_trace
 from vericcl.xml.trace_sidecar import TraceSidecar
+
+
+_monotonic = time.monotonic
 
 
 def _command(value: object) -> Tuple[str, ...]:
@@ -180,8 +185,27 @@ class NcclTestsRunner:
         self._environment = _environment(environment)
         self._launcher_prefix = _command(launcher_prefix) if launcher_prefix else ()
         self._cwd = None if cwd is None else Path(cwd)
-        self._timeout_s = timeout_s
+        if timeout_s is not None and (
+            isinstance(timeout_s, bool)
+            or not isinstance(timeout_s, (int, float))
+            or not math.isfinite(float(timeout_s))
+            or timeout_s <= 0.0
+        ):
+            raise SemanticError("runner wall-clock budget must be positive")
+        self._deadline = (
+            None
+            if timeout_s is None
+            else _monotonic() + float(timeout_s)
+        )
         self._help = NcclTestsHelpValidator()
+
+    def _remaining_timeout(self) -> Optional[float]:
+        if self._deadline is None:
+            return None
+        remaining = self._deadline - _monotonic()
+        if remaining <= 0.0:
+            raise SemanticError("runner wall-clock budget expired")
+        return remaining
 
     def _request(
         self,
@@ -198,7 +222,7 @@ class NcclTestsRunner:
             ),
             label=label,
             cwd=self._cwd,
-            timeout_s=self._timeout_s,
+            timeout_s=self._remaining_timeout(),
         )
 
     def validate_help(self, request: NcclTestRequest) -> None:
@@ -245,7 +269,7 @@ class NcclTestsRunner:
         environment: Mapping[str, str],
     ) -> ProcessResult:
         process = self._request(
-            build_nccl_tests_command(request),
+            build_nccl_tests_trace_command(request),
             "nccl-tests trace diagnostic",
             environment=environment,
         )
@@ -272,6 +296,8 @@ class TraceCollectionRequest:
     rank_count: int
     clock_sync_output: str
     max_clock_uncertainty_us: float
+    measured_iterations: Optional[int] = None
+    inplace: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.sidecar, TraceSidecar):
@@ -299,6 +325,14 @@ class TraceCollectionRequest:
             "max_clock_uncertainty_us",
             float(self.max_clock_uncertainty_us),
         )
+        if self.measured_iterations is not None and (
+            isinstance(self.measured_iterations, bool)
+            or not isinstance(self.measured_iterations, int)
+            or self.measured_iterations < 1
+        ):
+            raise SemanticError("measured trace iterations must be positive")
+        if not isinstance(self.inplace, bool):
+            raise SemanticError("trace inplace selector must be boolean")
 
 
 @dataclass(frozen=True)
@@ -351,6 +385,43 @@ def collect_trace_files(
     }
     if any(not records for records in records_by_rank.values()):
         raise SemanticError("trace rank contains no records")
+    if request.measured_iterations is not None:
+        invocation_sets = tuple(
+            frozenset(record.iteration for record in records_by_rank[rank])
+            for rank in range(request.rank_count)
+        )
+        if any(values != invocation_sets[0] for values in invocation_sets[1:]):
+            raise SemanticError("trace invocation identifiers differ by rank")
+        invocation_ids = tuple(sorted(invocation_sets[0]))
+        block_size = request.measured_iterations + 1
+        expected_counts = (block_size, 2 * block_size)
+        if len(invocation_ids) not in expected_counts:
+            raise SemanticError(
+                "trace invocation count must be {} or {}, got {}".format(
+                    expected_counts[0],
+                    expected_counts[1],
+                    len(invocation_ids),
+                )
+            )
+        block_offset = (
+            block_size
+            if request.inplace and len(invocation_ids) == 2 * block_size
+            else 0
+        )
+        selected = frozenset(
+            invocation_ids[
+                block_offset + 1:
+                block_offset + block_size
+            ]
+        )
+        records_by_rank = {
+            rank: tuple(
+                record
+                for record in records_by_rank[rank]
+                if record.iteration in selected
+            )
+            for rank in range(request.rank_count)
+        }
     samples = parse_clock_sync_output(request.clock_sync_output)
     alignment = align_clocks(records_by_rank, samples)
     uncertainty = max(

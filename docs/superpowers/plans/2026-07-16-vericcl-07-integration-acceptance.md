@@ -191,19 +191,19 @@ Expected: all tests pass.
 **Interfaces:**
 - Documents: installation, input schemas, solve/verify commands, MSCCL build parameters, runtime environment, output layout, validation statuses, online prerequisites, and migration.
 
-- [ ] **Step 1: Write executable documentation tests**
+- [x] **Step 1: Write executable documentation tests**
 
 Extract repository-local `vericcl --help`, solve, verify, and example-validation commands from Markdown and run them against temporary output directories. Validate that documented JSON examples resolve and documented environment formulas compute `NCCL_BUFFSIZE=2*S`.
 
-- [ ] **Step 2: Update runtime configuration instructions**
+- [x] **Step 2: Update runtime configuration instructions**
 
 Document exact locations and values: `src/include/msccl.h`, `MSCCL_CHUNKSTEPS 4`, `MSCCL_SLICESTEPS 4`, rebuild command `make -j src.build`, `NCCL_BUFFSIZE=2*slice_size_bytes`, Simple protocol, one XML per run, exact message range, and candidate/runtime warnings. Include release versus trace build instructions and trace environment variables.
 
-- [ ] **Step 3: Update workflow and report documentation**
+- [x] **Step 3: Update workflow and report documentation**
 
 Document the three input files, immutable resolved input, output directory, candidate lineage, validation dimensions, selected_best/proven_optimal distinction, BDD opportunity semantics, online statistics, trace uncertainty, calibration cache, and all `not_run` conditions.
 
-- [ ] **Step 4: Run documented-command and complete pure-software tests**
+- [x] **Step 4: Run documented-command and complete pure-software tests**
 
 Run: `python3 -m pytest tests/integration/test_documented_commands.py -q`
 
@@ -213,7 +213,7 @@ Run: `python3 -m pytest -m 'not hardware and not gurobi' --cov=vericcl --cov-rep
 
 Expected: all pure-software tests pass and total new-code coverage is at least 90%.
 
-- [ ] **Step 5: Run optional integration matrices and report evidence**
+- [x] **Step 5: Run optional integration matrices and report evidence**
 
 Run: `python3 -m pytest -m gurobi -q`
 
@@ -223,7 +223,7 @@ Run: `python3 -m pytest -m hardware -q`
 
 Expected: pass on configured hardware; otherwise explicit `not_run`.
 
-- [ ] **Step 6: Run final source, artifact, and naming scans**
+- [x] **Step 6: Run final source, artifact, and naming scans**
 
 Run: `rg -n '[\p{Han}]' vericcl tests runtime -g '*.{py,c,cc,cu,cuh,h,json,xml}'`
 
@@ -237,6 +237,6 @@ Run: `python3 -m compileall -q vericcl`
 
 Expected: exit code 0.
 
-- [ ] **Step 7: Produce the final validation report**
+- [x] **Step 7: Produce the final validation report**
 
 Record exact commands, pass/fail/not_run counts, coverage, Gurobi status, hardware status, retained provenance strings, MSCCL patch verification, known environment limitations, and links to final XML/report examples. Do not claim completion before these fresh checks finish.
