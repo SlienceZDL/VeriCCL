@@ -322,13 +322,31 @@ index e36aecc..6db7152 100644
  
  #define STR2(v) #v
  #define STR(v) STR2(v)
-@@ -111,6 +113,113 @@ void NCCL_NO_OPTIMIZE commPoison(ncclComm_t comm) {
+@@ -111,6 +113,131 @@ void NCCL_NO_OPTIMIZE commPoison(ncclComm_t comm) {
  
  #undef NCCL_NO_OPTIMIZE
  
++static ncclResult_t vericclCheckStepSignature(
++    const char* name, int actual) {
++  const char* value = getenv(name);
++  if (value == NULL || value[0] == '\0') return ncclSuccess;
++  char* end = NULL;
++  errno = 0;
++  long expected = strtol(value, &end, 10);
++  if (errno != 0 || end == value || *end != '\0' || expected != actual) {
++    WARN("%s=%s does not match VeriCCL runtime value %d", name, value, actual);
++    return ncclInvalidArgument;
++  }
++  return ncclSuccess;
++}
++
 +static ncclResult_t vericclTraceInit(ncclComm_t comm) {
 +  struct mscclHostCommInfo* hostInfo = &comm->mscclHostComm;
 +  struct mscclDevCommInfo* traceInfo = &hostInfo->mscclDevComm;
++  NCCLCHECK(vericclCheckStepSignature(
++      "VERICCL_EXPECTED_MSCCL_CHUNKSTEPS", MSCCL_CHUNKSTEPS));
++  NCCLCHECK(vericclCheckStepSignature(
++      "VERICCL_EXPECTED_MSCCL_SLICESTEPS", MSCCL_SLICESTEPS));
 +  const char* enabled = getenv("VERICCL_TRACE_ENABLE");
 +  if (enabled == NULL || enabled[0] == '\0' || strcmp(enabled, "0") == 0) {
 +    return ncclSuccess;
@@ -436,7 +454,7 @@ index e36aecc..6db7152 100644
  static ncclResult_t commFree(ncclComm_t comm) {
    if (comm == NULL)
      return ncclSuccess;
-@@ -140,6 +249,20 @@ static ncclResult_t commFree(ncclComm_t comm) {
+@@ -140,6 +267,20 @@ static ncclResult_t commFree(ncclComm_t comm) {
    if (comm->bootstrap)
      NCCLCHECK(bootstrapClose(comm->bootstrap));
  
@@ -457,7 +475,7 @@ index e36aecc..6db7152 100644
    CUDACHECK(cudaFree(comm->mscclHostComm.mscclDevComm.flags));
    CUDACHECK(cudaFree((ncclDevCommAndChannels*)comm->devComm));
  
-@@ -299,6 +422,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
+@@ -299,6 +440,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
  
    // Allocating and copying MSCCL elements
    NCCLCHECK(ncclCudaCalloc(&comm->mscclHostComm.mscclDevComm.flags, MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL * MAXCHANNELS));

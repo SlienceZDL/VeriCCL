@@ -94,6 +94,9 @@ def test_patch_uses_fixed_buffers_and_removes_device_printf_trace():
     assert "VERICCL_TRACE_ENABLE" in added_lines
     assert "VERICCL_TRACE_RECORDS" in added_lines
     assert "VERICCL_TRACE_FILE_PREFIX" in added_lines
+    assert "VERICCL_EXPECTED_MSCCL_CHUNKSTEPS" in added_lines
+    assert "VERICCL_EXPECTED_MSCCL_SLICESTEPS" in added_lines
+    assert "vericclCheckStepSignature" in added_lines
     assert "cudaFree(traceInfo->traceRecords)" in added_lines
     assert "cudaFree(traceInfo->traceRecordCount)" in added_lines
     assert "cudaFree(traceInfo->traceOverflow)" in added_lines

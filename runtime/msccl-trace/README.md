@@ -32,6 +32,9 @@ python3 runtime/msccl-trace/tools/verify_patch.py \
 - `VERICCL_TRACE_FILE_PREFIX=<path-prefix>` selects the output prefix. The
   default is `vericcl-trace`; rank `r` writes
   `<path-prefix>.rank-<r>.bin` during communicator teardown.
+- `VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4` and
+  `VERICCL_EXPECTED_MSCCL_SLICESTEPS=4` make communicator initialization
+  reject a runtime compiled with a different step signature.
 
 An overflowed buffer is still written, but its header has the overflow flag
 set and later online analysis must reject it. Release performance measurements

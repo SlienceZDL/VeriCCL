@@ -501,6 +501,7 @@ def test_engine_models_reject_invalid_boundaries():
         {"assess": object()},
         {"online_validation": "yes"},
         {"online_performance": {"invalid": object()}},
+        {"online_trace_evidence": {"invalid": object()}},
         {"max_iterations": 0},
         {"timeout_s": 0.0},
         {"clock": object()},

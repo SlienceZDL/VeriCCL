@@ -405,7 +405,7 @@ semantic\_ready_i=\max_{p\in predecessors(i)} physical\_end_p
 
 初始输入slice的ready time取kernel执行基准时刻，AggregateState取全部贡献完成时间的最大值。该计算不得只使用XML单依赖格式保留的一个`depid/deps`。
 
-同一物理传输的`s`和`r/rrc`端点通过`transfer_id`配对。完成跨Rank时钟同步后，定义`physical_start = max(start_send, start_recv)`和`physical_end = max(end_send, end_recv)`。缺少任一端点、`transfer_id`无法匹配、trace缓冲区溢出或时钟同步误差超过配置上限时，该次step trace无效。运行时使用GPU全局计时器，并通过多点CPU-GPU校准及跨节点时钟同步转换到统一时间轴；报告必须记录同步误差上界，小于该误差上界的时间差不得用于确定step先后。
+同一物理传输的`s`和`r/rrc`端点通过`transfer_id`配对。完成跨Rank时钟同步后，定义`physical_start = max(start_send, start_recv)`和`physical_end = max(end_send, end_recv)`。缺少任一端点、`transfer_id`无法匹配、trace缓冲区溢出或时钟同步误差超过配置上限时，该次step trace无效。`OnlineContext.max_clock_uncertainty_us`必须显式给出该上限，报告同时记录本次trace的实际误差上界。运行时使用GPU全局计时器，并通过多点CPU-GPU校准及跨节点时钟同步转换到统一时间轴；小于组合误差上界的时间差不得用于确定step先后。
 
 在线分析器逐step计算：
 
@@ -427,9 +427,11 @@ transfer\_duration=physical\_end-physical\_start
 
 `head_of_line_wait`用于识别后续step已经ready但被较小step阻塞的TB队首等待；`dependency_wait`表示TB已经到达当前step但显式依赖尚未完成；`peer_resource_wait`表示依赖满足后仍在等待配对端点或通信资源；`transfer_duration`用于识别实际传输变慢和channel并发带宽下降。在线分析结果必须生成逐step trace、统一时间线和瓶颈报告，并将每个瓶颈关联到`transfer_id`、atom、flow、Rank、TB、step、lane及等待类型。
 
-正式的5次预热和20次性能测试使用未启用trace的release MSCCL；在线诊断另外执行一次相同XML、消息大小和参数的trace运行，trace结果不参与正式性能统计。启用在线算子验证时，逐step trace必须完整成功；trace失败不否定调度的离线语义正确性和MSCCL格式正确性，但必须设置`online_operator_validation = failed`，不得将该候选标记为在线验证完成，也不得根据不完整数据执行在线调优。未请求在线算子验证时不要求trace运行。
+正式的5次预热和20次性能测试使用未启用trace的release MSCCL；在线诊断另外执行一次相同XML、消息大小和参数的trace运行，trace结果不参与正式性能统计。MSCCL communicator初始化同时核对`VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4`和`VERICCL_EXPECTED_MSCCL_SLICESTEPS=4`，编译常量不一致时拒绝执行。启用在线算子验证时，逐step trace必须完整成功；trace失败不否定调度的离线语义正确性和MSCCL格式正确性，但必须设置`online_operator_validation = failed`，不得将该候选标记为在线验证完成，也不得根据不完整数据执行在线调优。未请求在线算子验证时不要求trace运行。
 
-每轮在线验证默认预热5次并正式执行20次，使用正式执行时间的中位数作为调度时间，同时记录P95、均值、标准差和变异系数。每个统计样本来自一次独立`nccl-tests`进程输出；单个进程仍使用`-w 5 -n 20`，不得把一个聚合输出行中的内部迭代虚构为20个独立样本。变异系数超过5%时重新执行该轮，最多重测3轮；达到上限后保留全部样本并在报告中标记结果不稳定。测试必须启用`nccl-tests`正确性检查，并使用当前调度的精确消息大小、数据类型、归约操作、root和原地/非原地模式，不得使用最佳单次时间替代统计结果。
+每轮在线验证默认预热5次并正式执行20次，使用正式执行时间的中位数作为调度时间，同时记录P95、均值、标准差和变异系数。每个统计样本来自一次独立`nccl-tests`进程输出；单个进程仍使用`-w 5 -n 20`，不得把一个聚合输出行中的内部迭代虚构为20个独立样本。变异系数超过5%时重新执行该轮，最多重测3轮；达到上限后保留全部样本并将`release_status`标记为`unstable`，该结果不得用于在线调优。测试必须启用`nccl-tests`正确性检查，并使用当前调度的精确消息大小、数据类型、归约操作、root和原地/非原地模式，不得使用最佳单次时间替代统计结果。
+
+完整且时钟误差合格的trace生成候选级`OnlineTuningEvidence`，其中保存逐`transfer_id`的实测等待总量和带完整定位信息的瓶颈优先级。该证据通过`attach_online_result_to_tuning_context`写入`TuningContext.online_trace_evidence[candidate_id]`；BDD flow替换和TB顺序提示优先处理实测等待更长、瓶颈优先级更高的候选，但替换、后缀修复、时间重排和完整验证流程不变。
 
 `B_link(k)`不依赖目标调度是否实际出现并发度`k`。VeriCCL预先为不同channel并发度生成基准测试XML，基准消息大小固定为128 MiB。机内链路只在`1机*2卡`环境测试，机间链路只在`2机*1卡`环境测试；其余逻辑链路根据拓扑中的精确同构关系复用对应链路类别的测量结果，不执行更大规模的链路基准测试。基准结果按机内和机间链路类别分别保存，并用于更新拓扑参数和重新求解。
 

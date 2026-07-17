@@ -264,29 +264,29 @@ Expected: all tests pass.
 **Interfaces:**
 - Produces: `run_online_validation(context: OnlineContext) -> OnlineValidationResult`
 
-- [ ] **Step 1: Write mocked pipeline tests**
+- [x] **Step 1: Write mocked pipeline tests**
 
 Cover runtime incompatibility blocking launch, missing nccl-tests binary, trace failure after successful release run, unstable calibration blocking online tuning, cache reuse, force recalibration, and successful release/trace separation.
 
-- [ ] **Step 2: Run unit tests and confirm missing pipeline**
+- [x] **Step 2: Run unit tests and confirm missing pipeline**
 
 Run: `python3 -m pytest tests/unit/online/test_pipeline.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 3: Implement strict preflight and environment propagation**
+- [x] **Step 3: Implement strict preflight and environment propagation**
 
 Require runtime-compatible XML, exact message size/type/op/root/inplace, one XML path, `NCCL_ALGO=MSCCL`, `NCCL_BUFFSIZE=2*S`, expected chunk/slice-step signature, MSCCL library path, nccl-tests binary, and MPI launcher for inter-node runs. Pass all variables to every process.
 
-- [ ] **Step 4: Implement release measurement, optional calibration, and trace diagnostic**
+- [x] **Step 4: Implement release measurement, optional calibration, and trace diagnostic**
 
 Run cached or requested link calibration first, update only beta/invbw/B_link, and request a new solve rather than mutating an existing schedule. Run release nccl-tests statistics. Then run one trace-enabled diagnostic of the same XML and parameters, parse all rank files, and produce the online bottleneck report. Trace data never enters release performance samples. When online tuning is requested and trace is valid, pass the measured waits and bottleneck priorities into the existing tuning context; never create online tuning candidates from an incomplete or uncertain trace.
 
-- [ ] **Step 5: Implement hardware markers and not-run reporting**
+- [x] **Step 5: Implement hardware markers and not-run reporting**
 
 Hardware tests read explicit environment variables for MSCCL build, nccl-tests build, GPU count, hostfile, and MPI launcher. Missing prerequisites call `pytest.skip()` with a precise reason; the artifact report maps skips to `not_run`.
 
-- [ ] **Step 6: Run Phase 06 pure-software tests**
+- [x] **Step 6: Run Phase 06 pure-software tests**
 
 Run: `python3 -m pytest -m 'phase06 and not hardware' --cov=vericcl.verification.online --cov-report=term-missing -q`
 

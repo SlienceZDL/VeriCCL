@@ -232,6 +232,7 @@ class TuningContext:
     simulate: Optional[SimulateFunction] = None
     online_validation: bool = False
     online_performance: Mapping[str, OnlinePerformance] = MappingProxyType({})
+    online_trace_evidence: Mapping[str, object] = MappingProxyType({})
     max_iterations: Optional[int] = None
     timeout_s: Optional[float] = None
     clock: Callable[[], float] = time.monotonic
@@ -275,6 +276,21 @@ class TuningContext:
             self,
             "online_performance",
             MappingProxyType(online),
+        )
+        from vericcl.verification.online.pipeline import OnlineTuningEvidence
+
+        trace_evidence = dict(self.online_trace_evidence)
+        if not all(
+            isinstance(key, str)
+            and key
+            and isinstance(value, OnlineTuningEvidence)
+            for key, value in trace_evidence.items()
+        ):
+            raise SemanticError("tuning context online trace evidence is invalid")
+        object.__setattr__(
+            self,
+            "online_trace_evidence",
+            MappingProxyType(trace_evidence),
         )
         if self.max_iterations is not None and (
             isinstance(self.max_iterations, bool)
@@ -523,7 +539,27 @@ def _builtin_generate(
     if outcome is None or outcome.flow_bdd is None:
         return ()
     proposals = []
-    for hint_index, hint in enumerate(outcome.flow_bdd.hints):
+    evidence = context.online_trace_evidence.get(current.candidate_id)
+    priority_rank = {}
+    if evidence is not None:
+        for index, bottleneck in enumerate(evidence.bottleneck_priorities):
+            priority_rank.setdefault(bottleneck.transfer_id, index)
+
+    def priority(item):
+        index, hint = item
+        if evidence is None:
+            return 0.0, index, index
+        transfer_id = hint.waiting_transfer_id
+        return (
+            -evidence.wait_us_by_transfer.get(transfer_id, 0.0),
+            priority_rank.get(transfer_id, len(priority_rank)),
+            index,
+        )
+
+    flow_hints = tuple(enumerate(outcome.flow_bdd.hints))
+    if evidence is not None:
+        flow_hints = tuple(sorted(flow_hints, key=priority))
+    for hint_index, hint in flow_hints:
         overlay = TuningOverlay(
             overlay_id="tune-i{:02d}-h{:04d}".format(
                 iteration,
@@ -584,7 +620,31 @@ def _builtin_generate(
             )
         )
     if outcome.order_bdd is not None and outcome.artifact is not None:
-        for hint_index, hint in enumerate(outcome.order_bdd.hints):
+        order_hints = tuple(enumerate(outcome.order_bdd.hints))
+        if evidence is not None:
+            order_hints = tuple(
+                sorted(
+                    order_hints,
+                    key=lambda item: (
+                        -max(
+                            evidence.wait_us_by_transfer.get(
+                                outcome.artifact.tb_program.steps_by_id[
+                                    item[1].earlier_step_id
+                                ].transfer_id,
+                                0.0,
+                            ),
+                            evidence.wait_us_by_transfer.get(
+                                outcome.artifact.tb_program.steps_by_id[
+                                    item[1].later_step_id
+                                ].transfer_id,
+                                0.0,
+                            ),
+                        ),
+                        item[0],
+                    ),
+                )
+            )
+        for hint_index, hint in order_hints:
             earlier = outcome.artifact.tb_program.steps_by_id[
                 hint.earlier_step_id
             ].transfer_id
