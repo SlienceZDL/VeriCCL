@@ -17,7 +17,7 @@ from vericcl.artifacts.reports import (
 )
 from vericcl.errors import SemanticError
 from vericcl.input.json_codec import canonical_json
-from vericcl.input.models import ObjectiveMode, ResolvedInput
+from vericcl.input.models import ForbiddenTransfer, ObjectiveMode, ResolvedInput
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.solver.model import (
     SolveCandidate,
@@ -25,6 +25,7 @@ from vericcl.solver.model import (
     SolverMetrics,
 )
 from vericcl.topology.model import Topology
+from vericcl.tuning.model import TuningOverlay
 from vericcl.verification.model import ValidationStatus
 from vericcl.verification.pipeline import VerificationOutcome
 
@@ -159,6 +160,7 @@ class ScheduleSidecar:
     xml_sha256: Optional[str]
     candidate: SolveCandidate
     schedule: Schedule
+    overlay: Optional[TuningOverlay]
 
 
 def _resolved_payload(inputs: ResolvedInput) -> Mapping[str, object]:
@@ -215,6 +217,7 @@ def _sidecar_payload(
     schedule: Schedule,
     signature: str,
     xml_sha256: Optional[str],
+    overlay: Optional[TuningOverlay],
 ) -> Mapping[str, object]:
     return {
         "schema_version": _SIDECAR_SCHEMA_VERSION,
@@ -222,6 +225,7 @@ def _sidecar_payload(
         "candidate_signature": signature,
         "xml_sha256": xml_sha256,
         "candidate": _candidate_payload(candidate),
+        "overlay": overlay,
         "schedule": _schedule_payload(schedule),
     }
 
@@ -345,6 +349,44 @@ def _parse_candidate(payload: object, schedule: Schedule) -> SolveCandidate:
     )
 
 
+def _parse_overlay(payload: object) -> Optional[TuningOverlay]:
+    if payload is None:
+        return None
+    if not isinstance(payload, Mapping):
+        raise SemanticError("schedule sidecar overlay is invalid")
+    forbidden = frozenset(
+        ForbiddenTransfer(
+            slice_id=value.get("slice_id"),
+            src_rank=value.get("src_rank"),
+            dst_rank=value.get("dst_rank"),
+            stage_id=value.get("stage_id"),
+        )
+        for value in payload.get("temporary_forbidden", ())
+        if isinstance(value, Mapping)
+    )
+    if len(forbidden) != len(payload.get("temporary_forbidden", ())):
+        raise SemanticError("schedule sidecar forbidden overlay is invalid")
+    return TuningOverlay(
+        overlay_id=payload.get("overlay_id"),
+        parent_candidate_id=payload.get("parent_candidate_id"),
+        channel_count=payload.get("channel_count"),
+        path_weights=tuple(
+            tuple(value) for value in payload.get("path_weights", ())
+        ),
+        temporary_forbidden=forbidden,
+        batch_size=payload.get("batch_size"),
+        tree_roots=tuple(tuple(value) for value in payload.get("tree_roots", ())),
+        tree_edges=tuple(tuple(value) for value in payload.get("tree_edges", ())),
+        lane_order=tuple(tuple(value) for value in payload.get("lane_order", ())),
+        milp_parameters=tuple(
+            tuple(value) for value in payload.get("milp_parameters", ())
+        ),
+        warm_start_candidate_id=payload.get("warm_start_candidate_id"),
+        resolve_scope=tuple(payload.get("resolve_scope", ())),
+        hierarchy_template=payload.get("hierarchy_template"),
+    )
+
+
 def read_schedule_sidecar(path: Path) -> ScheduleSidecar:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -356,12 +398,14 @@ def read_schedule_sidecar(path: Path) -> ScheduleSidecar:
         raise SemanticError("schedule sidecar schema version is unsupported")
     schedule = _parse_schedule(payload.get("schedule"))
     candidate = _parse_candidate(payload.get("candidate"), schedule)
+    overlay = _parse_overlay(payload.get("overlay"))
     return ScheduleSidecar(
         normalized_input_sha256=payload.get("normalized_input_sha256"),
         candidate_signature=payload.get("candidate_signature"),
         xml_sha256=payload.get("xml_sha256"),
         candidate=candidate,
         schedule=schedule,
+        overlay=overlay,
     )
 
 
@@ -426,6 +470,7 @@ def write_candidate_artifact(
     applied_strategies: Optional[Mapping[str, object]] = None,
     hierarchy_plan: Optional[Mapping[str, object]] = None,
     tuning_strategy: Optional[Mapping[str, object]] = None,
+    overlay: Optional[TuningOverlay] = None,
 ) -> CandidateArtifact:
     if not isinstance(layout, RunLayout):
         raise SemanticError("layout must be a RunLayout")
@@ -439,6 +484,8 @@ def write_candidate_artifact(
         raise SemanticError("schedule must be a Schedule")
     if not isinstance(outcome, VerificationOutcome):
         raise SemanticError("outcome must be a VerificationOutcome")
+    if overlay is not None and not isinstance(overlay, TuningOverlay):
+        raise SemanticError("overlay must be a TuningOverlay or None")
     if not isinstance(accepted, bool):
         raise SemanticError("accepted must be a boolean")
     base = _candidate_base(layout, iteration, selected_best)
@@ -461,7 +508,7 @@ def write_candidate_artifact(
         if path.exists():
             raise FileExistsError("artifact already exists: {}".format(path))
 
-    signature = candidate_signature(schedule, inputs, topology, None)
+    signature = candidate_signature(schedule, inputs, topology, overlay)
     if outcome.artifact is not None:
         report_object = build_candidate_report(
             candidate,
@@ -469,7 +516,7 @@ def write_candidate_artifact(
             topology,
             outcome,
             global_schedule=schedule,
-            overlay=None,
+            overlay=overlay,
             applied_strategies=(
                 {} if applied_strategies is None else applied_strategies
             ),
@@ -514,6 +561,7 @@ def write_candidate_artifact(
             schedule,
             signature,
             xml_digest,
+            overlay,
         )
     ) + "\n"
     report_text = canonical_json(report_payload) + "\n"
@@ -564,10 +612,14 @@ def write_final_alias(
     final_report = layout.root / "{}_final.validation.json".format(
         layout.artifact_prefix
     )
-    if final_xml.exists() or final_report.exists():
+    final_schedule = layout.root / "{}_final.schedule.json".format(
+        layout.artifact_prefix
+    )
+    if final_xml.exists() or final_report.exists() or final_schedule.exists():
         raise FileExistsError("final artifact already exists")
     atomic_write_bytes(final_xml, artifact.xml_path.read_bytes())
     atomic_write_bytes(final_report, artifact.report_path.read_bytes())
+    atomic_write_bytes(final_schedule, artifact.schedule_path.read_bytes())
     return final_xml, final_report
 
 

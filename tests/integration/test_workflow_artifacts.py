@@ -6,6 +6,11 @@ import pytest
 
 import vericcl.workflow as workflow_module
 from vericcl.workflow import RunContext, execute_solve, execute_verify
+from vericcl.errors import SemanticError
+from vericcl.verification.online.pipeline import (
+    OnlineStageStatus,
+    OnlineValidationResult,
+)
 
 
 pytestmark = pytest.mark.phase07
@@ -198,3 +203,119 @@ def test_workflow_wall_clock_budget_includes_input_resolution(
                 timeout_s=1.0,
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        ({"run_id": ""}, "run_id"),
+        ({"xml_path": Path("only.xml")}, "provided together"),
+        ({"online": "yes"}, "online must be a boolean"),
+        ({"timeout_s": 0}, "timeout_s"),
+        ({"solver_version": ""}, "solver_version"),
+    ),
+)
+def test_run_context_rejects_invalid_public_contract(changes, message):
+    values = {
+        "topology_path": Path("topology.json"),
+        "sketch_path": Path("sketch.json"),
+        "atom_path": Path("atom.json"),
+        "output_base": Path("runs"),
+        "run_id": "run",
+    }
+    values.update(changes)
+
+    with pytest.raises(SemanticError, match=message):
+        RunContext(**values)
+
+
+def test_workflow_entrypoints_reject_invalid_modes_before_file_access():
+    with pytest.raises(SemanticError, match="RunContext"):
+        execute_solve(object())
+    with pytest.raises(SemanticError, match="RunContext"):
+        execute_verify(object())
+
+    common = {
+        "topology_path": Path("topology.json"),
+        "sketch_path": Path("sketch.json"),
+        "atom_path": Path("atom.json"),
+        "output_base": Path("runs"),
+        "run_id": "run",
+    }
+    with pytest.raises(SemanticError, match="does not accept"):
+        execute_solve(
+            RunContext(
+                **common,
+                xml_path=Path("schedule.xml"),
+                sidecar_path=Path("schedule.schedule.json"),
+            )
+        )
+    with pytest.raises(SemanticError, match="runtime configuration"):
+        execute_solve(RunContext(**common, online=True))
+
+
+@pytest.mark.parametrize(
+    ("operator_status", "expected"),
+    (
+        (OnlineStageStatus.PASSED, "valid"),
+        (OnlineStageStatus.FAILED, "failed"),
+    ),
+)
+def test_online_result_is_written_without_discarding_offline_xml(
+    tmp_path,
+    monkeypatch,
+    operator_status,
+    expected,
+):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+
+    def online_result(context):
+        passed = operator_status is OnlineStageStatus.PASSED
+        return OnlineValidationResult(
+            context_schedule=context.schedule,
+            preflight_status=OnlineStageStatus.PASSED,
+            calibration_status=OnlineStageStatus.NOT_RUN,
+            release_status=OnlineStageStatus.PASSED,
+            online_operator_validation=operator_status,
+            failure_code=None if passed else "forced_online_failure",
+            failure_message=None if passed else "forced online failure",
+            runtime_environment={},
+            release_history=None,
+            calibration=None,
+            trace_analysis=None,
+            trace_rank_files=(),
+            trace_clock_uncertainty_us=1.0,
+            requires_resolve=False,
+            online_tuning_allowed=False,
+            tuning_evidence=None,
+        )
+
+    monkeypatch.setattr(workflow_module, "run_online_validation", online_result)
+    result = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="online-{}".format(expected),
+            online=True,
+            online_context_factory=lambda artifact, schedule, *args: (
+                type(
+                    "FakeOnlineContext",
+                    (),
+                    {"artifact": artifact, "schedule": schedule},
+                )()
+            ),
+        )
+    )
+
+    selected = next(
+        item
+        for item in result.candidates
+        if item.candidate_id == result.final_candidate_id
+    )
+    assert result.final_xml is not None
+    assert selected.validation["online"] == expected
+    report = json.loads(selected.report_path.read_text(encoding="utf-8"))
+    assert report["validation"]["online"]["status"] == expected
+    assert any(result.layout.traces.glob("candidate-*/online-input.xml"))

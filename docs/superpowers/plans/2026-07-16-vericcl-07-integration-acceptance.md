@@ -84,21 +84,21 @@ Expected: all tests pass.
 **Interfaces:**
 - Produces executable commands `vericcl solve --topology TOPOLOGY --sketch SKETCH --atoms ATOMS` and `vericcl verify --topology TOPOLOGY --sketch SKETCH --atoms ATOMS --xml XML [--online] [--tune] [--timeout-s 10800]`
 
-- [ ] **Step 1: Write parser, override, and exit-code tests**
+- [x] **Step 1: Write parser, override, and exit-code tests**
 
 Test missing files, conflicting semantic CLI values without explicit override, accepted explicit override, fatal input exit, invalid schedule exit, runtime warning success with candidate output, online failure status, and clean solve/verify success.
 
-- [ ] **Step 2: Run tests and confirm missing handlers**
+- [x] **Step 2: Run tests and confirm missing handlers**
 
 Run: `python3 -m pytest tests/unit/cli/test_solve.py tests/unit/cli/test_verify.py tests/integration/test_cli_end_to_end.py -q`
 
 Expected: collection fails.
 
-- [ ] **Step 3: Implement thin handlers and stable exit codes**
+- [x] **Step 3: Implement thin handlers and stable exit codes**
 
 Use `0` for completed valid offline work including runtime warnings, `2` for input/usage fatal errors, `3` for no semantic-valid candidate, `4` for requested online validation failure, and `5` for unexpected internal errors. Print one concise English summary to stdout and diagnostics to stderr; full details remain in JSON reports.
 
-- [ ] **Step 4: Run CLI integration tests**
+- [x] **Step 4: Run CLI integration tests**
 
 Run: `python3 -m pytest tests/unit/cli tests/integration/test_cli_end_to_end.py -q`
 
