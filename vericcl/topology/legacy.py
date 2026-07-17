@@ -2,6 +2,7 @@ from copy import deepcopy
 from typing import Mapping, Tuple
 
 from vericcl.errors import InputValidationError
+from vericcl.provenance import LEGACY_TACCL_TOPOLOGY_FORMAT
 
 
 _NDV2_CLASSES = (
@@ -373,7 +374,7 @@ def convert_legacy_topology(
         ],
         "shared_resources": sorted(resources, key=lambda item: item["id"]),
         "provenance": {
-            "legacy_format": "taccl_topology_v2",
+            "legacy_format": LEGACY_TACCL_TOPOLOGY_FORMAT,
             "source_topology": topology_source,
             "source_sketch": sketch_source,
         },

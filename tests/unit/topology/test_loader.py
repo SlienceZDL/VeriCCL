@@ -6,6 +6,7 @@ import pytest
 
 from vericcl.errors import InputValidationError
 from vericcl.input.loader import resolve_inputs
+from vericcl.provenance import LEGACY_TACCL_TOPOLOGY_FORMAT
 from vericcl.topology.legacy import convert_legacy_topology
 from vericcl.topology.loader import load_topology, topology_from_mapping
 from vericcl.topology.model import LinkKey
@@ -101,10 +102,10 @@ def test_explicit_topology_has_deterministic_node_membership():
 
 def test_legacy_ndv2_example_resolves_rank_count_without_mutation():
     raw_topology = read_json(
-        REPOSITORY_ROOT / "taccl" / "examples" / "topo" / "topo-ndv2-1MB.json"
+        EXAMPLES / "legacy" / "topo" / "topo-ndv2-1MB.json"
     )
     raw_sketch = read_json(
-        REPOSITORY_ROOT / "taccl" / "examples" / "sketch" / "sk2-ndv2-n2.json"
+        EXAMPLES / "legacy" / "sketch" / "sk2-ndv2-n2.json"
     )
     topology_before = deepcopy(raw_topology)
     sketch_before = deepcopy(raw_sketch)
@@ -119,7 +120,10 @@ def test_legacy_ndv2_example_resolves_rank_count_without_mutation():
     assert topology.has_link(7, 15)
     assert raw_topology == topology_before
     assert raw_sketch == sketch_before
-    assert converted["provenance"]["legacy_format"] == "taccl_topology_v2"
+    assert (
+        converted["provenance"]["legacy_format"]
+        == LEGACY_TACCL_TOPOLOGY_FORMAT
+    )
 
 
 def test_legacy_conversion_preserves_source_snapshots():

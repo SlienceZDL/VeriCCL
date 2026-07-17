@@ -152,7 +152,7 @@ Expected: all pure-software cases pass; Gurobi-specific variants are separately 
 **Interfaces:**
 - Produces: `ALLOWED_TACCL_REFERENCES: Mapping[str, str]`
 
-- [ ] **Step 1: Prove the new package has no runtime dependency on old source**
+- [x] **Step 1: Prove the new package has no runtime dependency on old source**
 
 Run: `rg -n '(^|[ .])taccl([ .]|$)|from taccl|import taccl' vericcl tests setup.py`
 
@@ -160,19 +160,19 @@ Expected before allowlist cleanup: only explicit legacy format/provenance refere
 
 Add a test-only import finder that raises `ImportError` for `taccl` and every `taccl.*` module, clear any such modules from `sys.modules`, then run the complete public workflow in that process. Expected: all tests pass without renaming or modifying the old directory.
 
-- [ ] **Step 2: Move data references and update every path**
+- [x] **Step 2: Move data references and update every path**
 
 Move examples/templates/reference XML into the new package tree, update README, tests, setup package data, and migration documentation. Do not copy `__pycache__`, `.DS_Store`, old egg-info, or build outputs.
 
-- [ ] **Step 3: Remove old source and generated artifacts**
+- [x] **Step 3: Remove old source and generated artifacts**
 
 After Step 1 passes, delete the old `taccl` source tree and generated build/egg-info directories through reviewed file deletions. Update `setup.py` so only `vericcl` packages and required example/runtime patch data are installed.
 
-- [ ] **Step 4: Create and test the explicit provenance allowlist**
+- [x] **Step 4: Create and test the explicit provenance allowlist**
 
 Allow only external `sccl_type` schema compatibility, legacy input format names, third-party copyright text, citation/source descriptions, and migration documentation. Every retained source-code string containing `taccl` maps to an English reason; unlisted occurrences fail the test.
 
-- [ ] **Step 5: Run migration tests**
+- [x] **Step 5: Run migration tests**
 
 Run: `python3 -m pytest tests/unit/test_provenance.py tests/integration/test_no_legacy_imports.py -q`
 
