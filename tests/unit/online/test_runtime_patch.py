@@ -1,4 +1,6 @@
 import hashlib
+import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -12,6 +14,7 @@ pytestmark = pytest.mark.phase06
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 RUNTIME_ROOT = REPOSITORY_ROOT / "runtime" / "msccl-trace"
+METADATA_FILE = RUNTIME_ROOT / "upstream.json"
 FORMAT_HEADER = RUNTIME_ROOT / "include" / "vericcl_trace_format.h"
 PATCH_FILE = (
     RUNTIME_ROOT
@@ -19,7 +22,7 @@ PATCH_FILE = (
     / "0001-vericcl-fixed-step-trace.patch"
 )
 VERIFY_PATCH = RUNTIME_ROOT / "tools" / "verify_patch.py"
-REFERENCE_ROOT = Path("/Users/zdl/work/code/MSCCL_TIME")
+REFERENCE_ROOT = os.environ.get("VERICCL_MSCCL_REFERENCE_ROOT")
 
 
 EXPECTED_RECORD_FIELDS = (
@@ -69,6 +72,42 @@ def test_raw_record_has_stable_exact_layout_contract():
     assert "offsetof(VericclRawStepTraceRecord, tb_reach) == 24" in header
 
 
+def test_runtime_metadata_pins_reproducible_sources():
+    metadata = json.loads(METADATA_FILE.read_text(encoding="utf-8"))
+
+    assert metadata["schema_version"] == 1
+    assert metadata["upstream_repository"] == "https://github.com/microsoft/msccl.git"
+    assert metadata["upstream_commit"] == "b23e9cd5dd63f82ee1c5aae7e0a2042079be903a"
+    assert metadata["fork_repository"] == "https://github.com/SlienceZDL/VeriCCL-MSCCL.git"
+    assert metadata["fork_tag"] == "vericcl-runtime-v0.1.0"
+
+
+def test_verifier_rejects_wrong_git_revision(tmp_path):
+    subprocess.run(("git", "init", str(tmp_path)), check=True)
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "config", "user.name", "VeriCCL Test"),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "config", "user.email", "vericcl@example.invalid"),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "commit", "--allow-empty", "-m", "wrong revision"),
+        check=True,
+    )
+
+    completed = subprocess.run(
+        (sys.executable, str(VERIFY_PATCH), "--source-root", str(tmp_path)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 1
+    assert "pinned MSCCL revision" in completed.stderr
+
+
 def test_patch_uses_fixed_buffers_and_removes_device_printf_trace():
     patch = PATCH_FILE.read_text(encoding="utf-8")
     added_lines = "\n".join(
@@ -107,15 +146,17 @@ def test_patch_uses_fixed_buffers_and_removes_device_printf_trace():
 
 
 def test_patch_dry_run_and_post_apply_source_scan():
-    if not REFERENCE_ROOT.is_dir():
+    if not REFERENCE_ROOT or not Path(REFERENCE_ROOT).is_dir():
         pytest.skip("MSCCL reference source is not available")
 
+    reference_root = Path(REFERENCE_ROOT)
+
     reference_files = (
-        REFERENCE_ROOT / "src/include/msccl.h",
-        REFERENCE_ROOT / "src/collectives/device/primitives.h",
-        REFERENCE_ROOT / "src/collectives/device/prims_simple.h",
-        REFERENCE_ROOT / "src/collectives/device/msccl_interpreter.h",
-        REFERENCE_ROOT / "src/init.cc",
+        reference_root / "src/include/msccl.h",
+        reference_root / "src/collectives/device/primitives.h",
+        reference_root / "src/collectives/device/prims_simple.h",
+        reference_root / "src/collectives/device/msccl_interpreter.h",
+        reference_root / "src/init.cc",
     )
     before = {
         path: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -127,7 +168,7 @@ def test_patch_dry_run_and_post_apply_source_scan():
             sys.executable,
             str(VERIFY_PATCH),
             "--source-root",
-            str(REFERENCE_ROOT),
+            str(reference_root),
         ),
         cwd=REPOSITORY_ROOT,
         check=False,

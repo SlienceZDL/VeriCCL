@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "https://github.com/microsoft/msccl.git",
+  "upstream_commit": "b23e9cd5dd63f82ee1c5aae7e0a2042079be903a",
+  "fork_repository": "https://github.com/SlienceZDL/VeriCCL-MSCCL.git",
+  "fork_tag": "vericcl-runtime-v0.1.0"
+}
