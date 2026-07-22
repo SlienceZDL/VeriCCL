@@ -43,6 +43,17 @@ EXPECTED_RECORD_FIELDS = (
     ("uint32_t", "reserved"),
 )
 
+EXPECTED_PATCHED_FILES = {
+    "src/collectives/device/msccl_interpreter.h",
+    "src/collectives/device/primitives.h",
+    "src/collectives/device/prims_ll.h",
+    "src/collectives/device/prims_ll128.h",
+    "src/collectives/device/prims_simple.h",
+    "src/include/msccl.h",
+    "src/include/vericcl_trace_format.h",
+    "src/init.cc",
+}
+
 
 def _record_fields(header_text):
     declarations = re.findall(
@@ -82,6 +93,17 @@ def test_runtime_metadata_pins_reproducible_sources():
     assert metadata["upstream_commit"] == "b23e9cd5dd63f82ee1c5aae7e0a2042079be903a"
     assert metadata["fork_repository"] == "https://github.com/SlienceZDL/VeriCCL-MSCCL.git"
     assert metadata["fork_tag"] == "vericcl-runtime-v0.1.0"
+
+
+def test_runtime_metadata_binds_published_commit_and_every_runtime_file():
+    metadata = json.loads(METADATA_FILE.read_text(encoding="utf-8"))
+
+    assert re.fullmatch(r"[0-9a-f]{40}", metadata.get("patched_commit", ""))
+    assert set(metadata.get("patched_files", {})) == EXPECTED_PATCHED_FILES
+    assert all(
+        re.fullmatch(r"[0-9a-f]{64}", digest)
+        for digest in metadata.get("patched_files", {}).values()
+    )
 
 
 def test_verifier_rejects_wrong_git_revision(tmp_path):

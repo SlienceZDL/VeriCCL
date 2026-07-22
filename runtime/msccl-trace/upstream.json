@@ -3,5 +3,16 @@
   "upstream_repository": "https://github.com/microsoft/msccl.git",
   "upstream_commit": "b23e9cd5dd63f82ee1c5aae7e0a2042079be903a",
   "fork_repository": "https://github.com/SlienceZDL/VeriCCL-MSCCL.git",
-  "fork_tag": "vericcl-runtime-v0.1.0"
+  "fork_tag": "vericcl-runtime-v0.1.0",
+  "patched_commit": "782ee5f72cf48c1ae1a2365bcf525019f5620175",
+  "patched_files": {
+    "src/collectives/device/msccl_interpreter.h": "5230e88cc2baebc713c5d5451f509dbeb09f41a185ab7f1d88307379323cc990",
+    "src/collectives/device/primitives.h": "78b1f8ef7a5bb7db5692c841a2ecc161da0f9da030d1cc65a217396701f409cc",
+    "src/collectives/device/prims_ll.h": "944aba23dd3111bed0b5502f81905fc2117bb2f35c260105c37a32d4ec8e342a",
+    "src/collectives/device/prims_ll128.h": "bac03f319df7e7ffbb480993b9369d283a144509b6e42de10ff4e85e507e3896",
+    "src/collectives/device/prims_simple.h": "a546d91811de4ccb1e27fb71aed2d822d1a61e7507d5902129a8bca4feab8ed2",
+    "src/include/msccl.h": "ea31bbb95ca96c9f62ac40262da83eb70ca472ff10c06a697b82f93be5d5d595",
+    "src/include/vericcl_trace_format.h": "d9bc36fd6c039867fc13f1ff898fcd972bf2a5be457670b24e14430bba358e78",
+    "src/init.cc": "5226fbaae48fb03d4088218c976adb5be9831f3f9ca6967a3080a8f2e7aecd08"
+  }
 }
