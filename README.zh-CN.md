@@ -101,7 +101,12 @@ PY
 
 ## 离线冒烟测试
 
-以下四个标记命令不依赖硬件，文档测试会按顺序执行。运行目录不会被覆盖，因此`${VERICCL_OUTPUT_DIR}`应指向空目录。
+以下四个标记命令不依赖硬件，文档测试会按顺序执行。运行目录不会被覆盖，因此应先创建新的输出根目录：
+
+```bash
+export VERICCL_OUTPUT_DIR="$VERICCL_ROOT/runs/docs-smoke-$(date +%Y%m%dT%H%M%S)"
+mkdir -p "$VERICCL_OUTPUT_DIR"
+```
 
 <!-- vericcl-doc-test: help -->
 ```bash
@@ -186,7 +191,7 @@ test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
 
 ## 输入schema与示例
 
-三类输入均为UTF-8 JSON对象。未知字段、重复键、非有限数值及不一致维度会被拒绝。
+三类输入均为UTF-8 JSON对象。重复键、非有限数值及不一致维度会被拒绝。sketch和atom输入会拒绝未知字段；topology当前仅验证已识别字段，不会拒绝额外键。
 
 拓扑（`vericcl/examples/topo/two_rank.json`与`vericcl/examples/topo/two_node_gateway.json`）：
 

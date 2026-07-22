@@ -25,6 +25,10 @@ COMMAND_PATTERN = re.compile(
     r"```bash\s*\n([^\n]+)\n```"
 )
 BASH_BLOCK_PATTERN = re.compile(r"```bash\s*\n(.*?)\n```", re.DOTALL)
+OUTPUT_SETUP_PATTERN = re.compile(
+    r'^export VERICCL_OUTPUT_DIR="([^"\n]+)"$',
+    re.MULTILINE,
+)
 
 
 def _commands_from(path):
@@ -49,6 +53,17 @@ def test_bilingual_readmes_have_identical_shell_command_blocks():
     english = README_EN.read_text(encoding="utf-8")
     chinese = README_ZH.read_text(encoding="utf-8")
     assert BASH_BLOCK_PATTERN.findall(english) == BASH_BLOCK_PATTERN.findall(chinese)
+
+
+@pytest.mark.parametrize("path", (README_EN, README_ZH))
+def test_smoke_output_directory_is_initialized_before_solve(path):
+    text = path.read_text(encoding="utf-8")
+    solve_marker = text.index("<!-- vericcl-doc-test: solve -->")
+    setup = OUTPUT_SETUP_PATTERN.search(text, 0, solve_marker)
+    assert setup is not None
+    assert setup.group(1)
+    assert "$VERICCL_ROOT" in setup.group(1)
+    assert 'mkdir -p "$VERICCL_OUTPUT_DIR"' in text[setup.end() : solve_marker]
 
 
 def _run(command, output_dir):

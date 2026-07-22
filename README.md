@@ -101,7 +101,12 @@ Expected result literal: `gurobi optimize check passed`. A later `Model too larg
 
 ## Offline smoke test
 
-The following four marker commands are hardware-independent and are executed in order by the documentation test. Use an empty `${VERICCL_OUTPUT_DIR}` because run directories are never overwritten.
+The following four marker commands are hardware-independent and are executed in order by the documentation test. Create a new output root first because run directories are never overwritten:
+
+```bash
+export VERICCL_OUTPUT_DIR="$VERICCL_ROOT/runs/docs-smoke-$(date +%Y%m%dT%H%M%S)"
+mkdir -p "$VERICCL_OUTPUT_DIR"
+```
 
 <!-- vericcl-doc-test: help -->
 ```bash
@@ -186,7 +191,7 @@ The required official build form uses Ubuntu's x86_64 Open MPI prefix. On anothe
 
 ## Input schemas and examples
 
-All three inputs are UTF-8 JSON objects. Unknown fields, duplicate keys, non-finite numbers, and inconsistent dimensions are rejected.
+All three inputs are UTF-8 JSON objects. Duplicate keys, non-finite numbers, and inconsistent dimensions are rejected. Sketch and atom inputs reject unknown fields; topology currently validates recognized fields without rejecting extra keys.
 
 Topology (`vericcl/examples/topo/two_rank.json` and `vericcl/examples/topo/two_node_gateway.json`):
 
