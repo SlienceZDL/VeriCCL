@@ -184,13 +184,14 @@ python3 runtime/msccl-trace/tools/verify_patch.py --source-root /tmp/vericcl-msc
 
 Expected before rebasing: nonzero exit with patch hunk failures.
 
-- [ ] **Step 3: Recreate the fixed-buffer implementation on a working branch**
+- [ ] **Step 3: Recreate the fixed-buffer implementation in a separate worktree**
 
-Create branch `vericcl-runtime` in a second checkout and implement the existing trace contract directly against clean upstream:
+Keep `/tmp/vericcl-msccl-base` unchanged. Create branch `vericcl-runtime` in a
+linked worktree and implement the existing trace contract there:
 
 ```bash
-git -C /tmp/vericcl-msccl-base switch -c vericcl-runtime
-cp runtime/msccl-trace/include/vericcl_trace_format.h /tmp/vericcl-msccl-base/src/include/vericcl_trace_format.h
+git -C /tmp/vericcl-msccl-base worktree add -b vericcl-runtime /tmp/vericcl-msccl-runtime b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
+cp runtime/msccl-trace/include/vericcl_trace_format.h /tmp/vericcl-msccl-runtime/src/include/vericcl_trace_format.h
 ```
 
 The implementation must make these exact source changes:
@@ -216,7 +217,7 @@ Use `apply_patch` for each source edit. Do not carry over the earlier
 Exclude the separately copied header and export only the four modified upstream files:
 
 ```bash
-git -C /tmp/vericcl-msccl-base diff -- src/collectives/device/msccl_interpreter.h src/collectives/device/primitives.h src/include/msccl.h src/init.cc
+git -C /tmp/vericcl-msccl-runtime diff b23e9cd5dd63f82ee1c5aae7e0a2042079be903a -- src/collectives/device/msccl_interpreter.h src/collectives/device/primitives.h src/include/msccl.h src/init.cc
 ```
 
 Replace `runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch` with that exact diff through `apply_patch`.
@@ -251,7 +252,8 @@ git commit -m "build: rebase trace patch onto pinned msccl"
 - External: public GitHub repository `SlienceZDL/VeriCCL-MSCCL`
 
 **Interfaces:**
-- Consumes: the verified patched MSCCL working tree from Task 2.
+- Consumes: the verified patched MSCCL worktree at
+  `/tmp/vericcl-msccl-runtime` from Task 2.
 - Produces: readable SSH/HTTPS repository, branch `vericcl-runtime`, tag `vericcl-runtime-v0.1.0`, and immutable commit/hash binding in VeriCCL.
 
 - [ ] **Step 1: Create the GitHub fork**
@@ -261,9 +263,9 @@ Using the signed-in GitHub browser, open `https://github.com/microsoft/msccl/for
 - [ ] **Step 2: Configure remotes without overwriting upstream**
 
 ```bash
-git -C /tmp/vericcl-msccl-base remote rename origin upstream
-git -C /tmp/vericcl-msccl-base remote add origin git@github.com:SlienceZDL/VeriCCL-MSCCL.git
-git -C /tmp/vericcl-msccl-base remote --verbose
+git -C /tmp/vericcl-msccl-runtime remote rename origin upstream
+git -C /tmp/vericcl-msccl-runtime remote add origin git@github.com:SlienceZDL/VeriCCL-MSCCL.git
+git -C /tmp/vericcl-msccl-runtime remote --verbose
 ```
 
 Expected: `origin` is the user fork and `upstream` is `microsoft/msccl`.
@@ -276,16 +278,16 @@ separation, and upstream synchronization policy. Commit all patched files and
 the trace header:
 
 ```bash
-git -C /tmp/vericcl-msccl-base add src/include/vericcl_trace_format.h src/include/msccl.h src/collectives/device/primitives.h src/collectives/device/msccl_interpreter.h src/init.cc VERICCL_RUNTIME.md
-git -C /tmp/vericcl-msccl-base commit -m "feat: integrate vericcl fixed-step tracing"
+git -C /tmp/vericcl-msccl-runtime add src/include/vericcl_trace_format.h src/include/msccl.h src/collectives/device/primitives.h src/collectives/device/msccl_interpreter.h src/init.cc VERICCL_RUNTIME.md
+git -C /tmp/vericcl-msccl-runtime commit -m "feat: integrate vericcl fixed-step tracing"
 ```
 
 - [ ] **Step 4: Push the branch and immutable tag**
 
 ```bash
-git -C /tmp/vericcl-msccl-base push -u origin vericcl-runtime
-git -C /tmp/vericcl-msccl-base tag -a vericcl-runtime-v0.1.0 -m "VeriCCL MSCCL runtime v0.1.0"
-git -C /tmp/vericcl-msccl-base push origin vericcl-runtime-v0.1.0
+git -C /tmp/vericcl-msccl-runtime push -u origin vericcl-runtime
+git -C /tmp/vericcl-msccl-runtime tag -a vericcl-runtime-v0.1.0 -m "VeriCCL MSCCL runtime v0.1.0"
+git -C /tmp/vericcl-msccl-runtime push origin vericcl-runtime-v0.1.0
 ```
 
 Set `vericcl-runtime` as the fork's default branch in GitHub repository settings.
@@ -295,7 +297,7 @@ Set `vericcl-runtime` as the fork's default branch in GitHub repository settings
 Populate `patched_commit` with:
 
 ```bash
-git -C /tmp/vericcl-msccl-base rev-parse vericcl-runtime-v0.1.0^{}
+git -C /tmp/vericcl-msccl-runtime rev-parse vericcl-runtime-v0.1.0^{}
 ```
 
 Populate `patched_files` with SHA-256 values for the trace header and four
