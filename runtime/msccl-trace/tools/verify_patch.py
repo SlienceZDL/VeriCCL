@@ -24,6 +24,8 @@ METADATA_FILE = RUNTIME_ROOT / "upstream.json"
 REQUIRED_FILES = (
     "src/include/msccl.h",
     "src/collectives/device/primitives.h",
+    "src/collectives/device/prims_ll.h",
+    "src/collectives/device/prims_ll128.h",
     "src/collectives/device/prims_simple.h",
     "src/collectives/device/msccl_interpreter.h",
     "src/init.cc",

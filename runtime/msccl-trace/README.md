@@ -1,27 +1,47 @@
 # VeriCCL MSCCL Step Trace Patch
 
 This patch replaces device-side per-step `printf` tracing with a fixed-size
-device record buffer. It targets the read-only reference tree at
-`/Users/zdl/work/code/MSCCL_TIME`.
+device record buffer. Its official source is
+`https://github.com/microsoft/msccl.git` at commit
+`b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`.
 
-## Apply and build
+## Strategy A: official source plus the bundled patch
 
 ```bash
-export MSCCL_SRC=/path/to/msccl
-cp runtime/msccl-trace/include/vericcl_trace_format.h \
+export VERICCL_ROOT=/absolute/path/to/VeriCCL
+export MSCCL_SRC=/tmp/vericcl-msccl-base
+git clone https://github.com/microsoft/msccl.git "$MSCCL_SRC"
+git -C "$MSCCL_SRC" checkout --detach \
+  b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
+cd "$VERICCL_ROOT"
+python3 runtime/msccl-trace/tools/verify_patch.py --source-root /tmp/vericcl-msccl-base
+cp "$VERICCL_ROOT/runtime/msccl-trace/include/vericcl_trace_format.h" \
   "$MSCCL_SRC/src/include/vericcl_trace_format.h"
 patch --directory="$MSCCL_SRC" --strip=1 \
-  --input="$PWD/runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch"
+  --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch"
 make -C "$MSCCL_SRC" clean
 make -C "$MSCCL_SRC" -j src.build
 ```
 
-Verify compatibility without modifying the source tree:
+The verifier copies the required files to a temporary directory, dry-runs and
+applies the patch there, and leaves the official checkout unchanged.
 
-```bash
-python3 runtime/msccl-trace/tools/verify_patch.py \
-  --source-root /path/to/msccl
-```
+## Strategy C: pre-integrated VeriCCL-MSCCL source
+
+This strategy is not yet available in the Task 2 repository state. Do not clone
+or use the planned `vericcl-runtime-v0.1.0` tag from
+`https://github.com/SlienceZDL/VeriCCL-MSCCL.git` until `upstream.json` contains
+both `patched_commit` and `patched_files`. Those fields must be populated before
+`--patched-tree` provides revision and file-integrity evidence; without them it
+only performs the limited source-invariant scan.
+
+After the tag and metadata are published, the release documentation will give
+the exact clone, `--patched-tree` verification, and build commands. Strategy C
+is intended to reproduce Strategy A only after those hashes bind the published
+tree. For Strategy A, local `verify_patch.py` success proves the pinned base
+revision, patch applicability, layout, and source invariants. Neither mode
+compiles CUDA sources or provides evidence of a successful CUDA build or GPU
+execution.
 
 ## Trace controls
 
