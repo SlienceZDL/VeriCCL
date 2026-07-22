@@ -191,7 +191,9 @@ test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
 
 ## 输入schema与示例
 
-三类输入均为UTF-8 JSON对象。重复键、非有限数值及不一致维度会被拒绝。sketch和atom输入会拒绝未知字段；topology当前仅验证已识别字段，不会拒绝额外键。
+三类输入均为UTF-8 JSON对象。重复键、非有限数值及不一致维度会被拒绝。不同输入对未知字段的处理不同：topology验证已识别字段，但当前不拒绝额外键；sketch保留额外的顶层键，但会拒绝`collective`、`hyperparameters`和`solver`内部的未知字段；atom拒绝未知的顶层字段。
+
+<!-- input-unknown-fields: topology-extra=accepted; sketch-top-extra=preserved; sketch-sections-extra=rejected; atom-top-extra=rejected -->
 
 拓扑（`vericcl/examples/topo/two_rank.json`与`vericcl/examples/topo/two_node_gateway.json`）：
 

@@ -191,7 +191,9 @@ The required official build form uses Ubuntu's x86_64 Open MPI prefix. On anothe
 
 ## Input schemas and examples
 
-All three inputs are UTF-8 JSON objects. Duplicate keys, non-finite numbers, and inconsistent dimensions are rejected. Sketch and atom inputs reject unknown fields; topology currently validates recognized fields without rejecting extra keys.
+All three inputs are UTF-8 JSON objects. Duplicate keys, non-finite numbers, and inconsistent dimensions are rejected. Unknown-field handling differs by input: topology validates recognized fields but currently does not reject extra keys; sketch preserves extra top-level keys but rejects unknown fields inside `collective`, `hyperparameters`, and `solver`; atom rejects unknown top-level fields.
+
+<!-- input-unknown-fields: topology-extra=accepted; sketch-top-extra=preserved; sketch-sections-extra=rejected; atom-top-extra=rejected -->
 
 Topology (`vericcl/examples/topo/two_rank.json` and `vericcl/examples/topo/two_node_gateway.json`):
 

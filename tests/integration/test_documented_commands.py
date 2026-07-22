@@ -9,6 +9,7 @@ import sys
 
 import pytest
 
+from vericcl.errors import InputValidationError
 from vericcl.input.loader import resolve_inputs
 
 
@@ -29,10 +30,30 @@ OUTPUT_SETUP_PATTERN = re.compile(
     r'^export VERICCL_OUTPUT_DIR="([^"\n]+)"$',
     re.MULTILINE,
 )
+UNKNOWN_FIELD_CONTRACT = (
+    "<!-- input-unknown-fields: topology-extra=accepted; "
+    "sketch-top-extra=preserved; sketch-sections-extra=rejected; "
+    "atom-top-extra=rejected -->"
+)
 
 
 def _commands_from(path):
     return dict(COMMAND_PATTERN.findall(path.read_text(encoding="utf-8")))
+
+
+def _write_example_inputs(directory):
+    examples = PROJECT_ROOT / "vericcl" / "examples"
+    paths = {}
+    for name, source in (
+        ("topology", examples / "topo" / "two_rank.json"),
+        ("sketch", examples / "sketch" / "allreduce_8m_1m.json"),
+        ("atom", examples / "atom" / "constructive.json"),
+    ):
+        value = json.loads(source.read_text(encoding="utf-8"))
+        destination = directory / "{}.json".format(name)
+        destination.write_text(json.dumps(value), encoding="utf-8")
+        paths[name] = destination
+    return paths
 
 
 def _commands():
@@ -64,6 +85,54 @@ def test_smoke_output_directory_is_initialized_before_solve(path):
     assert setup.group(1)
     assert "$VERICCL_ROOT" in setup.group(1)
     assert 'mkdir -p "$VERICCL_OUTPUT_DIR"' in text[setup.end() : solve_marker]
+
+
+@pytest.mark.parametrize("path", (README_EN, README_ZH))
+def test_readmes_declare_the_unknown_field_contract(path):
+    assert UNKNOWN_FIELD_CONTRACT in path.read_text(encoding="utf-8")
+
+
+def test_topology_and_sketch_top_level_extra_fields_are_preserved(tmp_path):
+    paths = _write_example_inputs(tmp_path)
+    topology = json.loads(paths["topology"].read_text(encoding="utf-8"))
+    sketch = json.loads(paths["sketch"].read_text(encoding="utf-8"))
+    topology["extra_topology_field"] = "accepted"
+    sketch["extra_sketch_field"] = "preserved"
+    paths["topology"].write_text(json.dumps(topology), encoding="utf-8")
+    paths["sketch"].write_text(json.dumps(sketch), encoding="utf-8")
+
+    resolved = resolve_inputs(paths["topology"], paths["sketch"], paths["atom"])
+
+    assert resolved.resolved_topology["extra_topology_field"] == "accepted"
+    assert resolved.resolved_sketch["extra_sketch_field"] == "preserved"
+
+
+@pytest.mark.parametrize(
+    ("section", "error"),
+    (
+        ("collective", "unknown collective field"),
+        ("hyperparameters", "unknown hyperparameter field"),
+        ("solver", "unknown solver field"),
+    ),
+)
+def test_sketch_sections_reject_unknown_fields(tmp_path, section, error):
+    paths = _write_example_inputs(tmp_path)
+    sketch = json.loads(paths["sketch"].read_text(encoding="utf-8"))
+    sketch[section]["extra_section_field"] = True
+    paths["sketch"].write_text(json.dumps(sketch), encoding="utf-8")
+
+    with pytest.raises(InputValidationError, match=error):
+        resolve_inputs(paths["topology"], paths["sketch"], paths["atom"])
+
+
+def test_atom_rejects_unknown_top_level_fields(tmp_path):
+    paths = _write_example_inputs(tmp_path)
+    atom = json.loads(paths["atom"].read_text(encoding="utf-8"))
+    atom["extra_atom_field"] = True
+    paths["atom"].write_text(json.dumps(atom), encoding="utf-8")
+
+    with pytest.raises(InputValidationError, match="unknown atom field"):
+        resolve_inputs(paths["topology"], paths["sketch"], paths["atom"])
 
 
 def _run(command, output_dir):
