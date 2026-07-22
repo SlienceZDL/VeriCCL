@@ -2,9 +2,13 @@
 
 ## 1. Goal
 
-Expand `README.md` into a reproducible installation, build, input preparation,
-solving, verification, and MSCCL execution guide for Ubuntu 22.04 and Ubuntu
-24.04 servers.
+Expand `README.md` and add `README.zh-CN.md` as reproducible English and
+Chinese installation, build, input preparation, solving, verification, and
+MSCCL execution guides for Ubuntu 22.04 and Ubuntu 24.04 servers.
+
+Both documents must carry the same technical content and commands. Each file
+links to the other at the beginning; changes to version pins, environment
+variables, examples, or expected results must update both files together.
 
 The guide must support two deployment levels:
 
@@ -67,8 +71,8 @@ against the fork tag and fail validation if they differ.
 
 ## 4. README Information Architecture
 
-The README will use the following order so a new server user can proceed
-without consulting source code:
+Both README files will use the following order so a new server user can
+proceed without consulting source code:
 
 1. Project scope and supported collectives.
 2. Offline versus full online installation matrix.
@@ -163,6 +167,7 @@ and state the expected success indicators.
 Implementation changes are limited to:
 
 - `README.md`;
+- `README.zh-CN.md`;
 - `runtime/msccl-trace/README.md`;
 - `runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch`;
 - `runtime/msccl-trace/tools/verify_patch.py`;
@@ -177,7 +182,8 @@ Core solver, semantics, XML, and verification behavior will not be changed.
 The work is complete only when:
 
 1. both MSCCL strategies are documented and source-equivalent;
-2. all local README commands marked executable pass in order;
+2. both README files contain the same commands and all local commands marked
+   executable pass in order;
 3. the rebased patch applies cleanly to the pinned official commit;
 4. the verifier rejects an unpinned or unpatched MSCCL tree;
 5. the public fork and versioned tag are readable through both HTTPS and SSH;
