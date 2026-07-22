@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -106,6 +107,46 @@ def test_verifier_rejects_wrong_git_revision(tmp_path):
 
     assert completed.returncode == 1
     assert "pinned MSCCL revision" in completed.stderr
+
+
+def test_verifier_rejects_dirty_pinned_base_tree(tmp_path, monkeypatch):
+    source = tmp_path / "src" / "include" / "msccl.h"
+    source.parent.mkdir(parents=True)
+    source.write_text("baseline\n", encoding="utf-8")
+    subprocess.run(("git", "init", str(tmp_path)), check=True)
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "config", "user.name", "VeriCCL Test"),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "config", "user.email", "vericcl@example.invalid"),
+        check=True,
+    )
+    subprocess.run(("git", "-C", str(tmp_path), "add", str(source)), check=True)
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "commit", "-m", "pinned revision"),
+        check=True,
+    )
+    head = subprocess.run(
+        ("git", "-C", str(tmp_path), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    source.write_text("modified\n", encoding="utf-8")
+
+    spec = importlib.util.spec_from_file_location("verify_patch", VERIFY_PATCH)
+    verifier = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(verifier)
+    monkeypatch.setattr(
+        verifier,
+        "_load_metadata",
+        lambda _: {"schema_version": 1, "upstream_commit": head},
+    )
+
+    with pytest.raises(ValueError, match="tracked changes"):
+        verifier.verify(tmp_path)
 
 
 def test_patch_uses_fixed_buffers_and_removes_device_printf_trace():
