@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
@@ -26,9 +26,7 @@ COMMAND_PATTERN = re.compile(
     r"```bash\s*\n([^\n]+)\n```"
 )
 BASH_BLOCK_PATTERN = re.compile(r"```bash\s*\n(.*?)\n```", re.DOTALL)
-REPOSITORY_PATH_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_.-])(vericcl/[A-Za-z0-9_./-]+)"
-)
+INLINE_CODE_PATTERN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 OUTPUT_SETUP_PATTERN = re.compile(
     r'^export VERICCL_OUTPUT_DIR="([^"\n]+)"$',
     re.MULTILINE,
@@ -91,6 +89,87 @@ def _tracked_repository_paths():
     return frozenset(completed.stdout.splitlines())
 
 
+def _repository_paths_from_inline_code(text, tracked_paths):
+    tracked_directories = {
+        path.split("/", 1)[0] for path in tracked_paths if "/" in path
+    }
+    tracked_root_files = {path for path in tracked_paths if "/" not in path}
+    documented = set()
+    for value in INLINE_CODE_PATTERN.findall(text):
+        candidate = value.strip()
+        if (
+            not candidate
+            or any(character.isspace() for character in candidate)
+            or "://" in candidate
+            or candidate.startswith(("$", "~"))
+        ):
+            continue
+        relative = PurePosixPath(candidate)
+        if relative.is_absolute() or ".." in relative.parts:
+            continue
+        if len(relative.parts) == 1:
+            if candidate in tracked_root_files:
+                documented.add(candidate)
+            continue
+        if relative.parts[0] in tracked_directories:
+            documented.add(candidate)
+    return frozenset(documented)
+
+
+def _is_tracked_repository_entry(path, tracked_paths):
+    return path in tracked_paths or any(
+        tracked.startswith(path + "/") for tracked in tracked_paths
+    )
+
+
+def test_repository_path_extraction_excludes_non_repository_inline_code():
+    inline_code = " ".join(
+        (
+            "`https://example.test/vericcl/examples/topo/url.json`",
+            "`/vericcl/examples/topo/absolute.json`",
+            "`$VERICCL_ROOT/runtime/msccl-trace/README.md`",
+            "`.venv/bin/python -m vericcl --help`",
+            "`MSCCL_ROOT/build/lib`",
+            "`avg|max|min`",
+            "`vericcl/examples/topo/two_rank.json`",
+            "`runtime/msccl-trace/README.md`",
+            "`docs/runtime-configuration.md`",
+            "`MIGRATION.md`",
+        )
+    )
+    tracked_paths = _tracked_repository_paths()
+
+    documented = _repository_paths_from_inline_code(inline_code, tracked_paths)
+
+    assert documented == {
+        "vericcl/examples/topo/two_rank.json",
+        "runtime/msccl-trace/README.md",
+        "docs/runtime-configuration.md",
+        "MIGRATION.md",
+    }
+    for path in documented:
+        assert (PROJECT_ROOT / path).exists()
+        assert _is_tracked_repository_entry(path, tracked_paths)
+
+
+def test_repository_path_status_covers_files_directories_and_missing_paths():
+    tracked_paths = _tracked_repository_paths()
+    for path in (
+        "docs/runtime-configuration.md",
+        "vericcl/examples/legacy",
+    ):
+        assert (PROJECT_ROOT / path).exists()
+        assert _is_tracked_repository_entry(path, tracked_paths)
+
+    missing = "docs/not-a-documented-file.md"
+    assert _repository_paths_from_inline_code(
+        "`{}`".format(missing),
+        tracked_paths,
+    ) == {missing}
+    assert not (PROJECT_ROOT / missing).exists()
+    assert not _is_tracked_repository_entry(missing, tracked_paths)
+
+
 def _write_example_inputs(directory):
     examples = PROJECT_ROOT / "vericcl" / "examples"
     paths = {}
@@ -132,16 +211,17 @@ def test_readmes_retain_the_installation_and_example_contract(path):
 @pytest.mark.parametrize("path", (README_EN, README_ZH))
 def test_readme_example_paths_are_tracked_repository_entries(path):
     section = _example_section(path)
-    documented_paths = set(REPOSITORY_PATH_PATTERN.findall(section))
     tracked_paths = _tracked_repository_paths()
+    documented_paths = _repository_paths_from_inline_code(
+        section,
+        tracked_paths,
+    )
 
     assert documented_paths
     for documented in documented_paths:
         resolved = PROJECT_ROOT / documented
         assert resolved.exists(), documented
-        assert documented in tracked_paths or any(
-            tracked.startswith(documented + "/") for tracked in tracked_paths
-        ), documented
+        assert _is_tracked_repository_entry(documented, tracked_paths), documented
 
 
 @pytest.mark.parametrize("path", (README_EN, README_ZH))
