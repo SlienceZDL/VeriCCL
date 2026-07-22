@@ -12,6 +12,7 @@ dist/
 htmlcov/
 .venv/
 venv/
+.worktrees/
 .vscode/
 *.log
 *.tmp
