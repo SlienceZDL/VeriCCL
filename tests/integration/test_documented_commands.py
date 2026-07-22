@@ -16,23 +16,39 @@ pytestmark = pytest.mark.phase07
 
 
 PROJECT_ROOT = Path(__file__).parents[2]
-README = PROJECT_ROOT / "README.md"
+README_EN = PROJECT_ROOT / "README.md"
+README_ZH = PROJECT_ROOT / "README.zh-CN.md"
 RUNTIME_GUIDE = PROJECT_ROOT / "docs" / "runtime-configuration.md"
 REPORT_GUIDE = PROJECT_ROOT / "docs" / "validation-report.md"
 COMMAND_PATTERN = re.compile(
     r"<!-- vericcl-doc-test: ([a-z-]+) -->\s*"
     r"```bash\s*\n([^\n]+)\n```"
 )
+BASH_BLOCK_PATTERN = re.compile(r"```bash\s*\n(.*?)\n```", re.DOTALL)
+
+
+def _commands_from(path):
+    return dict(COMMAND_PATTERN.findall(path.read_text(encoding="utf-8")))
 
 
 def _commands():
     commands = {}
-    for path in (README, RUNTIME_GUIDE, REPORT_GUIDE):
+    for path in (README_EN, RUNTIME_GUIDE, REPORT_GUIDE):
         text = path.read_text(encoding="utf-8")
         for name, command in COMMAND_PATTERN.findall(text):
             assert name not in commands
             commands[name] = command
     return commands
+
+
+def test_bilingual_readmes_have_identical_tested_commands():
+    assert _commands_from(README_EN) == _commands_from(README_ZH)
+
+
+def test_bilingual_readmes_have_identical_shell_command_blocks():
+    english = README_EN.read_text(encoding="utf-8")
+    chinese = README_ZH.read_text(encoding="utf-8")
+    assert BASH_BLOCK_PATTERN.findall(english) == BASH_BLOCK_PATTERN.findall(chinese)
 
 
 def _run(command, output_dir):
