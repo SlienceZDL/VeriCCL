@@ -108,7 +108,10 @@ def _repository_paths_from_inline_code(text, tracked_paths):
         if relative.is_absolute() or ".." in relative.parts:
             continue
         if len(relative.parts) == 1:
-            if candidate in tracked_root_files:
+            if (
+                candidate in tracked_root_files
+                or candidate in tracked_directories
+            ):
                 documented.add(candidate)
             continue
         if relative.parts[0] in tracked_directories:
@@ -131,6 +134,8 @@ def test_repository_path_extraction_excludes_non_repository_inline_code():
             "`.venv/bin/python -m vericcl --help`",
             "`MSCCL_ROOT/build/lib`",
             "`avg|max|min`",
+            "`not-a-repository-symbol`",
+            "`docs`",
             "`vericcl/examples/topo/two_rank.json`",
             "`runtime/msccl-trace/README.md`",
             "`docs/runtime-configuration.md`",
@@ -142,6 +147,7 @@ def test_repository_path_extraction_excludes_non_repository_inline_code():
     documented = _repository_paths_from_inline_code(inline_code, tracked_paths)
 
     assert documented == {
+        "docs",
         "vericcl/examples/topo/two_rank.json",
         "runtime/msccl-trace/README.md",
         "docs/runtime-configuration.md",
