@@ -56,3 +56,37 @@
 - 当前Gurobi为受限的非生产许可证；测试通过不构成生产许可声明。
 - 硬件矩阵需要按[运行时配置](runtime-configuration.md)提供GPU、MSCCL、`nccl-tests`、MPI及trace工具。
 - 接受样例是离线生成结果，`online`维度为`not_run`；不得将其作为实测性能证据。
+
+## 2026-07-22 安装指南验收
+
+本节保留本次执行的新鲜证据，验证对象为英文与中文安装指南、固定版本MSCCL补丁及公开集成仓库。
+
+### 来源与公开引用
+
+| 命令 | 结果 |
+|---|---|
+| `python3 runtime/msccl-trace/tools/verify_patch.py --source-root /tmp/vericcl-msccl-base` | 退出码0；`verification passed` |
+| `python3 runtime/msccl-trace/tools/verify_patch.py --source-root /tmp/vericcl-msccl-fork --patched-tree` | 退出码0；`verification passed` |
+| `git ls-remote https://github.com/SlienceZDL/VeriCCL-MSCCL.git vericcl-runtime vericcl-runtime-v0.1.0` | 退出码0；分支为`782ee5f72cf48c1ae1a2365bcf525019f5620175`，标注标签对象为`8f4185a4d0d917209c34e3c4710b784e7f7a2f64` |
+| `git ls-remote git@github.com:SlienceZDL/VeriCCL-MSCCL.git vericcl-runtime vericcl-runtime-v0.1.0` | 退出码0；SSH返回与HTTPS相同的分支和标签引用 |
+
+本地标签类型检查结果为`tag`，解引用后指向`782ee5f72cf48c1ae1a2365bcf525019f5620175`。
+
+### 测试矩阵
+
+| 范围 | 命令 | 结果 |
+|---|---|---|
+| 运行时补丁与文档工作流 | `.venv/bin/python -m pytest tests/unit/online/test_runtime_patch.py tests/integration/test_documented_commands.py tests/integration/test_workflow_artifacts.py -q` | 退出码0；51 passed, 1 skipped |
+| 完整纯软件与覆盖率 | `.venv/bin/python -m pytest -m 'not hardware and not gurobi' --cov=vericcl --cov-report=term-missing --cov-fail-under=90 -q` | 退出码0；1134 passed, 1 skipped, 22 deselected；92.10% |
+| Gurobi | `.venv/bin/python -m pytest -m gurobi -q` | 退出码0；14 passed, 1143 deselected |
+| 硬件 | `.venv/bin/python -m pytest -m hardware -q` | 退出码0；8 skipped, 1149 deselected；`not_run` |
+
+### 静态检查与限制
+
+| 命令 | 结果 |
+|---|---|
+| `python3 -m compileall -q vericcl tests runtime/msccl-trace/tools` | 退出码0 |
+| `git diff --check` | 退出码0；无格式错误 |
+| `rg -n '[\p{Han}]' vericcl tests runtime --glob '*.py' --glob '*.c' --glob '*.cc' --glob '*.cu' --glob '*.h' --glob '*.json'` | 退出码1；无匹配，受检代码与机器可读文件未发现中文字符 |
+
+验收主机为macOS/Darwin纯软件环境，覆盖率命令使用Python 3.9.6；该环境不替代安装指南规定的Ubuntu 22.04/24.04与Python 3.10-3.12目标环境。CUDA/MSCCL编译和`nccl-tests`执行均为`not_run`；上述补丁一致性、静态检查与跳过的硬件测试不构成Ubuntu GPU服务器上的编译、功能或性能验证证据。
