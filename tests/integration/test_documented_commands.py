@@ -26,6 +26,9 @@ COMMAND_PATTERN = re.compile(
     r"```bash\s*\n([^\n]+)\n```"
 )
 BASH_BLOCK_PATTERN = re.compile(r"```bash\s*\n(.*?)\n```", re.DOTALL)
+REPOSITORY_PATH_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_.-])(vericcl/[A-Za-z0-9_./-]+)"
+)
 OUTPUT_SETUP_PATTERN = re.compile(
     r'^export VERICCL_OUTPUT_DIR="([^"\n]+)"$',
     re.MULTILINE,
@@ -35,10 +38,57 @@ UNKNOWN_FIELD_CONTRACT = (
     "sketch-top-extra=preserved; sketch-sections-extra=rejected; "
     "atom-top-extra=rejected -->"
 )
+DOCUMENTED_COMMAND_ORDER = (
+    "help",
+    "solve",
+    "verify",
+    "example-validation",
+)
+REQUIRED_README_FRAGMENTS = {
+    "Ubuntu 22.04",
+    "Ubuntu 24.04",
+    "b23e9cd5dd63f82ee1c5aae7e0a2042079be903a",
+    "vericcl-runtime-v0.1.0",
+    "782ee5f72cf48c1ae1a2365bcf525019f5620175",
+    "NCCL_BUFFSIZE=2097152",
+    "VERICCL_CALIBRATION_LINK_CLASS",
+    "vericcl/examples/topo/two_rank.json",
+    "vericcl/examples/topo/two_node_gateway.json",
+    "vericcl/examples/sketch/allreduce_8m_1m.json",
+    "vericcl/examples/atom/constructive.json",
+    "vericcl/examples/atom/default.json",
+}
+EXAMPLE_SECTION_ANCHORS = (
+    "vericcl/examples/legacy",
+    "vericcl/examples/templates",
+)
 
 
 def _commands_from(path):
     return dict(COMMAND_PATTERN.findall(path.read_text(encoding="utf-8")))
+
+
+def _example_section(path):
+    text = path.read_text(encoding="utf-8")
+    sections = re.split(r"(?m)^## ", text)
+    matches = [
+        section
+        for section in sections
+        if all(anchor in section for anchor in EXAMPLE_SECTION_ANCHORS)
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _tracked_repository_paths():
+    completed = subprocess.run(
+        ["git", "ls-files"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return frozenset(completed.stdout.splitlines())
 
 
 def _write_example_inputs(directory):
@@ -68,6 +118,39 @@ def _commands():
 
 def test_bilingual_readmes_have_identical_tested_commands():
     assert _commands_from(README_EN) == _commands_from(README_ZH)
+
+
+@pytest.mark.parametrize("path", (README_EN, README_ZH))
+def test_readmes_retain_the_installation_and_example_contract(path):
+    text = path.read_text(encoding="utf-8")
+    missing = {
+        fragment for fragment in REQUIRED_README_FRAGMENTS if fragment not in text
+    }
+    assert not missing
+
+
+@pytest.mark.parametrize("path", (README_EN, README_ZH))
+def test_readme_example_paths_are_tracked_repository_entries(path):
+    section = _example_section(path)
+    documented_paths = set(REPOSITORY_PATH_PATTERN.findall(section))
+    tracked_paths = _tracked_repository_paths()
+
+    assert documented_paths
+    for documented in documented_paths:
+        resolved = PROJECT_ROOT / documented
+        assert resolved.exists(), documented
+        assert documented in tracked_paths or any(
+            tracked.startswith(documented + "/") for tracked in tracked_paths
+        ), documented
+
+
+@pytest.mark.parametrize("path", (README_EN, README_ZH))
+def test_readmes_retain_the_ordered_executable_command_markers(path):
+    names = tuple(
+        name
+        for name, _ in COMMAND_PATTERN.findall(path.read_text(encoding="utf-8"))
+    )
+    assert names == DOCUMENTED_COMMAND_ORDER
 
 
 def test_bilingual_readmes_have_identical_shell_command_blocks():

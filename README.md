@@ -8,7 +8,7 @@ VeriCCL generates and validates MSCCL XML schedules from topology, sketch, and a
 
 Direct solving supports `broadcast`, `reduce`, `allgather`, `allreduce`, `alltoall`, and `reduce_scatter`. `scatter` and `gather` remain fully defined collective semantics, but are internal composition stages rather than direct input operators. Hierarchical plans compose these eight semantics into a schedule that satisfies the requested global collective.
 
-The supported server baseline is x86_64 Ubuntu 22.04 or 24.04, Python 3.10-3.12, and one or more NVIDIA GPUs. Multi-node runs additionally require passwordless SSH, synchronized clocks, and the same installation paths on every node.
+The supported server baseline is x86_64 Ubuntu 22.04 or Ubuntu 24.04, Python 3.10-3.12, and one or more NVIDIA GPUs. Multi-node runs additionally require passwordless SSH, synchronized clocks, and the same installation paths on every node.
 
 ## Installation modes
 
@@ -16,7 +16,7 @@ Offline use needs Python and Gurobi. Full online use additionally needs a compat
 
 ## Ubuntu prerequisites
 
-Run the exact package sequence on Ubuntu 22.04 or 24.04:
+Run the exact package sequence on Ubuntu 22.04 or Ubuntu 24.04:
 
 ```bash
 sudo apt update

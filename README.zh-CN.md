@@ -8,7 +8,7 @@ VeriCCL根据拓扑、sketch和atom三类JSON输入生成并验证MSCCL XML调�
 
 可直接求解`broadcast`、`reduce`、`allgather`、`allreduce`、`alltoall`和`reduce_scatter`。`scatter`与`gather`保留完整集合通信语义，但仅作为内部组合阶段，不作为直接输入算子。分层计划通过组合上述八类语义生成满足全局集合通信要求的调度。
 
-支持的服务器基线为x86_64 Ubuntu 22.04或24.04、Python 3.10-3.12及一个或多个NVIDIA GPU。多节点运行还要求节点间免密SSH、时钟同步以及各节点使用相同安装路径。
+支持的服务器基线为x86_64 Ubuntu 22.04或Ubuntu 24.04、Python 3.10-3.12及一个或多个NVIDIA GPU。多节点运行还要求节点间免密SSH、时钟同步以及各节点使用相同安装路径。
 
 ## 安装模式
 
@@ -16,7 +16,7 @@ VeriCCL根据拓扑、sketch和atom三类JSON输入生成并验证MSCCL XML调�
 
 ## Ubuntu前置依赖
 
-在Ubuntu 22.04或24.04执行以下完整软件包安装序列：
+在Ubuntu 22.04或Ubuntu 24.04执行以下完整软件包安装序列：
 
 ```bash
 sudo apt update
