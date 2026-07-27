@@ -1,5 +1,7 @@
 import hashlib
 import json
+import re
+import shlex
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,6 +29,18 @@ pytestmark = pytest.mark.phase07
 
 PROJECT_ROOT = Path(__file__).parents[2]
 EXAMPLES = PROJECT_ROOT / "vericcl" / "examples"
+README = PROJECT_ROOT / "README.md"
+DOCUMENTED_SOLVE_PATTERN = re.compile(
+    r"<!-- vericcl-doc-test: solve -->\s*"
+    r"```bash\s*\n([^\n]+)\n```"
+)
+
+
+def _documented_solve_run_id():
+    match = DOCUMENTED_SOLVE_PATTERN.search(README.read_text(encoding="utf-8"))
+    assert match is not None
+    arguments = shlex.split(match.group(1))
+    return arguments[arguments.index("--run-id") + 1]
 
 
 def _write_constructive_inputs(tmp_path):
@@ -54,17 +68,20 @@ def _write_constructive_inputs(tmp_path):
 
 
 def test_documented_smoke_artifact_geometry_matches_workflow(tmp_path):
+    run_id = _documented_solve_run_id()
     result = execute_solve(
         RunContext(
             topology_path=EXAMPLES / "topo" / "two_rank.json",
             sketch_path=EXAMPLES / "sketch" / "allreduce_8m_1m.json",
             atom_path=EXAMPLES / "atom" / "constructive.json",
             output_base=tmp_path / "documented-smoke",
-            run_id="docs",
+            run_id=run_id,
         )
     )
     expected_root = (
-        tmp_path / "documented-smoke" / "vericcl_allreduce_8MiB_docs"
+        tmp_path
+        / "documented-smoke"
+        / "vericcl_allreduce_8MiB_{}".format(run_id)
     )
 
     assert result.layout.root == expected_root

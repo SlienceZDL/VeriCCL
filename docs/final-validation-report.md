@@ -99,12 +99,16 @@
 
 | 范围 | 命令 | 结果 |
 |---|---|---|
-| README、工作流与运行时补丁文档门禁 | `.venv/bin/python -m pytest tests/integration/test_documented_commands.py tests/integration/test_workflow_artifacts.py tests/unit/online/test_runtime_patch.py -q` | 退出码0；51 passed, 1 skipped |
-| 完整硬件无关覆盖率门禁 | `.venv/bin/python -m pytest -m 'not hardware and not gurobi' --cov=vericcl --cov-report=term-missing --cov-fail-under=90 -q` | 退出码0；1134 passed, 1 skipped, 22 deselected；总覆盖率92.10%（阈值90%） |
-| Gurobi 标记矩阵 | `.venv/bin/python -m pytest -m gurobi -q` | 退出码0；14 passed, 1143 deselected |
-| hardware 标记矩阵 | `.venv/bin/python -m pytest -m hardware -q` | 退出码0；8 skipped, 1149 deselected；`not_run` |
+| README、工作流与运行时补丁文档门禁 | `.venv/bin/python -m pytest tests/integration/test_documented_commands.py tests/integration/test_workflow_artifacts.py tests/unit/online/test_runtime_patch.py -q` | 退出码0；54 passed, 1 skipped |
+| 完整硬件无关覆盖率门禁 | `.venv/bin/python -m pytest -m 'not hardware and not gurobi' --cov=vericcl --cov-report=term-missing --cov-fail-under=90 -q` | 退出码0；1137 passed, 1 skipped, 22 deselected；总覆盖率92.10%（阈值90%） |
+| Gurobi 标记矩阵 | `.venv/bin/python -m pytest -m gurobi -q` | 退出码0；14 passed, 1146 deselected |
+| hardware 标记矩阵 | `.venv/bin/python -m pytest -m hardware -q` | 退出码0；8 skipped, 1152 deselected；`not_run` |
 
-文档门禁包含中英文 README Bash 块逐字一致性检查、八个分阶段命令的执行，以及公开 `help`、`solve`、`verify` 与示例验证命令的依次执行。两份 README 的仓库相对路径由测试确认均存在且受 Git 跟踪；`Ubuntu` 和 `SyCCL` 的 README 扫描无匹配，排除内容未出现。
+文档门禁包含中英文 README Bash 块逐字一致性检查、八个分阶段命令的执行，以及公开 `help`、`solve`、`verify` 与示例验证命令的依次执行。完整扫描两份 README 后，各解析出17个仓库相对路径，均存在且受 Git 跟踪；`Ubuntu` 和 `SyCCL` 的 README 扫描无匹配，排除内容未出现。
+
+MSCCL文档行为测试在隔离临时目录中执行策略A与策略C命令块，确认二者分别调用`--base-tree`与`--patched-tree`验证器并生成预期构建目录。激活测试执行单节点与MPI探测控制流：算法数为1时通过，为2时拒绝；MPI探测传播`NCCL_DEBUG`和`NCCL_DEBUG_SUBSYS`，正式release命令清除这些变量。上述测试使用受控命令替身，不构成CUDA编译、MSCCL加载或GPU执行证据。
+
+唯一跳过项为`tests/unit/online/test_runtime_patch.py::test_patch_dry_run_and_post_apply_source_scan`，原因是当前主机未提供有效的`VERICCL_MSCCL_REFERENCE_ROOT`参考源码树。
 
 ### 静态检查
 

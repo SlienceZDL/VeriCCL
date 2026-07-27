@@ -158,7 +158,7 @@ Sketch（`vericcl/examples/sketch/allreduce_8m_1m.json`）：
 
 Atom（`vericcl/examples/atom/constructive.json`与`vericcl/examples/atom/default.json`）：
 
-- `stage_num`为`null`或正的精确阶段数。每个禁用传输为`[slice_id, src_rank, dst_rank, stage_id]`；源、目标Rank必须不同，且所有索引必须在有效范围内。
+- `stage_num`为`null`或正的精确阶段数。每个禁用传输为`[slice_id, src_rank, dst_rank, stage_id]`；源、目标Rank必须不同，slice与Rank索引必须在有效范围内，且`stage_id`必须非负。当`stage_num`为正数时，`stage_id`还必须小于`stage_num`；当`stage_num`为`null`时，不设置上界。
 - 策略Boolean字段选择hierarchy、symmetry、shortest paths、batching、constructive trees及MILP。constructive文件禁用MILP，default文件启用MILP。
 - 自动规划时`manual_hierarchy`为空。手动节点定义`node_id`、从零开始的`stage_id`、算子、排序且无重复的`communication_group`、可选的有根`root`、`[rank, offset, contributor_ids]`形式的`logical_input`与`logical_output`，以及唯一的`depends_on`节点ID。接口与依赖必须精确组合为全局集合通信。
 
@@ -307,9 +307,31 @@ XML成功加载的正向信号是`NCCL INFO Connected 1 MSCCL algorithms`。缺�
 
 固定运行时契约为`MSCCL_CHUNKSTEPS=4`、`MSCCL_SLICESTEPS=4`、`NCCL_PROTO=Simple`、XML `cnt=1`及`NCCL_BUFFSIZE=2*slice_size_bytes`。内置示例的slice为1 MiB，因此缓冲区为2 MiB。每次仅设置一个XML，并确保消息大小、datatype、归约操作、root、Rank数及in-place模式与XML一致。
 
-单节点双GPU release运行：
+首先在单节点双GPU上执行简短的INFO级激活探测。`sed`检查要求日志中所有已连接算法数量均严格为1；缺少该信号时检查失败：
 
+<!-- vericcl-msccl-run: single-node-activation -->
 ```bash
+export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export NCCL_ALGO=MSCCL
+export NCCL_PROTO=Simple
+export NCCL_BUFFSIZE=2097152
+export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
+export VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4
+export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
+export VERICCL_TRACE_ENABLE=0
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT
+MSCCL_ACTIVATION_LOG="$(mktemp)"
+"$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 1 -c 1 -d float -o sum -g 2 2>&1 | tee "$MSCCL_ACTIVATION_LOG"
+test "$(sed -n 's/.*NCCL INFO Connected \([0-9][0-9]*\) MSCCL algorithms.*/\1/p' "$MSCCL_ACTIVATION_LOG" | sort -u)" = 1
+rm -f "$MSCCL_ACTIVATION_LOG"
+```
+
+探测通过后再执行正式release测量，并显式关闭调试日志与trace：
+
+<!-- vericcl-msccl-run: single-node-release -->
+```bash
+unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export NCCL_ALGO=MSCCL
 export NCCL_PROTO=Simple
@@ -323,7 +345,9 @@ export VERICCL_TRACE_ENABLE=0
 
 独立诊断运行：
 
+<!-- vericcl-msccl-run: single-node-trace -->
 ```bash
+unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export NCCL_ALGO=MSCCL
 export NCCL_PROTO=Simple
@@ -341,7 +365,32 @@ export VERICCL_TRACE_FILE_PREFIX=/absolute/path/to/vericcl-step
 
 每个Rank启动一个MPI进程，每个进程使用一个GPU。以下八Rank示例在两个主机上各启动四个Rank；hostfile与XML必须在所有节点的相同路径存在。
 
+首先执行INFO级激活探测。两个调试变量均传播至所有MPI Rank，并对汇总日志执行相同的严格单算法检查：
+
+<!-- vericcl-msccl-run: multi-node-activation -->
 ```bash
+export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export NCCL_ALGO=MSCCL
+export NCCL_PROTO=Simple
+export NCCL_BUFFSIZE=2097152
+export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
+export VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4
+export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
+export VERICCL_TRACE_ENABLE=0
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT
+export VERICCL_MPI_HOSTFILE=/absolute/path/to/hosts
+MSCCL_ACTIVATION_LOG="$(mktemp)"
+mpirun -np 8 -N 4 --hostfile "$VERICCL_MPI_HOSTFILE" -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE -x NCCL_DEBUG -x NCCL_DEBUG_SUBSYS "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 1 -c 1 -d float -o sum -g 1 2>&1 | tee "$MSCCL_ACTIVATION_LOG"
+test "$(sed -n 's/.*NCCL INFO Connected \([0-9][0-9]*\) MSCCL algorithms.*/\1/p' "$MSCCL_ACTIVATION_LOG" | sort -u)" = 1
+rm -f "$MSCCL_ACTIVATION_LOG"
+```
+
+探测通过后再执行正式多节点release测量。此时禁用调试日志，且不向MPI传播：
+
+<!-- vericcl-msccl-run: multi-node-release -->
+```bash
+unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export NCCL_ALGO=MSCCL
 export NCCL_PROTO=Simple
@@ -365,7 +414,7 @@ mpirun -np 8 -N 4 --hostfile "$VERICCL_MPI_HOSTFILE" -x LD_LIBRARY_PATH -x NCCL_
 
 ## 输出、限制与故障诊断
 
-对于冒烟输入及run ID `docs`，目录名为`vericcl_allreduce_8MiB_docs/`，其中包含`resolved-input.json`、`run-summary.json`、`schedules/`、`reports/`、`traces/`以及最终`.xml`、`.schedule.json`和`.validation.json`。超过MSCCL限制但离线有效的调度使用`.candidate.xml`，在重新求解前不得执行。
+对于quickstart输入及run ID `quickstart`，目录名为`vericcl_allreduce_8MiB_quickstart/`，其中包含`resolved-input.json`、`run-summary.json`、`schedules/`、`reports/`、`traces/`以及最终`.xml`、`.schedule.json`和`.validation.json`。超过MSCCL限制但离线有效的调度使用`.candidate.xml`，在重新求解前不得执行。
 
 退出码：`0`表示离线有效完成，包括仅含运行时告警的candidate；`2`表示输入/配置错误；`3`表示没有语义有效候选或离线超时；`4`表示请求的在线验证失败或超时；`5`表示内部错误。
 

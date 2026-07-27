@@ -158,7 +158,7 @@ Sketch (`vericcl/examples/sketch/allreduce_8m_1m.json`):
 
 Atom (`vericcl/examples/atom/constructive.json` and `vericcl/examples/atom/default.json`):
 
-- `stage_num` is `null` or a positive exact stage count. Each forbidden transfer is `[slice_id, src_rank, dst_rank, stage_id]`; ranks must differ and all indexes must be in range.
+- `stage_num` is `null` or a positive exact stage count. Each forbidden transfer is `[slice_id, src_rank, dst_rank, stage_id]`; ranks must differ, slice and rank indexes must be in range, and `stage_id` must be non-negative. When `stage_num` is positive, `stage_id` must also be less than `stage_num`; when `stage_num` is `null`, no configured upper bound applies.
 - Strategy Booleans select hierarchy, symmetry, shortest paths, batching, constructive trees, and MILP. The constructive file disables MILP; the default file enables it.
 - `manual_hierarchy` is empty for automatic planning. A manual node defines `node_id`, zero-based `stage_id`, an operator, a sorted unique `communication_group`, optional rooted `root`, `logical_input` and `logical_output` entries `[rank, offset, contributor_ids]`, plus unique `depends_on` node IDs. Interfaces and dependencies must compose exactly to the global collective.
 
@@ -307,9 +307,31 @@ The positive XML-load signal is `NCCL INFO Connected 1 MSCCL algorithms`. Missin
 
 The fixed runtime contract is `MSCCL_CHUNKSTEPS=4`, `MSCCL_SLICESTEPS=4`, `NCCL_PROTO=Simple`, XML `cnt=1`, and `NCCL_BUFFSIZE=2*slice_size_bytes`. For the packaged 1 MiB slice, the buffer is 2 MiB. Set exactly one XML and match its message size, datatype, reduction operation, root, rank count, and in-place mode.
 
-Release run on one node with two GPUs:
+Run a short INFO-level activation probe on one node with two GPUs. The `sed` check requires every reported connected-algorithm count to be exactly one and fails when the signal is absent:
 
+<!-- vericcl-msccl-run: single-node-activation -->
 ```bash
+export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export NCCL_ALGO=MSCCL
+export NCCL_PROTO=Simple
+export NCCL_BUFFSIZE=2097152
+export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
+export VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4
+export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
+export VERICCL_TRACE_ENABLE=0
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT
+MSCCL_ACTIVATION_LOG="$(mktemp)"
+"$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 1 -c 1 -d float -o sum -g 2 2>&1 | tee "$MSCCL_ACTIVATION_LOG"
+test "$(sed -n 's/.*NCCL INFO Connected \([0-9][0-9]*\) MSCCL algorithms.*/\1/p' "$MSCCL_ACTIVATION_LOG" | sort -u)" = 1
+rm -f "$MSCCL_ACTIVATION_LOG"
+```
+
+After the probe succeeds, run the formal release measurement with debug logging and tracing explicitly disabled:
+
+<!-- vericcl-msccl-run: single-node-release -->
+```bash
+unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export NCCL_ALGO=MSCCL
 export NCCL_PROTO=Simple
@@ -323,7 +345,9 @@ export VERICCL_TRACE_ENABLE=0
 
 Separate diagnostic run:
 
+<!-- vericcl-msccl-run: single-node-trace -->
 ```bash
+unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export NCCL_ALGO=MSCCL
 export NCCL_PROTO=Simple
@@ -341,7 +365,32 @@ export VERICCL_TRACE_FILE_PREFIX=/absolute/path/to/vericcl-step
 
 Use one MPI process per rank and one GPU per process. This eight-rank example uses four ranks on each of two hosts. The hostfile and XML must exist at the same paths on all nodes.
 
+Run the INFO-level activation probe first. Both debug variables are propagated to every MPI rank, and the same exact-one check is applied to the combined log:
+
+<!-- vericcl-msccl-run: multi-node-activation -->
 ```bash
+export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export NCCL_ALGO=MSCCL
+export NCCL_PROTO=Simple
+export NCCL_BUFFSIZE=2097152
+export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
+export VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4
+export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
+export VERICCL_TRACE_ENABLE=0
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT
+export VERICCL_MPI_HOSTFILE=/absolute/path/to/hosts
+MSCCL_ACTIVATION_LOG="$(mktemp)"
+mpirun -np 8 -N 4 --hostfile "$VERICCL_MPI_HOSTFILE" -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE -x NCCL_DEBUG -x NCCL_DEBUG_SUBSYS "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 1 -c 1 -d float -o sum -g 1 2>&1 | tee "$MSCCL_ACTIVATION_LOG"
+test "$(sed -n 's/.*NCCL INFO Connected \([0-9][0-9]*\) MSCCL algorithms.*/\1/p' "$MSCCL_ACTIVATION_LOG" | sort -u)" = 1
+rm -f "$MSCCL_ACTIVATION_LOG"
+```
+
+Run the formal multi-node release measurement only after the probe succeeds. Debug logging remains disabled and is not propagated:
+
+<!-- vericcl-msccl-run: multi-node-release -->
+```bash
+unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export NCCL_ALGO=MSCCL
 export NCCL_PROTO=Simple
@@ -365,7 +414,7 @@ The internal modules are development entry points, not a stable plugin API. `ver
 
 ## Outputs, Limitations, and Troubleshooting
 
-For the smoke input and run ID `docs`, the directory is `vericcl_allreduce_8MiB_docs/`. It contains `resolved-input.json`, `run-summary.json`, `schedules/`, `reports/`, `traces/`, the final `.xml`, `.schedule.json`, and `.validation.json`. Offline-valid schedules that exceed MSCCL limits use `.candidate.xml` and must not be executed until re-solved.
+For the quickstart input and run ID `quickstart`, the directory is `vericcl_allreduce_8MiB_quickstart/`. It contains `resolved-input.json`, `run-summary.json`, `schedules/`, `reports/`, `traces/`, the final `.xml`, `.schedule.json`, and `.validation.json`. Offline-valid schedules that exceed MSCCL limits use `.candidate.xml` and must not be executed until re-solved.
 
 Exit codes are: `0` for offline-valid completion (including runtime-warning candidates), `2` for input/configuration errors, `3` for no semantic-valid candidate or offline timeout, `4` for requested online failure/timeout, and `5` for an internal error.
 

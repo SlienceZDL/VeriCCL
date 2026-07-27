@@ -31,7 +31,16 @@ RUN_STEP_PATTERN = re.compile(
     r"```bash\s*\n([^\n]+)\n```"
 )
 BASH_BLOCK_PATTERN = re.compile(r"```bash\s*\n(.*?)\n```", re.DOTALL)
+MSCCL_RUN_PATTERN = re.compile(
+    r"<!-- vericcl-msccl-run: ([a-z-]+) -->\s*"
+    r"```bash\s*\n(.*?)\n```",
+    re.DOTALL,
+)
 INLINE_CODE_PATTERN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
+LOCAL_FRAGMENT_LINK_PATTERN = re.compile(
+    r"\]\((?P<path>\.\./README(?:\.zh-CN)?\.md)"
+    r"#(?P<fragment>[^)]+)\)"
+)
 OUTPUT_SETUP_PATTERN = re.compile(
     r'^export VERICCL_OUTPUT_DIR="([^"\n]+)"$',
     re.MULTILINE,
@@ -57,9 +66,12 @@ DOCUMENTED_RUN_STEP_ORDER = (
     "check-report",
     "inspect-report",
 )
-EXAMPLE_SECTION_ANCHORS = (
-    "vericcl/examples/legacy",
-    "vericcl/examples/templates",
+DOCUMENTED_MSCCL_RUN_ORDER = (
+    "single-node-activation",
+    "single-node-release",
+    "single-node-trace",
+    "multi-node-activation",
+    "multi-node-release",
 )
 
 
@@ -71,16 +83,8 @@ def _run_steps_from(path):
     return tuple(RUN_STEP_PATTERN.findall(path.read_text(encoding="utf-8")))
 
 
-def _example_section(path):
-    text = path.read_text(encoding="utf-8")
-    sections = re.split(r"(?m)^## ", text)
-    matches = [
-        section
-        for section in sections
-        if all(anchor in section for anchor in EXAMPLE_SECTION_ANCHORS)
-    ]
-    assert len(matches) == 1
-    return matches[0]
+def _msccl_run_steps_from(path):
+    return tuple(MSCCL_RUN_PATTERN.findall(path.read_text(encoding="utf-8")))
 
 
 def _tracked_repository_paths():
@@ -251,11 +255,10 @@ def test_documented_run_steps_execute_and_write_bound_artifacts(tmp_path):
 
 
 @pytest.mark.parametrize("path", (README_EN, README_ZH))
-def test_readme_example_paths_are_tracked_repository_entries(path):
-    section = _example_section(path)
+def test_readme_repository_paths_are_tracked_repository_entries(path):
     tracked_paths = _tracked_repository_paths()
     documented_paths = _repository_paths_from_inline_code(
-        section,
+        path.read_text(encoding="utf-8"),
         tracked_paths,
     )
 
@@ -264,6 +267,117 @@ def test_readme_example_paths_are_tracked_repository_entries(path):
         resolved = PROJECT_ROOT / documented
         assert resolved.exists(), documented
         assert _is_tracked_repository_entry(documented, tracked_paths), documented
+
+
+def _markdown_heading_anchors(text):
+    anchors = set()
+    counts = {}
+    for heading in re.findall(r"(?m)^#{1,6}\s+(.+?)\s*$", text):
+        anchor = re.sub(r"[^\w\s-]", "", heading.lower())
+        anchor = re.sub(r"\s+", "-", anchor).strip("-")
+        count = counts.get(anchor, 0)
+        counts[anchor] = count + 1
+        anchors.add(anchor if count == 0 else "{}-{}".format(anchor, count))
+    return anchors
+
+
+def test_runtime_guide_readme_fragment_links_resolve():
+    text = RUNTIME_GUIDE.read_text(encoding="utf-8")
+    links = tuple(LOCAL_FRAGMENT_LINK_PATTERN.finditer(text))
+
+    assert links
+    for link in links:
+        target = (RUNTIME_GUIDE.parent / link.group("path")).resolve()
+        assert target.is_file()
+        anchors = _markdown_heading_anchors(target.read_text(encoding="utf-8"))
+        assert link.group("fragment") in anchors
+
+
+def _write_executable(path, body):
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _run_msccl_command(command, environment):
+    return subprocess.run(
+        ["bash", "-eu", "-o", "pipefail", "-c", command],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+
+
+def test_documented_msccl_activation_is_separate_from_release_measurement(
+    tmp_path,
+):
+    steps = _msccl_run_steps_from(README_EN)
+    assert tuple(name for name, _ in steps) == DOCUMENTED_MSCCL_RUN_ORDER
+    commands = dict(steps)
+    tool_dir = tmp_path / "bin"
+    tool_dir.mkdir()
+    tests_root = tmp_path / "nccl-tests"
+    (tests_root / "build").mkdir(parents=True)
+    _write_executable(
+        tests_root / "build" / "all_reduce_perf",
+        """#!/bin/bash
+set -eu
+if [[ -n "${NCCL_DEBUG:-}" ]]; then
+  test "$NCCL_DEBUG" = INFO
+  printf 'rank NCCL INFO Connected %s MSCCL algorithms\n' \
+    "${FAKE_MSCCL_COUNT:-1}" >&2
+else
+  test -z "${NCCL_DEBUG_SUBSYS:-}"
+fi
+""",
+    )
+    _write_executable(
+        tool_dir / "mpirun",
+        """#!/bin/bash
+set -eu
+if [[ -n "${NCCL_DEBUG:-}" ]]; then
+  [[ " $* " == *" -x NCCL_DEBUG "* ]]
+  [[ " $* " == *" -x NCCL_DEBUG_SUBSYS "* ]]
+  printf 'rank NCCL INFO Connected %s MSCCL algorithms\n' \
+    "${FAKE_MSCCL_COUNT:-1}" >&2
+else
+  [[ " $* " != *" -x NCCL_DEBUG "* ]]
+  [[ " $* " != *" -x NCCL_DEBUG_SUBSYS "* ]]
+fi
+""",
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "MSCCL_ROOT": str(tmp_path / "msccl"),
+            "NCCL_TESTS_ROOT": str(tests_root),
+            "PATH": "{}:{}".format(tool_dir, environment["PATH"]),
+        }
+    )
+
+    for name in ("single-node-activation", "multi-node-activation"):
+        completed = _run_msccl_command(commands[name], environment)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        rejected_environment = environment.copy()
+        rejected_environment["FAKE_MSCCL_COUNT"] = "2"
+        rejected = _run_msccl_command(
+            commands[name],
+            rejected_environment,
+        )
+        assert rejected.returncode != 0
+
+    debug_environment = environment.copy()
+    debug_environment.update(
+        {
+            "NCCL_DEBUG": "INFO",
+            "NCCL_DEBUG_SUBSYS": "INIT",
+        }
+    )
+    for name in ("single-node-release", "multi-node-release"):
+        completed = _run_msccl_command(commands[name], debug_environment)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 @pytest.mark.parametrize("path", (README_EN, README_ZH))

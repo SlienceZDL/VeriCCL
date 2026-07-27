@@ -140,7 +140,7 @@ def _verify_pinned_revision(source_root: Path, metadata: dict, key: str) -> None
         raise ValueError(f"source root is not at the pinned MSCCL revision: {expected}")
 
 
-def _require_clean_base_tree(source_root: Path) -> None:
+def _require_clean_tree(source_root: Path) -> None:
     completed = subprocess.run(
         ("git", "-C", str(source_root), "diff-index", "--quiet", "HEAD", "--"),
         check=False,
@@ -158,12 +158,13 @@ def verify(source_root: Path, *, patched_tree: bool = False) -> None:
     _verify_layout()
     if patched_tree:
         _verify_pinned_revision(source_root, metadata, "patched_commit")
+        _require_clean_tree(source_root)
         _verify_patched_sources(source_root)
         _verify_hashes(source_root, metadata)
         return
 
     _verify_pinned_revision(source_root, metadata, "upstream_commit")
-    _require_clean_base_tree(source_root)
+    _require_clean_tree(source_root)
     with tempfile.TemporaryDirectory(prefix="vericcl-msccl-patch-") as temp:
         root = Path(temp)
         _copy_reference(source_root, root)

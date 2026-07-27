@@ -2,7 +2,7 @@
 
 This document defines the runtime contract that makes one XML step represent one complete software slice. Network and GPU runtimes may still packetize a slice internally; that hardware behavior is outside VeriCCL's software-granularity contract.
 
-Start with the [English installation guide](../README.md) or the [Chinese installation guide](../README.zh-CN.md). Both document [Strategy A, the pinned official MSCCL source plus the bundled patch](../README.md#msccl-strategy-a-official-source-plus-bundled-patch), and [Strategy C, the pre-integrated immutable tag](../README.md#msccl-strategy-c-pre-integrated-immutable-tag). Do not substitute a private or unpinned MSCCL tree.
+Start with the [English installation guide](../README.md) or the [Chinese installation guide](../README.zh-CN.md). Both document [Strategy A, the pinned official MSCCL source plus the bundled patch](../README.md#strategy-a-official-source-plus-bundled-patch), and [Strategy C, the pre-integrated immutable tag](../README.md#strategy-c-pre-integrated-immutable-tag). Do not substitute a private or unpinned MSCCL tree.
 
 ## Fixed MSCCL build parameters
 

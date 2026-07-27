@@ -7,14 +7,15 @@ device record buffer. Its official source is
 
 ## Strategy A: official source plus the bundled patch
 
+<!-- vericcl-msccl-strategy: strategy-a -->
 ```bash
-export VERICCL_ROOT=/absolute/path/to/VeriCCL
-export MSCCL_SRC=/tmp/vericcl-msccl-base
+export VERICCL_ROOT="$(pwd)"
+export MSCCL_SRC="${TMPDIR:-/tmp}/vericcl-msccl-base"
 git clone https://github.com/microsoft/msccl.git "$MSCCL_SRC"
 git -C "$MSCCL_SRC" checkout --detach \
   b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
-cd "$VERICCL_ROOT"
-python3 runtime/msccl-trace/tools/verify_patch.py --source-root /tmp/vericcl-msccl-base
+python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" \
+  --source-root "$MSCCL_SRC" --base-tree
 cp "$VERICCL_ROOT/runtime/msccl-trace/include/vericcl_trace_format.h" \
   "$MSCCL_SRC/src/include/vericcl_trace_format.h"
 patch --directory="$MSCCL_SRC" --strip=1 \
@@ -28,20 +29,30 @@ applies the patch there, and leaves the official checkout unchanged.
 
 ## Strategy C: pre-integrated VeriCCL-MSCCL source
 
-This strategy is not yet available in the Task 2 repository state. Do not clone
-or use the planned `vericcl-runtime-v0.1.0` tag from
-`https://github.com/SlienceZDL/VeriCCL-MSCCL.git` until `upstream.json` contains
-both `patched_commit` and `patched_files`. Those fields must be populated before
-`--patched-tree` provides revision and file-integrity evidence; without them it
-only performs the limited source-invariant scan.
+The immutable public tag `vericcl-runtime-v0.1.0` resolves to commit
+`782ee5f72cf48c1ae1a2365bcf525019f5620175`. The verifier checks that revision
+and every file hash recorded in `upstream.json` before the build.
 
-After the tag and metadata are published, the release documentation will give
-the exact clone, `--patched-tree` verification, and build commands. Strategy C
-is intended to reproduce Strategy A only after those hashes bind the published
-tree. For Strategy A, local `verify_patch.py` success proves the pinned base
-revision, patch applicability, layout, and source invariants. Neither mode
-compiles CUDA sources or provides evidence of a successful CUDA build or GPU
-execution.
+<!-- vericcl-msccl-strategy: strategy-c -->
+```bash
+export VERICCL_ROOT="$(pwd)"
+export MSCCL_SRC="${TMPDIR:-/tmp}/vericcl-msccl-runtime"
+git clone --branch vericcl-runtime-v0.1.0 --depth 1 \
+  https://github.com/SlienceZDL/VeriCCL-MSCCL.git "$MSCCL_SRC"
+test "$(git -C "$MSCCL_SRC" rev-parse HEAD)" = \
+  782ee5f72cf48c1ae1a2365bcf525019f5620175
+python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" \
+  --source-root "$MSCCL_SRC" --patched-tree
+make -C "$MSCCL_SRC" clean
+make -C "$MSCCL_SRC" -j src.build
+test -d "$MSCCL_SRC/build/lib"
+```
+
+Strategy A verification proves the pinned base revision, patch applicability,
+layout, and final hashes. Strategy C verification proves the published
+revision, clean tracked state, source invariants, and the same recorded hashes.
+Neither mode compiles CUDA sources or provides evidence of a successful CUDA
+build or GPU execution.
 
 ## Trace controls
 

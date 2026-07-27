@@ -25,6 +25,11 @@ PATCH_FILE = (
 )
 VERIFY_PATCH = RUNTIME_ROOT / "tools" / "verify_patch.py"
 REFERENCE_ROOT = os.environ.get("VERICCL_MSCCL_REFERENCE_ROOT")
+STRATEGY_PATTERN = re.compile(
+    r"<!-- vericcl-msccl-strategy: ([a-z-]+) -->\s*"
+    r"```bash\s*\n(.*?)\n```",
+    re.DOTALL,
+)
 
 
 EXPECTED_RECORD_FIELDS = (
@@ -170,6 +175,60 @@ def test_verifier_rejects_dirty_pinned_base_tree(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="tracked changes"):
         verifier.verify(tmp_path)
+
+
+def test_verifier_rejects_dirty_patched_tree_outside_hashed_files(
+    tmp_path,
+    monkeypatch,
+):
+    for relative in EXPECTED_PATCHED_FILES:
+        source = tmp_path / relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("patched\n", encoding="utf-8")
+    unrelated = tmp_path / "README.md"
+    unrelated.write_text("clean\n", encoding="utf-8")
+    subprocess.run(("git", "init", str(tmp_path)), check=True)
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "config", "user.name", "VeriCCL Test"),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "config", "user.email", "vericcl@example.invalid"),
+        check=True,
+    )
+    subprocess.run(("git", "-C", str(tmp_path), "add", "."), check=True)
+    subprocess.run(
+        ("git", "-C", str(tmp_path), "commit", "-m", "patched revision"),
+        check=True,
+    )
+    head = subprocess.run(
+        ("git", "-C", str(tmp_path), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    unrelated.write_text("dirty\n", encoding="utf-8")
+
+    spec = importlib.util.spec_from_file_location("verify_patch", VERIFY_PATCH)
+    verifier = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(verifier)
+    patched_files = {
+        relative: hashlib.sha256((tmp_path / relative).read_bytes()).hexdigest()
+        for relative in EXPECTED_PATCHED_FILES
+    }
+    monkeypatch.setattr(
+        verifier,
+        "_load_metadata",
+        lambda _: {
+            "schema_version": 1,
+            "patched_commit": head,
+            "patched_files": patched_files,
+        },
+    )
+
+    with pytest.raises(ValueError, match="tracked changes"):
+        verifier.verify(tmp_path, patched_tree=True)
 
 
 def test_patch_uses_fixed_buffers_and_removes_device_printf_trace():
@@ -345,24 +404,119 @@ def test_patch_reserves_one_record_per_xml_step_before_count_splitting():
     assert interpreter_patch.index(reserve) < dependency_position
 
 
-def test_runtime_readme_documents_both_pinned_installation_strategies():
-    readme = RUNTIME_README.read_text(encoding="utf-8")
+def _write_executable(path, body):
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
 
-    assert "https://github.com/microsoft/msccl.git" in readme
-    assert "b23e9cd5dd63f82ee1c5aae7e0a2042079be903a" in readme
-    assert "https://github.com/SlienceZDL/VeriCCL-MSCCL.git" in readme
-    assert "vericcl-runtime-v0.1.0" in readme
-    assert (
-        "python3 runtime/msccl-trace/tools/verify_patch.py "
-        "--source-root /tmp/vericcl-msccl-base"
-    ) in readme
-    assert "--patched-tree" in readme
-    assert "patched_commit" in readme
-    assert "patched_files" in readme
-    assert "must be populated" in readme
-    assert "is not yet available" in readme
-    assert "git clone --branch vericcl-runtime-v0.1.0" not in readme
-    assert re.search(r"Neither mode\s+compiles CUDA\s+sources", readme)
+
+def _run_documented_strategy(command, tmp_path, metadata):
+    tool_dir = tmp_path / "bin"
+    tool_dir.mkdir()
+    command_log = tmp_path / "commands.log"
+    _write_executable(
+        tool_dir / "git",
+        """#!/bin/bash
+set -eu
+printf 'git %s\n' "$*" >> "$COMMAND_LOG"
+if [[ " $* " == *" clone "* ]]; then
+  destination="${!#}"
+  mkdir -p "$destination/src/include"
+elif [[ " $* " == *" rev-parse HEAD "* ]]; then
+  printf '%s\n' "$EXPECTED_COMMIT"
+fi
+""",
+    )
+    _write_executable(
+        tool_dir / "python3",
+        """#!/bin/bash
+set -eu
+printf 'python3 %s\n' "$*" >> "$COMMAND_LOG"
+""",
+    )
+    _write_executable(
+        tool_dir / "patch",
+        """#!/bin/bash
+set -eu
+printf 'patch %s\n' "$*" >> "$COMMAND_LOG"
+""",
+    )
+    _write_executable(
+        tool_dir / "make",
+        """#!/bin/bash
+set -eu
+printf 'make %s\n' "$*" >> "$COMMAND_LOG"
+arguments=" $* "
+root=
+while (($#)); do
+  if [[ "$1" == "-C" ]]; then
+    root="$2"
+    shift 2
+    continue
+  fi
+  shift
+done
+if [[ -n "$root" && "$arguments" == *" src.build "* ]]; then
+  mkdir -p "$root/build/lib"
+fi
+""",
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "COMMAND_LOG": str(command_log),
+            "EXPECTED_COMMIT": metadata["patched_commit"],
+            "PATH": "{}:{}".format(tool_dir, environment["PATH"]),
+            "TMPDIR": str(tmp_path),
+        }
+    )
+    completed = subprocess.run(
+        ("bash", "-eu", "-o", "pipefail", "-c", command),
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
+    return completed, command_log
+
+
+def test_runtime_readme_installation_strategies_execute_pinned_verifiers(
+    tmp_path,
+):
+    metadata = json.loads(METADATA_FILE.read_text(encoding="utf-8"))
+    strategies = dict(
+        STRATEGY_PATTERN.findall(RUNTIME_README.read_text(encoding="utf-8"))
+    )
+
+    assert set(strategies) == {"strategy-a", "strategy-c"}
+    for name, mode in (
+        ("strategy-a", "--base-tree"),
+        ("strategy-c", "--patched-tree"),
+    ):
+        case_root = tmp_path / name
+        case_root.mkdir()
+        completed, command_log = _run_documented_strategy(
+            strategies[name],
+            case_root,
+            metadata,
+        )
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        log = command_log.read_text(encoding="utf-8")
+        assert mode in log
+        if name == "strategy-a":
+            assert metadata["upstream_repository"] in log
+            assert metadata["upstream_commit"] in log
+        else:
+            assert metadata["fork_repository"] in log
+            assert "--branch {}".format(metadata["fork_tag"]) in log
+        source_root = case_root / (
+            "vericcl-msccl-base"
+            if name == "strategy-a"
+            else "vericcl-msccl-runtime"
+        )
+        assert "--source-root {}".format(source_root) in log
+        assert (source_root / "build" / "lib").is_dir()
 
 
 def test_patch_dry_run_and_post_apply_source_scan():
