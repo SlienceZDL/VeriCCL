@@ -19,6 +19,7 @@
 - Keep the four `vericcl-doc-test` markers and keep their order: `help`, `solve`, `verify`, `example-validation`.
 - Keep English and Chinese Bash blocks byte-identical and in the same order.
 - Keep the topology/sketch/atom unknown-field contract accurate.
+- Test documented behavior by executing commands and checking artifacts; do not add exact prose, heading, required-word, or forbidden-word assertions.
 - Do not modify CLI behavior, input schemas, solver logic, runtime patches, or generated formats.
 - State `License: To be determined.` and `Citation: To be determined.` exactly.
 - CUDA/MSCCL compilation and GPU/nccl-tests execution remain `not_run` unless run on a target Ubuntu GPU server.
@@ -27,7 +28,7 @@
 
 - Modify `README.md`: English project guide and executable workflow.
 - Modify `README.zh-CN.md`: Chinese guide with the same structure and command literals.
-- Modify `tests/integration/test_documented_commands.py`: README structure, absence, step order, path, bilingual parity, and executable-command regression gates.
+- Modify `tests/integration/test_documented_commands.py`: executable run-step, artifact, path, bilingual command-parity, and input-behavior regression gates.
 - Modify `docs/final-validation-report.md`: append fresh README validation evidence without changing prior results.
 
 ---
@@ -43,163 +44,100 @@
 - Consumes: the confirmed design in `docs/superpowers/specs/2026-07-27-vericcl-readme-project-guide-design.md`, the existing four `vericcl-doc-test` markers, and packaged examples under `vericcl/examples`.
 - Produces: ordered `Overview`, `Building and Installing VeriCCL`, and `Running VeriCCL` sections in both languages, plus a test helper that extracts the running section.
 
-- [ ] **Step 1: Replace the obsolete installation-fragment contract with the new README contract**
+- [ ] **Step 1: Remove obsolete prose change-detector tests**
 
-In `tests/integration/test_documented_commands.py`, replace the Ubuntu fragments in `REQUIRED_README_FRAGMENTS`, add localized ordered headings, and add forbidden fragments:
+In `tests/integration/test_documented_commands.py`, delete `REQUIRED_README_FRAGMENTS` and `test_readmes_retain_the_installation_and_example_contract`. Keep the existing tests that execute marked commands, resolve real inputs, validate repository paths, validate the machine-readable unknown-field contract, verify workflow artifacts, and compare bilingual Bash blocks.
+
+- [ ] **Step 2: Add a failing executable workflow test**
+
+Add a machine-readable marker for the eight commands that form the runnable README workflow:
 
 ```python
-REQUIRED_README_FRAGMENTS = {
-    "b23e9cd5dd63f82ee1c5aae7e0a2042079be903a",
-    "vericcl-runtime-v0.1.0",
-    "782ee5f72cf48c1ae1a2365bcf525019f5620175",
-    "NCCL_BUFFSIZE=2097152",
-    "VERICCL_CALIBRATION_LINK_CLASS",
-    "vericcl/examples/topo/two_rank.json",
-    "vericcl/examples/topo/two_node_gateway.json",
-    "vericcl/examples/sketch/allreduce_8m_1m.json",
-    "vericcl/examples/atom/constructive.json",
-    "vericcl/examples/atom/default.json",
-    "docs/runtime-configuration.md",
-}
-README_PRIMARY_HEADINGS = {
-    README_EN: (
-        "## Overview",
-        "## Building and Installing VeriCCL",
-        "## Running VeriCCL",
-    ),
-    README_ZH: (
-        "## 概述",
-        "## 构建与安装VeriCCL",
-        "## 运行VeriCCL",
-    ),
-}
-FORBIDDEN_README_FRAGMENTS = {
-    "SyCCL",
-    "```mermaid",
-    "sudo apt update",
-    "sudo apt install",
-    "## Ubuntu prerequisites",
-    "## CUDA, NCCL, and MPI preflight",
-    "## Ubuntu前置依赖",
-    "## CUDA、NCCL与MPI预检",
-}
-INSTALL_COMMAND_FRAGMENTS = (
-    "git clone git@github.com:SlienceZDL/VeriCCL.git",
-    "git clone https://github.com/SlienceZDL/VeriCCL.git",
-    "python3 -m venv .venv",
-    ".venv/bin/python -m pip install --upgrade pip setuptools wheel",
-    ".venv/bin/python -m pip install -r requirements-dev.txt",
-    ".venv/bin/python -m pip install -e .",
-    ".venv/bin/python -m pip check",
-    ".venv/bin/python -m vericcl --version",
+RUN_STEP_PATTERN = re.compile(
+    r"<!-- vericcl-run-step: ([a-z-]+) -->\s*"
+    r"(?:<!-- vericcl-doc-test: [a-z-]+ -->\s*)?"
+    r"```bash\s*\n([^\n]+)\n```"
+)
+DOCUMENTED_RUN_STEP_ORDER = (
+    "set-root",
+    "set-output",
+    "create-output",
+    "solve",
+    "verify",
+    "check-xml",
+    "check-report",
+    "inspect-report",
 )
 ```
 
-Add the ordered-heading and forbidden-content tests:
+Add helpers that extract the same marked commands from both READMEs and execute the English sequence in one Bash process. Override only the dynamic output-root assignment so the test writes under `tmp_path`:
 
 ```python
-@pytest.mark.parametrize("path", (README_EN, README_ZH))
-def test_readmes_have_the_ordered_project_guide_sections(path):
-    text = path.read_text(encoding="utf-8")
-    positions = [text.index(heading) for heading in README_PRIMARY_HEADINGS[path]]
-    assert positions == sorted(positions)
+def _run_steps_from(path):
+    return tuple(RUN_STEP_PATTERN.findall(path.read_text(encoding="utf-8")))
 
 
-@pytest.mark.parametrize("path", (README_EN, README_ZH))
-def test_readmes_exclude_out_of_scope_content(path):
-    text = path.read_text(encoding="utf-8")
-    assert not {
-        fragment for fragment in FORBIDDEN_README_FRAGMENTS
-        if fragment in text
-    }
+def test_bilingual_readmes_have_identical_run_steps():
+    assert _run_steps_from(README_EN) == _run_steps_from(README_ZH)
 
 
-@pytest.mark.parametrize("path", (README_EN, README_ZH))
-def test_readmes_contain_the_concrete_install_commands(path):
-    text = path.read_text(encoding="utf-8")
-    assert not {
-        command for command in INSTALL_COMMAND_FRAGMENTS
-        if command not in text
-    }
+def test_documented_run_steps_execute_and_write_bound_artifacts(tmp_path):
+    steps = _run_steps_from(README_EN)
+    assert tuple(name for name, _ in steps) == DOCUMENTED_RUN_STEP_ORDER
+    commands = [command for _, command in steps]
+    commands[1] = "export VERICCL_OUTPUT_DIR={}".format(
+        shlex.quote(str(tmp_path / "runs"))
+    )
+
+    completed = subprocess.run(
+        ["bash", "-eu", "-o", "pipefail", "-c", "\n".join(commands)],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    run_root = (
+        tmp_path / "runs" / "vericcl_allreduce_8MiB_quickstart"
+    )
+    xml = run_root / "vericcl_allreduce_8MiB_final.xml"
+    sidecar = run_root / "vericcl_allreduce_8MiB_final.schedule.json"
+    report = run_root / "vericcl_allreduce_8MiB_final.validation.json"
+    summary = run_root / "run-summary.json"
+    assert xml.is_file()
+    assert sidecar.is_file()
+    assert report.is_file()
+    assert summary.is_file()
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["accepted"] is True
+    verify_summary = (
+        tmp_path / "runs" / "vericcl_allreduce_8MiB_quickstart-verify"
+        / "run-summary.json"
+    )
+    verify_payload = json.loads(
+        verify_summary.read_text(encoding="utf-8")
+    )
+    assert verify_payload["mode"] == "verify"
 ```
 
-- [ ] **Step 2: Add a failing contract for individually explained run commands**
-
-Add exact one-command Bash blocks and a section extractor:
+Import `os` and replace the existing `_run` implementation so documented commands use real shell expansion:
 
 ```python
-RUNNING_STEP_COMMANDS = (
-    'export VERICCL_ROOT="$(pwd)"',
-    'export VERICCL_OUTPUT_DIR="$VERICCL_ROOT/runs/readme-$(date +%Y%m%dT%H%M%S)"',
-    'mkdir -p "$VERICCL_OUTPUT_DIR"',
-    ".venv/bin/python -m vericcl solve --topology "
-    "vericcl/examples/topo/two_rank.json --sketch "
-    "vericcl/examples/sketch/allreduce_8m_1m.json --atoms "
-    "vericcl/examples/atom/constructive.json --output-dir "
-    '"$VERICCL_OUTPUT_DIR" --run-id quickstart',
-    ".venv/bin/python -m vericcl verify --topology "
-    "vericcl/examples/topo/two_rank.json --sketch "
-    "vericcl/examples/sketch/allreduce_8m_1m.json --atoms "
-    "vericcl/examples/atom/constructive.json --output-dir "
-    '"$VERICCL_OUTPUT_DIR" --run-id quickstart-verify --xml '
-    '"$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/'
-    'vericcl_allreduce_8MiB_final.xml"',
-    'test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/'
-    'vericcl_allreduce_8MiB_final.xml"',
-    'test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/'
-    'vericcl_allreduce_8MiB_final.validation.json"',
-    ".venv/bin/python -m json.tool "
-    '"$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/'
-    'vericcl_allreduce_8MiB_final.validation.json"',
-)
-
-
-def _heading_section(text, heading):
-    start = text.index(heading)
-    end = text.find("\n## ", start + len(heading))
-    return text[start:] if end == -1 else text[start:end]
-
-
-@pytest.mark.parametrize(
-    ("path", "heading"),
-    (
-        (README_EN, "## Running VeriCCL"),
-        (README_ZH, "## 运行VeriCCL"),
-    ),
-)
-def test_running_commands_are_individual_ordered_blocks(path, heading):
-    section = _heading_section(path.read_text(encoding="utf-8"), heading)
-    blocks = BASH_BLOCK_PATTERN.findall(section)
-    positions = []
-    for command in RUNNING_STEP_COMMANDS:
-        assert command in blocks
-        assert all(
-            line == command
-            for block in blocks if command in block
-            for line in block.splitlines()
-        )
-        positions.append(section.index(command))
-    assert positions == sorted(positions)
+def _run(command, output_dir):
+    environment = os.environ.copy()
+    environment["VERICCL_OUTPUT_DIR"] = str(output_dir)
+    return subprocess.run(
+        ["bash", "-eu", "-o", "pipefail", "-c", command],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+        env=environment,
+        text=True,
+    )
 ```
 
-Add prose anchors that force the three input paths and output artifacts to be explained before the solve/verify/check commands:
-
-```python
-RUNNING_EXPLANATION_FRAGMENTS = {
-    "vericcl/examples/topo/two_rank.json",
-    "vericcl/examples/sketch/allreduce_8m_1m.json",
-    "vericcl/examples/atom/constructive.json",
-    "vericcl_allreduce_8MiB_final.xml",
-    "vericcl_allreduce_8MiB_final.schedule.json",
-    "vericcl_allreduce_8MiB_final.validation.json",
-    "run-summary.json",
-    "vericcl_allreduce_8MiB_quickstart-verify",
-}
-```
-
-Extend the parametrized test to assert each fragment occurs in the running section and that the first prose occurrence of each solve input path precedes the solve command.
-
-- [ ] **Step 3: Run the new tests and confirm the current README fails**
+- [ ] **Step 3: Run the executable workflow test and confirm it fails for the expected reason**
 
 Run:
 
@@ -207,7 +145,7 @@ Run:
 .venv/bin/python -m pytest tests/integration/test_documented_commands.py -q
 ```
 
-Expected: failures for missing primary project-guide headings, forbidden Ubuntu sections, and missing staged quickstart commands.
+Expected: failure because the current READMEs do not expose the eight `vericcl-run-step` commands.
 
 - [ ] **Step 4: Rewrite the English overview, installation, and running sections**
 
@@ -215,7 +153,22 @@ In `README.md`, replace the content from `# VeriCCL` through the end of the curr
 
 - `## Overview`: project purpose, three JSON inputs, MSCCL XML/sidecar/report outputs, six directly solved operators, eight semantic operators, and the software-versus-hardware validation boundary.
 - `## Building and Installing VeriCCL`: SSH clone, HTTPS fallback, venv creation, dependency installation, editable install, `pip check`, import check, version check, and the existing one-variable Gurobi license check. Keep the installation commands concrete.
-- `## Running VeriCCL`: eight ordered one-command Bash blocks matching `RUNNING_STEP_COMMANDS`.
+- `## Running VeriCCL`: the eight ordered one-command Bash blocks from the confirmed design specification.
+
+Place these markers immediately before their corresponding Bash blocks:
+
+```text
+vericcl-run-step: set-root
+vericcl-run-step: set-output
+vericcl-run-step: create-output
+vericcl-run-step: solve
+vericcl-run-step: verify
+vericcl-run-step: check-xml
+vericcl-run-step: check-report
+vericcl-run-step: inspect-report
+```
+
+For `solve` and `verify`, place the existing `vericcl-doc-test` marker between the run-step marker and the Bash block so both extractors select the same executable command.
 
 Before the solve block, explicitly describe:
 
@@ -272,84 +225,7 @@ git commit -m "docs: add staged vericcl install and run guide"
 - Consumes: the top-level section headings and running-command contract from Task 1.
 - Produces: the complete nine-section bilingual project guide and a tested MSCCL activation/extension contract.
 
-- [ ] **Step 1: Add failing assertions for runtime and extension content**
-
-Define the extension module paths and add them, the MSCCL activation line, and the License/Citation status to `REQUIRED_README_FRAGMENTS`:
-
-```python
-EXTENSION_MODULE_PATHS = (
-    "vericcl/input",
-    "vericcl/topology",
-    "vericcl/planner",
-    "vericcl/solver",
-    "vericcl/composer",
-    "vericcl/xml",
-    "vericcl/verification",
-    "vericcl/tuning",
-    "vericcl/verification/online",
-)
-REQUIRED_README_FRAGMENTS.update({
-    "NCCL INFO Connected 1 MSCCL algorithms",
-    "License: To be determined.",
-    "Citation: To be determined.",
-})
-REQUIRED_README_FRAGMENTS.update(EXTENSION_MODULE_PATHS)
-```
-
-Add the remaining localized headings and the localized extension-boundary phrase:
-
-```python
-README_REMAINING_HEADINGS = {
-    README_EN: (
-        "## Input Configuration",
-        "## Advanced Usage",
-        "## MSCCL Runtime Evaluation",
-        "## Extending VeriCCL",
-        "## Outputs, Limitations, and Troubleshooting",
-        "## License and Citation",
-    ),
-    README_ZH: (
-        "## 输入配置",
-        "## 高级用法",
-        "## MSCCL运行时评测",
-        "## 扩展VeriCCL",
-        "## 输出、限制与故障诊断",
-        "## 许可证与引用",
-    ),
-}
-EXTENSION_BOUNDARY = {
-    README_EN: "not a stable plugin API",
-    README_ZH: "不是稳定的插件API",
-}
-```
-
-Add:
-
-```python
-@pytest.mark.parametrize("path", (README_EN, README_ZH))
-def test_readmes_define_the_extension_boundary(path):
-    assert EXTENSION_BOUNDARY[path] in path.read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize("path", (README_EN, README_ZH))
-def test_readmes_have_the_complete_ordered_project_guide(path):
-    text = path.read_text(encoding="utf-8")
-    headings = README_PRIMARY_HEADINGS[path] + README_REMAINING_HEADINGS[path]
-    positions = [text.index(heading) for heading in headings]
-    assert positions == sorted(positions)
-```
-
-- [ ] **Step 2: Run the focused test and confirm the extension contract fails**
-
-Run:
-
-```bash
-.venv/bin/python -m pytest tests/integration/test_documented_commands.py -q
-```
-
-Expected: failure because the current READMEs do not contain the complete module navigation and stable-API boundary.
-
-- [ ] **Step 3: Complete the English guide**
+- [ ] **Step 1: Complete the English guide**
 
 Reorganize the remaining English material into these exact sections:
 
@@ -380,7 +256,7 @@ Reorganize the remaining English material into these exact sections:
 
 At the beginning of this section, link `docs/runtime-configuration.md` for server/CUDA/MPI setup instead of embedding Ubuntu package installation.
 
-`Extending VeriCCL` must describe the responsibility of every module named in `EXTENSION_MODULE_PATHS` and state that the internal modules are development entry points, not a stable plugin API.
+`Extending VeriCCL` must describe the responsibility of `vericcl/input`, `vericcl/topology`, `vericcl/planner`, `vericcl/solver`, `vericcl/composer`, `vericcl/xml`, `vericcl/verification`, `vericcl/tuning`, and `vericcl/verification/online`, and state that these internal modules are development entry points, not a stable plugin API.
 
 `Outputs, Limitations, and Troubleshooting` must combine output geometry, exit codes `0/2/3/4/5`, Gurobi license limits, `offline-valid` versus `runtime-compatible`, MSCCL activation, MPI, trace, clock, and input diagnostics.
 
@@ -391,11 +267,11 @@ License: To be determined.
 Citation: To be determined.
 ```
 
-- [ ] **Step 4: Complete the Chinese guide with byte-identical commands**
+- [ ] **Step 2: Complete the Chinese guide with byte-identical commands**
 
 Mirror the English section order and technical claims in `README.zh-CN.md`. Translate prose only. Ensure all Bash blocks, code literals, external references, commits, tags, expected log text, and paths match `README.md`.
 
-- [ ] **Step 5: Run focused documentation and artifact tests**
+- [ ] **Step 3: Run the executable documentation and artifact tests**
 
 Run:
 
@@ -403,19 +279,25 @@ Run:
 .venv/bin/python -m pytest tests/integration/test_documented_commands.py tests/integration/test_workflow_artifacts.py -q
 ```
 
-Expected: all selected tests pass; the documented solve/verify commands execute, repository paths resolve, and Bash blocks are byte-identical.
+Expected: all selected tests pass; the eight-step README workflow and the existing help/example commands execute, repository paths resolve, workflow artifacts are valid, and Bash blocks are byte-identical.
 
-- [ ] **Step 6: Scan the two READMEs for excluded content**
+- [ ] **Step 4: Perform the prose and scope self-review**
 
-Run:
+Read both READMEs in full and record the checklist result in the task report:
 
-```bash
-rg -n 'SyCCL|sudo apt update|sudo apt install|Ubuntu prerequisites|Ubuntu前置依赖|CUDA, NCCL, and MPI preflight|CUDA、NCCL与MPI预检' README.md README.zh-CN.md
-```
+- no SyCCL references;
+- no diagrams;
+- no Ubuntu package-installation or operating-system preflight section;
+- each `Running VeriCCL` command has a preceding purpose/file/parameter explanation;
+- all nine sections appear in the confirmed order;
+- MSCCL activation and fallback boundaries are explicit;
+- extension modules are described as development entry points, not a stable plugin API;
+- License/Citation status is present;
+- no CUDA compilation or GPU execution claim is made.
 
-Expected: no matches.
+This is a review checklist, not an automated exact-text test.
 
-- [ ] **Step 7: Commit Task 2**
+- [ ] **Step 5: Commit Task 2**
 
 ```bash
 git add README.md README.zh-CN.md tests/integration/test_documented_commands.py
