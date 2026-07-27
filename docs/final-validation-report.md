@@ -104,7 +104,7 @@
 | Gurobi 标记矩阵 | `.venv/bin/python -m pytest -m gurobi -q` | 退出码0；14 passed, 1143 deselected |
 | hardware 标记矩阵 | `.venv/bin/python -m pytest -m hardware -q` | 退出码0；8 skipped, 1149 deselected；`not_run` |
 
-文档门禁包含中英文 README Bash 块逐字一致性检查、七个分阶段命令的执行，以及公开 `help`、`solve`、`verify` 与示例验证命令的依次执行。两份 README 的仓库相对路径由测试确认均存在且受 Git 跟踪；`Ubuntu` 和 `SyCCL` 的 README 扫描无匹配，排除内容未出现。
+文档门禁包含中英文 README Bash 块逐字一致性检查、八个分阶段命令的执行，以及公开 `help`、`solve`、`verify` 与示例验证命令的依次执行。两份 README 的仓库相对路径由测试确认均存在且受 Git 跟踪；`Ubuntu` 和 `SyCCL` 的 README 扫描无匹配，排除内容未出现。
 
 ### 静态检查
 
