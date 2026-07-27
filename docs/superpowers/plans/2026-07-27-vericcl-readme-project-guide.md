@@ -223,7 +223,7 @@ git commit -m "docs: add staged vericcl install and run guide"
 
 **Interfaces:**
 - Consumes: the top-level section headings and running-command contract from Task 1.
-- Produces: the complete nine-section bilingual project guide and a tested MSCCL activation/extension contract.
+- Produces: the complete nine-section bilingual project guide, a reviewed MSCCL activation/extension contract, and unchanged executable workflow behavior.
 
 - [ ] **Step 1: Complete the English guide**
 
