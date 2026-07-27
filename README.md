@@ -136,66 +136,7 @@ Run the software regression example independently when checking all directly sol
 .venv/bin/python -m pytest tests/e2e/test_six_collectives.py -q
 ```
 
-## MSCCL Strategy A: official source plus bundled patch
-
-Strategy A starts from the official MSCCL repository at immutable commit `b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`. The verifier checks the clean pinned base in a temporary copy, including the final hashes; the actual checkout is then patched and built.
-
-```bash
-export VERICCL_ROOT="$(pwd)"
-export CUDA_HOME=/usr/local/cuda
-export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/msccl-official"
-git clone https://github.com/microsoft/msccl.git "$MSCCL_ROOT"
-git -C "$MSCCL_ROOT" checkout --detach b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
-python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --base-tree
-cp "$VERICCL_ROOT/runtime/msccl-trace/include/vericcl_trace_format.h" "$MSCCL_ROOT/src/include/vericcl_trace_format.h"
-patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch"
-make -C "$MSCCL_ROOT" clean
-make -C "$MSCCL_ROOT" -j src.build
-test -d "$MSCCL_ROOT/build/lib"
-```
-
-`verification passed` is the expected verifier result. The output library directory is `$MSCCL_ROOT/build/lib`.
-
-## MSCCL Strategy C: pre-integrated immutable tag
-
-Strategy C uses public tag `vericcl-runtime-v0.1.0` at commit `782ee5f72cf48c1ae1a2365bcf525019f5620175`. The patched-tree verifier checks the commit and every hash in `runtime/msccl-trace/upstream.json` before the same build.
-
-```bash
-export VERICCL_ROOT="$(pwd)"
-export CUDA_HOME=/usr/local/cuda
-export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/VeriCCL-MSCCL"
-git clone --branch vericcl-runtime-v0.1.0 --depth 1 https://github.com/SlienceZDL/VeriCCL-MSCCL.git "$MSCCL_ROOT"
-test "$(git -C "$MSCCL_ROOT" rev-parse HEAD)" = 782ee5f72cf48c1ae1a2365bcf525019f5620175
-python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --patched-tree
-make -C "$MSCCL_ROOT" clean
-make -C "$MSCCL_ROOT" -j src.build
-test -d "$MSCCL_ROOT/build/lib"
-```
-
-`verification passed` is the expected verifier result. Strategies A and C have the same hashes for the trace header and runtime source files recorded in `upstream.json`; both produce `$MSCCL_ROOT/build/lib`. Static verification is not evidence of CUDA compilation or GPU execution.
-
-## NCCL Tests and clock helper build
-
-Build the current [NCCL Tests](https://github.com/NVIDIA/nccl-tests) source against the selected MSCCL tree. `MPI_HOME` uses the Ubuntu multiarch package location and is checked before compilation.
-
-```bash
-export VERICCL_ROOT="$(pwd)"
-export CUDA_HOME=/usr/local/cuda
-export PATH="$CUDA_HOME/bin:$PATH"
-export NCCL_TESTS_ROOT="$(dirname "$VERICCL_ROOT")/nccl-tests"
-export MPI_HOME="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/openmpi"
-test -f "$MPI_HOME/include/mpi.h"
-test -d "$MPI_HOME/lib"
-git clone https://github.com/NVIDIA/nccl-tests "$NCCL_TESTS_ROOT"
-make -C "$NCCL_TESTS_ROOT" -j MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME="$CUDA_HOME" NCCL_HOME="$MSCCL_ROOT/build"
-nvcc -ccbin mpicxx -O2 -std=c++11 "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync.cu" -o "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
-test -x "$NCCL_TESTS_ROOT/build/all_reduce_perf"
-test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
-```
-
-The required official build form uses Ubuntu's x86_64 Open MPI prefix. On another Ubuntu architecture, replace the literal `MPI_HOME` in the `make` command with the verified value of `$MPI_HOME`.
-
-## Input schemas and examples
+## Input Configuration
 
 All three inputs are UTF-8 JSON objects. Duplicate keys, non-finite numbers, and inconsistent dimensions are rejected. Unknown-field handling differs by input: topology validates recognized fields but currently does not reject extra keys; sketch preserves extra top-level keys but rejects unknown fields inside `collective`, `hyperparameters`, and `solver`; atom rejects unknown top-level fields.
 
@@ -233,11 +174,11 @@ Inspect the real supported examples directly:
 
 `vericcl/examples/legacy` and `vericcl/examples/templates` are reference-only and are not supported runtime inputs.
 
-## Solve and verify
+## Advanced Usage
 
 `solve` creates a new deterministic directory under `--output-dir`; `verify` checks an XML and its inferred `.schedule.json` sidecar, or a path supplied with `--sidecar`. The four smoke-test commands above show the actual syntax. Direct inputs preserve the semantics of Broadcast, Reduce, AllGather, AllReduce, AllToAll, and ReduceScatter; internal Scatter and Gather stages preserve the remaining two semantics during composition.
 
-## Overrides, hierarchy, tuning, and timeout
+### Semantic overrides, hierarchy, tuning, and timeout
 
 Semantic CLI values that differ from the sketch are rejected unless `--override-input` is present. Overrides are written to a temporary effective sketch and never mutate the input. `--tune` enables verified local repair, while positive `--timeout-s` bounds the requested workflow.
 
@@ -264,7 +205,72 @@ PY
 
 Automatic hierarchy discovers the real intra-node groups and the connected gateway group. Use `manual_hierarchy` only when its logical interfaces and dependencies have been derived explicitly.
 
-## Online validation
+For online operation, a stable `solve --online` calibration updates matching `invbw`/concurrency limits and solves again. In contrast, `verify --online` keeps the supplied XML unchanged and reports `requires_resolve=true` when recalibration indicates a new solve; its runtime environment and execution contract are specified below.
+
+## MSCCL Runtime Evaluation
+
+For CUDA, MPI, and server configuration, see [runtime configuration](docs/runtime-configuration.md). This section records the VeriCCL-specific source, activation, and evaluation contract; it does not provide an operating-system installation procedure.
+
+### Strategy A: official source plus bundled patch
+
+Strategy A starts from the official MSCCL repository at immutable commit `b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`. The verifier checks the clean pinned base in a temporary copy, including the final hashes; the actual checkout is then patched and built.
+
+```bash
+export VERICCL_ROOT="$(pwd)"
+export CUDA_HOME=/usr/local/cuda
+export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/msccl-official"
+git clone https://github.com/microsoft/msccl.git "$MSCCL_ROOT"
+git -C "$MSCCL_ROOT" checkout --detach b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
+python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --base-tree
+cp "$VERICCL_ROOT/runtime/msccl-trace/include/vericcl_trace_format.h" "$MSCCL_ROOT/src/include/vericcl_trace_format.h"
+patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch"
+make -C "$MSCCL_ROOT" clean
+make -C "$MSCCL_ROOT" -j src.build
+test -d "$MSCCL_ROOT/build/lib"
+```
+
+`verification passed` is the expected verifier result. The output library directory is `$MSCCL_ROOT/build/lib`.
+
+### Strategy C: pre-integrated immutable tag
+
+Strategy C uses public tag `vericcl-runtime-v0.1.0` at commit `782ee5f72cf48c1ae1a2365bcf525019f5620175`. The patched-tree verifier checks the commit and every hash in `runtime/msccl-trace/upstream.json` before the same build.
+
+```bash
+export VERICCL_ROOT="$(pwd)"
+export CUDA_HOME=/usr/local/cuda
+export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/VeriCCL-MSCCL"
+git clone --branch vericcl-runtime-v0.1.0 --depth 1 https://github.com/SlienceZDL/VeriCCL-MSCCL.git "$MSCCL_ROOT"
+test "$(git -C "$MSCCL_ROOT" rev-parse HEAD)" = 782ee5f72cf48c1ae1a2365bcf525019f5620175
+python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --patched-tree
+make -C "$MSCCL_ROOT" clean
+make -C "$MSCCL_ROOT" -j src.build
+test -d "$MSCCL_ROOT/build/lib"
+```
+
+`verification passed` is the expected verifier result. Strategies A and C have the same hashes for the trace header and runtime source files recorded in `upstream.json`; both produce `$MSCCL_ROOT/build/lib`. Static verification is not evidence of CUDA compilation or GPU execution.
+
+### NCCL Tests and clock helper build
+
+Build the current [NCCL Tests](https://github.com/NVIDIA/nccl-tests) source against the selected MSCCL tree after completing the site-specific MPI setup in [runtime configuration](docs/runtime-configuration.md). `MPI_HOME` must name the active MPI installation prefix.
+
+```bash
+export VERICCL_ROOT="$(pwd)"
+export CUDA_HOME=/usr/local/cuda
+export PATH="$CUDA_HOME/bin:$PATH"
+export NCCL_TESTS_ROOT="$(dirname "$VERICCL_ROOT")/nccl-tests"
+export MPI_HOME="$(dirname "$(mpicxx --showme:incdirs | awk '{print $1}')")"
+test -f "$MPI_HOME/include/mpi.h"
+test -d "$MPI_HOME/lib"
+git clone https://github.com/NVIDIA/nccl-tests "$NCCL_TESTS_ROOT"
+make -C "$NCCL_TESTS_ROOT" -j MPI=1 MPI_HOME="$MPI_HOME" CUDA_HOME="$CUDA_HOME" NCCL_HOME="$MSCCL_ROOT/build"
+nvcc -ccbin mpicxx -O2 -std=c++11 "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync.cu" -o "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
+test -x "$NCCL_TESTS_ROOT/build/all_reduce_perf"
+test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
+```
+
+`$MPI_HOME` is derived from the first public include directory reported by the active Open MPI `mpicxx` wrapper.
+
+### Online validation environment
 
 `--online` requires a runtime-compatible XML, exactly one XML per execution, and the environment below. Use real local version strings; they are part of the calibration-cache signature. Set site-specific GPU/NIC labels without embedding secrets.
 
@@ -289,11 +295,15 @@ export VERICCL_TRACE_RECORDS=1048576
 .venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --online --output-dir runs --run-id online --timeout-s 10800
 ```
 
-Calibration uses exactly 128 MiB and the input slice size. The slice size must divide 128 MiB or calibration is `not_run`. Intra-node calibration launches one process with `-g 2`; inter-node calibration launches two MPI processes with `-g 1`. A stable `solve --online` calibration updates matching `invbw`/concurrency limits and solves again. `verify --online` keeps the supplied XML unchanged and reports `requires_resolve=true` when recalibration indicates a new solve.
+Calibration uses exactly 128 MiB and the input slice size. The slice size must divide 128 MiB or calibration is `not_run`. Intra-node calibration launches one process with `-g 2`; inter-node calibration launches two MPI processes with `-g 1`.
 
 Release measurement and trace diagnosis are separate runs. Release uses five warmups, 20 measurements, correctness checks, and `VERICCL_TRACE_ENABLE=0`; trace uses zero warmups, 20 measurements, `-c 0`, and `VERICCL_TRACE_ENABLE=1`. Trace cost is never performance data.
 
-## Single-node XML execution
+### MSCCL activation boundary
+
+The positive XML-load signal is `NCCL INFO Connected 1 MSCCL algorithms`. Missing this signal, or any NCCL fallback to a non-MSCCL algorithm, is not VeriCCL schedule validation; stop and diagnose activation before interpreting correctness, trace, or performance output.
+
+### Single-node XML execution
 
 The fixed runtime contract is `MSCCL_CHUNKSTEPS=4`, `MSCCL_SLICESTEPS=4`, `NCCL_PROTO=Simple`, XML `cnt=1`, and `NCCL_BUFFSIZE=2*slice_size_bytes`. For the packaged 1 MiB slice, the buffer is 2 MiB. Set exactly one XML and match its message size, datatype, reduction operation, root, rank count, and in-place mode.
 
@@ -327,7 +337,7 @@ export VERICCL_TRACE_FILE_PREFIX=/absolute/path/to/vericcl-step
 "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 20 -c 0 -d float -o sum -g 2
 ```
 
-## Multi-node XML execution
+### Multi-node XML execution
 
 Use one MPI process per rank and one GPU per process. This eight-rank example uses four ranks on each of two hosts. The hostfile and XML must exist at the same paths on all nodes.
 
@@ -347,7 +357,13 @@ export VERICCL_CALIBRATION_LINK_CLASS=inter_node
 mpirun -np 8 -N 4 --hostfile "$VERICCL_MPI_HOSTFILE" -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 5 -n 20 -c 1 -d float -o sum -g 1
 ```
 
-## Outputs, exit codes, and troubleshooting
+## Extending VeriCCL
+
+The internal modules are development entry points, not a stable plugin API. `vericcl/input` resolves and validates the topology, sketch, and atom inputs; `vericcl/topology` represents links, nodes, shared resources, and timing constraints; and `vericcl/planner` constructs staged collective plans.
+
+`vericcl/solver` searches schedule candidates under those constraints, `vericcl/composer` composes staged operators into collective semantics, and `vericcl/xml` lowers accepted schedules to MSCCL XML and sidecars. `vericcl/verification` performs offline semantic, structural, and XML validation; `vericcl/tuning` repairs and revalidates candidate schedules; and `vericcl/verification/online` calibrates hardware and validates a runtime execution.
+
+## Outputs, Limitations, and Troubleshooting
 
 For the smoke input and run ID `docs`, the directory is `vericcl_allreduce_8MiB_docs/`. It contains `resolved-input.json`, `run-summary.json`, `schedules/`, `reports/`, `traces/`, the final `.xml`, `.schedule.json`, and `.validation.json`. Offline-valid schedules that exceed MSCCL limits use `.candidate.xml` and must not be executed until re-solved.
 
@@ -356,14 +372,14 @@ Exit codes are: `0` for offline-valid completion (including runtime-warning cand
 Common diagnoses:
 
 - CUDA/MSCCL build failure: recheck the driver/toolkit/host-compiler compatibility table, `CUDA_HOME`, GPU architecture, and the full compiler output.
-- `mpi.h` or MPI link failure: re-run the multiarch `MPI_HOME` checks and confirm `libopenmpi-dev` is installed.
+- `mpi.h` or MPI link failure: confirm that the active Open MPI wrapper reports the intended include directory and derived `MPI_HOME`, then recheck the compiler and linker output.
 - MSCCL verifier failure: use the exact upstream commit or fork tag, a clean Strategy A checkout, and an unmodified bundled header/patch.
 - `Model too large...`: activate a full Gurobi license; reinstalling `gurobipy` does not expand the bundled limit.
 - Missing online binary/library: check the three `VERICCL_*_BUILD_DIR`/binary paths and propagate `LD_LIBRARY_PATH` to every MPI rank.
 - Runtime mismatch: use Simple protocol, `NCCL_BUFFSIZE=2*slice_size_bytes`, step constants `4/4`, `cnt=1`, one XML, and matching NCCL Tests arguments.
 - Trace/clock failure: keep release and trace runs separate, increase `VERICCL_TRACE_RECORDS` if required, and inspect clock uncertainty and per-rank trace files.
 
-## Software tests and references
+### Software tests and references
 
 Run hardware-independent tests on any development host:
 
@@ -373,6 +389,11 @@ Run hardware-independent tests on any development host:
 git diff --check
 ```
 
-CUDA compilation and GPU execution were not performed on the macOS documentation host. Run the marked server build and execution commands on the target Ubuntu GPU environment before reporting hardware validation.
+CUDA compilation and GPU execution were not performed on the macOS documentation host. Run the marked server build and execution commands in the configured target GPU environment before reporting hardware validation.
 
-Further references: [runtime configuration](docs/runtime-configuration.md), [validation reports](docs/validation-report.md), [MSCCL trace patch](runtime/msccl-trace/README.md), [migration notes](MIGRATION.md), [NVIDIA CUDA installation](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html), [NCCL Tests](https://github.com/NVIDIA/nccl-tests), and [official MSCCL](https://github.com/microsoft/msccl.git).
+Further references: [runtime configuration](docs/runtime-configuration.md), [validation reports](docs/validation-report.md), [MSCCL trace patch](runtime/msccl-trace/README.md), [migration notes](MIGRATION.md), [NCCL Tests](https://github.com/NVIDIA/nccl-tests), and [official MSCCL](https://github.com/microsoft/msccl.git).
+
+## License and Citation
+
+License: To be determined.
+Citation: To be determined.

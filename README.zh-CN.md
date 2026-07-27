@@ -136,66 +136,7 @@ test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce
 .venv/bin/python -m pytest tests/e2e/test_six_collectives.py -q
 ```
 
-## MSCCL策略A：官方源码与内置补丁
-
-策略A基于官方MSCCL仓库的不可变commit `b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`。验证器在临时副本中检查干净的固定版本基础树及最终哈希，然后对实际checkout应用补丁并构建。
-
-```bash
-export VERICCL_ROOT="$(pwd)"
-export CUDA_HOME=/usr/local/cuda
-export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/msccl-official"
-git clone https://github.com/microsoft/msccl.git "$MSCCL_ROOT"
-git -C "$MSCCL_ROOT" checkout --detach b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
-python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --base-tree
-cp "$VERICCL_ROOT/runtime/msccl-trace/include/vericcl_trace_format.h" "$MSCCL_ROOT/src/include/vericcl_trace_format.h"
-patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch"
-make -C "$MSCCL_ROOT" clean
-make -C "$MSCCL_ROOT" -j src.build
-test -d "$MSCCL_ROOT/build/lib"
-```
-
-验证器预期输出`verification passed`，库目录为`$MSCCL_ROOT/build/lib`。
-
-## MSCCL策略C：预集成不可变tag
-
-策略C使用公开tag `vericcl-runtime-v0.1.0`及commit `782ee5f72cf48c1ae1a2365bcf525019f5620175`。patched-tree验证器先检查commit及`runtime/msccl-trace/upstream.json`中的全部哈希，再执行相同构建。
-
-```bash
-export VERICCL_ROOT="$(pwd)"
-export CUDA_HOME=/usr/local/cuda
-export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/VeriCCL-MSCCL"
-git clone --branch vericcl-runtime-v0.1.0 --depth 1 https://github.com/SlienceZDL/VeriCCL-MSCCL.git "$MSCCL_ROOT"
-test "$(git -C "$MSCCL_ROOT" rev-parse HEAD)" = 782ee5f72cf48c1ae1a2365bcf525019f5620175
-python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --patched-tree
-make -C "$MSCCL_ROOT" clean
-make -C "$MSCCL_ROOT" -j src.build
-test -d "$MSCCL_ROOT/build/lib"
-```
-
-验证器预期输出`verification passed`。策略A与策略C的trace头文件及运行时源码哈希均与`upstream.json`一致，并生成`$MSCCL_ROOT/build/lib`。静态验证不能证明CUDA编译或GPU执行成功。
-
-## NCCL Tests与时钟辅助程序构建
-
-使用当前[NCCL Tests](https://github.com/NVIDIA/nccl-tests)源码，并链接所选MSCCL树。`MPI_HOME`采用Ubuntu multiarch软件包位置，编译前需检查头文件和库目录。
-
-```bash
-export VERICCL_ROOT="$(pwd)"
-export CUDA_HOME=/usr/local/cuda
-export PATH="$CUDA_HOME/bin:$PATH"
-export NCCL_TESTS_ROOT="$(dirname "$VERICCL_ROOT")/nccl-tests"
-export MPI_HOME="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/openmpi"
-test -f "$MPI_HOME/include/mpi.h"
-test -d "$MPI_HOME/lib"
-git clone https://github.com/NVIDIA/nccl-tests "$NCCL_TESTS_ROOT"
-make -C "$NCCL_TESTS_ROOT" -j MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME="$CUDA_HOME" NCCL_HOME="$MSCCL_ROOT/build"
-nvcc -ccbin mpicxx -O2 -std=c++11 "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync.cu" -o "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
-test -x "$NCCL_TESTS_ROOT/build/all_reduce_perf"
-test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
-```
-
-规定的官方构建形式使用Ubuntu x86_64 Open MPI前缀。其他Ubuntu架构应将`make`命令中的`MPI_HOME`字面量替换为已验证的`$MPI_HOME`值。
-
-## 输入schema与示例
+## 输入配置
 
 三类输入均为UTF-8 JSON对象。重复键、非有限数值及不一致维度会被拒绝。不同输入对未知字段的处理不同：topology验证已识别字段，但当前不拒绝额外键；sketch保留额外的顶层键，但会拒绝`collective`、`hyperparameters`和`solver`内部的未知字段；atom拒绝未知的顶层字段。
 
@@ -233,11 +174,11 @@ Atom（`vericcl/examples/atom/constructive.json`与`vericcl/examples/atom/defaul
 
 `vericcl/examples/legacy`与`vericcl/examples/templates`仅供参考，不是受支持的运行时输入。
 
-## 求解与验证
+## 高级用法
 
 `solve`在`--output-dir`下创建新的确定性目录；`verify`检查XML及自动推导的`.schedule.json` sidecar，也可用`--sidecar`指定路径。前述四个冒烟命令展示真实语法。直接输入保留Broadcast、Reduce、AllGather、AllReduce、AllToAll和ReduceScatter语义；组合过程中的内部Scatter与Gather阶段保留另外两类语义。
 
-## 覆盖、分层、调优与超时
+### 语义覆盖、分层、调优与超时
 
 若CLI语义参数与sketch不同，必须提供`--override-input`，否则拒绝执行。覆盖值写入临时effective sketch，不修改输入。`--tune`启用经验证的局部修复，正值`--timeout-s`限制当前工作流。
 
@@ -264,7 +205,72 @@ PY
 
 自动分层会发现实际机内通信组与连通的gateway组。仅当已显式推导逻辑接口和依赖时，才使用`manual_hierarchy`。
 
-## 在线验证
+在线操作中，`solve --online`获得稳定校准后，更新匹配的`invbw`/并发上限并重新求解。相对地，`verify --online`保持输入XML不变；重新校准需要新求解时报告`requires_resolve=true`。其运行时环境和执行契约见下文。
+
+## MSCCL运行时评估
+
+CUDA、MPI及服务器配置请参阅[运行时配置](docs/runtime-configuration.md)。本节仅定义VeriCCL相关的源码、激活与评估契约，不提供操作系统安装流程。
+
+### 策略A：官方源码与内置补丁
+
+策略A基于官方MSCCL仓库的不可变commit `b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`。验证器在临时副本中检查干净的固定版本基础树及最终哈希，然后对实际checkout应用补丁并构建。
+
+```bash
+export VERICCL_ROOT="$(pwd)"
+export CUDA_HOME=/usr/local/cuda
+export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/msccl-official"
+git clone https://github.com/microsoft/msccl.git "$MSCCL_ROOT"
+git -C "$MSCCL_ROOT" checkout --detach b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
+python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --base-tree
+cp "$VERICCL_ROOT/runtime/msccl-trace/include/vericcl_trace_format.h" "$MSCCL_ROOT/src/include/vericcl_trace_format.h"
+patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch"
+make -C "$MSCCL_ROOT" clean
+make -C "$MSCCL_ROOT" -j src.build
+test -d "$MSCCL_ROOT/build/lib"
+```
+
+验证器预期输出`verification passed`，库目录为`$MSCCL_ROOT/build/lib`。
+
+### 策略C：预集成不可变tag
+
+策略C使用公开tag `vericcl-runtime-v0.1.0`及commit `782ee5f72cf48c1ae1a2365bcf525019f5620175`。patched-tree验证器先检查commit及`runtime/msccl-trace/upstream.json`中的全部哈希，再执行相同构建。
+
+```bash
+export VERICCL_ROOT="$(pwd)"
+export CUDA_HOME=/usr/local/cuda
+export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/VeriCCL-MSCCL"
+git clone --branch vericcl-runtime-v0.1.0 --depth 1 https://github.com/SlienceZDL/VeriCCL-MSCCL.git "$MSCCL_ROOT"
+test "$(git -C "$MSCCL_ROOT" rev-parse HEAD)" = 782ee5f72cf48c1ae1a2365bcf525019f5620175
+python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --patched-tree
+make -C "$MSCCL_ROOT" clean
+make -C "$MSCCL_ROOT" -j src.build
+test -d "$MSCCL_ROOT/build/lib"
+```
+
+验证器预期输出`verification passed`。策略A与策略C的trace头文件及运行时源码哈希均与`upstream.json`一致，并生成`$MSCCL_ROOT/build/lib`。静态验证不能证明CUDA编译或GPU执行成功。
+
+### NCCL Tests与时钟辅助程序构建
+
+完成[运行时配置](docs/runtime-configuration.md)中的站点MPI配置后，针对所选MSCCL树构建当前[NCCL Tests](https://github.com/NVIDIA/nccl-tests)源码。`MPI_HOME`必须指向当前MPI安装前缀。
+
+```bash
+export VERICCL_ROOT="$(pwd)"
+export CUDA_HOME=/usr/local/cuda
+export PATH="$CUDA_HOME/bin:$PATH"
+export NCCL_TESTS_ROOT="$(dirname "$VERICCL_ROOT")/nccl-tests"
+export MPI_HOME="$(dirname "$(mpicxx --showme:incdirs | awk '{print $1}')")"
+test -f "$MPI_HOME/include/mpi.h"
+test -d "$MPI_HOME/lib"
+git clone https://github.com/NVIDIA/nccl-tests "$NCCL_TESTS_ROOT"
+make -C "$NCCL_TESTS_ROOT" -j MPI=1 MPI_HOME="$MPI_HOME" CUDA_HOME="$CUDA_HOME" NCCL_HOME="$MSCCL_ROOT/build"
+nvcc -ccbin mpicxx -O2 -std=c++11 "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync.cu" -o "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
+test -x "$NCCL_TESTS_ROOT/build/all_reduce_perf"
+test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
+```
+
+`$MPI_HOME`由当前Open MPI `mpicxx`包装器报告的第一个公开包含目录推导。
+
+### 在线验证环境
 
 `--online`要求运行时兼容XML、每次执行仅加载一个XML，并设置下述环境变量。应填入实际本地版本字符串；这些字段属于校准缓存签名。GPU/NIC标签使用站点实际值，但不得包含秘密信息。
 
@@ -289,11 +295,15 @@ export VERICCL_TRACE_RECORDS=1048576
 .venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --online --output-dir runs --run-id online --timeout-s 10800
 ```
 
-校准固定使用128 MiB与输入slice大小。slice大小必须整除128 MiB，否则校准状态为`not_run`。机内校准由一个进程以`-g 2`启动；节点间校准由两个MPI进程分别以`-g 1`启动。`solve --online`获得稳定校准后，更新匹配的`invbw`/并发上限并重新求解。`verify --online`保持输入XML不变；重新校准需要新求解时报告`requires_resolve=true`。
+校准固定使用128 MiB与输入slice大小。slice大小必须整除128 MiB，否则校准状态为`not_run`。机内校准由一个进程以`-g 2`启动；节点间校准由两个MPI进程分别以`-g 1`启动。
 
 release测量与trace诊断必须分开运行。release使用5次预热、20次测量、正确性检查及`VERICCL_TRACE_ENABLE=0`；trace使用0次预热、20次测量、`-c 0`及`VERICCL_TRACE_ENABLE=1`。trace开销不能作为性能数据。
 
-## 单节点XML执行
+### MSCCL激活边界
+
+XML成功加载的正向信号是`NCCL INFO Connected 1 MSCCL algorithms`。缺少此信号或NCCL回退到非MSCCL算法，均不构成VeriCCL调度验证；在解读正确性、trace或性能输出前，应停止并诊断激活状态。
+
+### 单节点XML执行
 
 固定运行时契约为`MSCCL_CHUNKSTEPS=4`、`MSCCL_SLICESTEPS=4`、`NCCL_PROTO=Simple`、XML `cnt=1`及`NCCL_BUFFSIZE=2*slice_size_bytes`。内置示例的slice为1 MiB，因此缓冲区为2 MiB。每次仅设置一个XML，并确保消息大小、datatype、归约操作、root、Rank数及in-place模式与XML一致。
 
@@ -327,7 +337,7 @@ export VERICCL_TRACE_FILE_PREFIX=/absolute/path/to/vericcl-step
 "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 20 -c 0 -d float -o sum -g 2
 ```
 
-## 多节点XML执行
+### 多节点XML执行
 
 每个Rank启动一个MPI进程，每个进程使用一个GPU。以下八Rank示例在两个主机上各启动四个Rank；hostfile与XML必须在所有节点的相同路径存在。
 
@@ -347,7 +357,13 @@ export VERICCL_CALIBRATION_LINK_CLASS=inter_node
 mpirun -np 8 -N 4 --hostfile "$VERICCL_MPI_HOSTFILE" -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 5 -n 20 -c 1 -d float -o sum -g 1
 ```
 
-## 输出、退出码与故障诊断
+## 扩展 VeriCCL
+
+这些内部模块是开发入口，而非稳定的插件API。`vericcl/input`负责解析和验证topology、sketch与atom输入；`vericcl/topology`表示链路、节点、共享资源和时间约束；`vericcl/planner`构建阶段化集合通信计划。
+
+`vericcl/solver`在上述约束下搜索调度候选，`vericcl/composer`将阶段化算子组合为集合通信语义，`vericcl/xml`将已接受的调度降级为MSCCL XML及sidecar。`vericcl/verification`执行离线语义、结构和XML验证；`vericcl/tuning`修复并重新验证候选调度；`vericcl/verification/online`进行硬件校准并验证运行时执行。
+
+## 输出、限制与故障诊断
 
 对于冒烟输入及run ID `docs`，目录名为`vericcl_allreduce_8MiB_docs/`，其中包含`resolved-input.json`、`run-summary.json`、`schedules/`、`reports/`、`traces/`以及最终`.xml`、`.schedule.json`和`.validation.json`。超过MSCCL限制但离线有效的调度使用`.candidate.xml`，在重新求解前不得执行。
 
@@ -356,14 +372,14 @@ mpirun -np 8 -N 4 --hostfile "$VERICCL_MPI_HOSTFILE" -x LD_LIBRARY_PATH -x NCCL_
 常见故障诊断：
 
 - CUDA/MSCCL构建失败：重新检查驱动、Toolkit、主机编译器兼容性表、`CUDA_HOME`、GPU架构及完整编译输出。
-- 缺少`mpi.h`或MPI链接失败：重新执行multiarch `MPI_HOME`检查，并确认已安装`libopenmpi-dev`。
+- 缺少`mpi.h`或MPI链接失败：确认当前Open MPI包装器报告预期包含目录及推导出的`MPI_HOME`，然后重新检查编译器和链接器输出。
 - MSCCL验证失败：使用精确的上游commit或fork tag、干净的策略A checkout及未修改的内置头文件与补丁。
 - `Model too large...`：激活完整Gurobi许可证；重新安装`gurobipy`不会扩大内置许可证限制。
 - 在线binary/库缺失：检查三个`VERICCL_*_BUILD_DIR`/binary路径，并向每个MPI Rank传播`LD_LIBRARY_PATH`。
 - 运行时不匹配：使用Simple协议、`NCCL_BUFFSIZE=2*slice_size_bytes`、step常量`4/4`、`cnt=1`、单个XML及匹配的NCCL Tests参数。
 - Trace/时钟失败：分离release与trace运行，按需增大`VERICCL_TRACE_RECORDS`，并检查时钟误差和各Rank trace文件。
 
-## 软件测试与参考资料
+### 软件测试与参考资料
 
 可在任意开发主机运行不依赖硬件的测试：
 
@@ -373,6 +389,11 @@ mpirun -np 8 -N 4 --hostfile "$VERICCL_MPI_HOSTFILE" -x LD_LIBRARY_PATH -x NCCL_
 git diff --check
 ```
 
-本次文档工作未在macOS文档主机执行CUDA编译或GPU运行。报告硬件验证结果前，必须在目标Ubuntu GPU环境执行已标明的服务器构建与运行命令。
+本次文档工作未在macOS文档主机执行CUDA编译或GPU运行。报告硬件验证结果前，必须在已配置的目标GPU环境执行已标明的服务器构建与运行命令。
 
-其他参考资料：[运行时配置](docs/runtime-configuration.md)、[验证报告](docs/validation-report.md)、[MSCCL trace补丁](runtime/msccl-trace/README.md)、[迁移说明](MIGRATION.md)、[NVIDIA CUDA安装](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html)、[NCCL Tests](https://github.com/NVIDIA/nccl-tests)及[官方MSCCL](https://github.com/microsoft/msccl.git)。
+其他参考资料：[运行时配置](docs/runtime-configuration.md)、[验证报告](docs/validation-report.md)、[MSCCL trace补丁](runtime/msccl-trace/README.md)、[迁移说明](MIGRATION.md)、[NCCL Tests](https://github.com/NVIDIA/nccl-tests)及[官方MSCCL](https://github.com/microsoft/msccl.git)。
+
+## 许可证与引用
+
+License: To be determined.
+Citation: To be determined.
