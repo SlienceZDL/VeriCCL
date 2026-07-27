@@ -4,7 +4,7 @@
 
 ## 目标
 
-将英文`README.md`和中文`README.zh-CN.md`整理为面向研究人员和工程使用者的项目指南。文档参考SyCCL的求解器安装、输入配置、运行与扩展说明，以及MSCCL的运行时构建、XML加载和实机评测说明。
+将英文`README.md`和中文`README.zh-CN.md`整理为面向研究人员和工程使用者的项目指南。文档覆盖VeriCCL安装、输入配置、求解、验证和扩展，并说明MSCCL运行时构建、XML加载和实机评测方法。
 
 README必须让新用户能够完成以下主流程：
 
@@ -38,27 +38,48 @@ README必须让新用户能够完成以下主流程：
 
 ### 2. Building and Installing VeriCCL
 
-采用SyCCL式连续操作流程，提供SSH和HTTPS两种克隆方式。主路径依次执行：
+本节提供可直接执行的SSH安装命令：
 
-1. `git clone`。
-2. `cd VeriCCL`。
-3. 创建Python虚拟环境。
-4. 更新`pip`、`setuptools`和`wheel`。
-5. 安装`requirements-dev.txt`。
-6. 以editable模式安装VeriCCL。
-7. 使用`pip check`、导入检查和`vericcl --version`验证安装。
+```bash
+git clone git@github.com:SlienceZDL/VeriCCL.git
+cd VeriCCL
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pip install -e .
+export VERICCL_ROOT="$(pwd)"
+.venv/bin/python -m pip check
+.venv/bin/python -c 'import vericcl, gurobipy, lxml, numpy, z3; print(vericcl.__version__)'
+.venv/bin/python -m vericcl --version
+```
+
+同时提供HTTPS克隆替代命令，后续安装命令保持相同：
+
+```bash
+git clone https://github.com/SlienceZDL/VeriCCL.git
+cd VeriCCL
+```
+
+预期版本为`0.1.0`。任一安装命令失败时，README必须指出失败命令及对应依赖，不得仅给出“检查环境”的模糊建议。
 
 Gurobi许可证作为VeriCCL求解依赖在本节之后单独说明。构造式后端的无MILP示例继续作为无需完整Gurobi许可证的基础检查路径。
 
 ### 3. Running VeriCCL
 
-首先说明三类输入及现有示例位置，然后提供连续的最小运行流程：
+首先说明三类输入及现有示例位置，然后提供以下可直接执行的最小求解与验证流程：
 
-1. 设置新的输出根目录。
-2. 执行`vericcl solve`。
-3. 定位生成的最终XML。
-4. 执行`vericcl verify`。
-5. 检查最终验证报告和运行摘要。
+```bash
+export VERICCL_ROOT="$(pwd)"
+export VERICCL_OUTPUT_DIR="$VERICCL_ROOT/runs/readme-$(date +%Y%m%dT%H%M%S)"
+mkdir -p "$VERICCL_OUTPUT_DIR"
+.venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir "$VERICCL_OUTPUT_DIR" --run-id quickstart
+.venv/bin/python -m vericcl verify --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir "$VERICCL_OUTPUT_DIR" --run-id quickstart-verify --xml "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml"
+test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml"
+test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json"
+.venv/bin/python -m json.tool "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json"
+```
+
+README必须逐项说明命令中的topology、sketch、atom、输出根目录和run ID，并给出生成XML、sidecar、验证报告与运行摘要的具体路径模式。
 
 现有四条文档测试标记必须保留。命令必须使用仓库中真实存在的`two_rank.json`、`allreduce_8m_1m.json`和`constructive.json`，并保持可由测试直接执行。
 
@@ -99,7 +120,7 @@ Gurobi许可证作为VeriCCL求解依赖在本节之后单独说明。构造式�
 
 ### 7. Extending VeriCCL
 
-参考SyCCL的扩展章节，按实际仓库模块提供开发导航：
+按实际仓库模块提供扩展与开发导航：
 
 - `vericcl/input`：输入解析和schema。
 - `vericcl/topology`：拓扑与共享资源建模。
