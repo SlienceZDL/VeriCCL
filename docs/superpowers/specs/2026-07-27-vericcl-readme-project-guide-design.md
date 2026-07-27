@@ -66,20 +66,69 @@ Gurobi许可证作为VeriCCL求解依赖在本节之后单独说明。构造式�
 
 ### 3. Running VeriCCL
 
-首先说明三类输入及现有示例位置，然后提供以下可直接执行的最小求解与验证流程：
+首先说明三类输入及现有示例位置，然后将最小求解与验证流程拆分为独立步骤。每条命令前必须解释命令目的、输入文件指向、输出文件指向和关键参数，不得先给出整块命令再集中解释。
+
+第一步说明`VERICCL_ROOT`必须指向刚完成安装的VeriCCL仓库根目录，后续相对路径均以该目录为起点：
 
 ```bash
 export VERICCL_ROOT="$(pwd)"
+```
+
+第二步说明每次求解必须使用新的输出根目录，避免覆盖已有运行结果。该变量指向本次README示例的所有输出：
+
+```bash
 export VERICCL_OUTPUT_DIR="$VERICCL_ROOT/runs/readme-$(date +%Y%m%dT%H%M%S)"
+```
+
+第三步说明创建上述输出根目录；VeriCCL将在其下创建包含算子名、数据大小和run ID的运行目录：
+
+```bash
 mkdir -p "$VERICCL_OUTPUT_DIR"
+```
+
+第四步在命令前逐项解释：
+
+- `--topology vericcl/examples/topo/two_rank.json`指向2 Rank有向互连拓扑。
+- `--sketch vericcl/examples/sketch/allreduce_8m_1m.json`指向8 MiB AllReduce、1 MiB slice的通信需求与求解参数。
+- `--atoms vericcl/examples/atom/constructive.json`指向构造式求解策略，不调用MILP后端。
+- `--output-dir "$VERICCL_OUTPUT_DIR"`指定本次运行的输出根目录。
+- `--run-id quickstart`为运行目录增加稳定标识。
+
+随后给出单独的求解命令：
+
+```bash
 .venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir "$VERICCL_OUTPUT_DIR" --run-id quickstart
+```
+
+第五步说明求解结果位于`$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/`。验证命令复用相同三类输入，`--xml`明确指向刚生成的最终XML，`--run-id quickstart-verify`标识验证运行：
+
+```bash
 .venv/bin/python -m vericcl verify --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir "$VERICCL_OUTPUT_DIR" --run-id quickstart-verify --xml "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml"
+```
+
+第六步在每条检查命令前分别说明目标文件。首先检查最终MSCCL XML是否存在：
+
+```bash
 test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml"
+```
+
+然后检查求解阶段生成的最终离线验证报告是否存在：
+
+```bash
 test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json"
+```
+
+最后说明以下命令格式化输出最终验证报告，用于查看正确性状态、运行时兼容性和调优策略：
+
+```bash
 .venv/bin/python -m json.tool "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json"
 ```
 
-README必须逐项说明命令中的topology、sketch、atom、输出根目录和run ID，并给出生成XML、sidecar、验证报告与运行摘要的具体路径模式。
+README还必须明确：
+
+- `$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.schedule.json`是最终XML对应的sidecar，保存调度语义、依赖和artifact binding信息。
+- `$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/run-summary.json`保存求解workflow的状态、候选和最终artifact摘要。
+- `$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart-verify/`是独立`verify`命令的输出目录，不能与求解阶段的最终验证报告混为同一文件。
 
 现有四条文档测试标记必须保留。命令必须使用仓库中真实存在的`two_rank.json`、`allreduce_8m_1m.json`和`constructive.json`，并保持可由测试直接执行。
 
