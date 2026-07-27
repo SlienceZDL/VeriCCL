@@ -2,54 +2,17 @@
 
 [Chinese](README.zh-CN.md)
 
-## Overview and supported collectives
+## Overview
 
-VeriCCL generates and validates MSCCL XML schedules from topology, sketch, and atom JSON inputs. It checks input, collective semantics, state, topology, timing, resources, buffers, endpoints, deadlock freedom, XML compatibility, BDD flow, event simulation, and optional online execution.
+VeriCCL plans, solves, and validates collective-communication schedules. It consumes topology, sketch, and atom JSON inputs, then produces MSCCL XML, a schedule sidecar, and an offline validation report.
 
-Direct solving supports `broadcast`, `reduce`, `allgather`, `allreduce`, `alltoall`, and `reduce_scatter`. `scatter` and `gather` remain fully defined collective semantics, but are internal composition stages rather than direct input operators. Hierarchical plans compose these eight semantics into a schedule that satisfies the requested global collective.
+Direct solving supports `broadcast`, `reduce`, `allgather`, `allreduce`, `alltoall`, and `reduce_scatter`. `scatter` and `gather` are internal staged operators; together with the six directly solved operators, they define eight collective semantics.
 
-The supported server baseline is x86_64 Ubuntu 22.04 or Ubuntu 24.04, Python 3.10-3.12, and one or more NVIDIA GPUs. Multi-node runs additionally require passwordless SSH, synchronized clocks, and the same installation paths on every node.
+The workflow below validates generated artifacts in software. CUDA compilation, MSCCL loading, GPU execution, and performance measurement remain separate hardware-dependent validation steps; see [runtime configuration](docs/runtime-configuration.md) before preparing those environments.
 
-## Installation modes
+## Building and Installing VeriCCL
 
-Offline use needs Python and Gurobi. Full online use additionally needs a compatible NVIDIA driver and CUDA Toolkit, the VeriCCL MSCCL runtime, Open MPI, MPI-enabled NCCL Tests, and the clock helper. Either MSCCL Strategy A or Strategy C below produces `$MSCCL_ROOT/build/lib` with the same runtime-relevant source hashes.
-
-## Ubuntu prerequisites
-
-Run the exact package sequence on Ubuntu 22.04 or Ubuntu 24.04:
-
-```bash
-sudo apt update
-sudo apt install -y build-essential git patch python3 python3-dev python3-pip python3-venv openmpi-bin libopenmpi-dev wget ca-certificates
-```
-
-CUDA is intentionally not pinned here. Select the server driver and CUDA Toolkit from NVIDIA's current compatibility tables and the [CUDA Installation Guide for Linux](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html). Confirm that the CUDA-supported host compiler and the target GPU architecture are compatible before compiling MSCCL.
-
-## CUDA, NCCL, and MPI preflight
-
-Set `CUDA_HOME` to the installed toolkit. The Open MPI prefix below follows Ubuntu's multiarch package layout and avoids resolving the alternatives wrapper to `/usr`.
-
-```bash
-uname -m
-. /etc/os-release && printf '%s %s\n' "$NAME" "$VERSION_ID"
-python3 --version
-gcc --version
-nvidia-smi
-export CUDA_HOME=/usr/local/cuda
-test -x "$CUDA_HOME/bin/nvcc"
-"$CUDA_HOME/bin/nvcc" --version
-mpirun --version
-mpicxx --showme:version
-export MPI_HOME="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/openmpi"
-test -f "$MPI_HOME/include/mpi.h"
-test -d "$MPI_HOME/lib"
-```
-
-These commands verify discovery, not end-to-end CUDA or NCCL compatibility. The active NCCL implementation for later tests is built through MSCCL.
-
-## Clone and Python install
-
-SSH is the primary clone path:
+Clone with SSH, create a virtual environment, install the development dependencies, and install VeriCCL in editable mode:
 
 ```bash
 git clone git@github.com:SlienceZDL/VeriCCL.git
@@ -60,14 +23,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 ```
 
-If SSH authentication is unavailable, use HTTPS and then run the same virtual-environment commands from the preceding block:
+If SSH authentication is unavailable, clone with HTTPS and run the same virtual-environment commands from the preceding block:
 
 ```bash
 git clone https://github.com/SlienceZDL/VeriCCL.git
 cd VeriCCL
 ```
 
-Verify the editable package and its imports:
+Set the repository root and verify dependencies, imports, and the CLI version:
 
 ```bash
 export VERICCL_ROOT="$(pwd)"
@@ -78,11 +41,9 @@ export VERICCL_ROOT="$(pwd)"
 
 Expected version literal: `0.1.0`.
 
-## Gurobi license
+### Gurobi license check
 
-The `gurobipy` wheel includes a size-limited license only. It is sufficient for the one-variable check below, but full VeriCCL MILP models require an appropriate academic, commercial, evaluation, WLS, local, or network license. Constructive-only runs can use `vericcl/examples/atom/constructive.json` without invoking the MILP solver.
-
-On Linux, common default license locations are `~/gurobi.lic` and `/opt/gurobi/gurobi.lic`. For a non-default file, set `GRB_LICENSE_FILE` to its absolute path. Follow Gurobi's [Python installation guidance](https://support.gurobi.com/hc/en-us/articles/360044290292-How-do-I-install-Gurobi-for-Python) and [full-license guidance](https://support.gurobi.com/hc/en-us/articles/360051597492-How-do-I-resolve-a-Model-too-large-for-size-limited-Gurobi-license-error). Never commit a license file, WLS credentials, access IDs, secrets, or a site-specific token.
+The one-variable check confirms that the active Gurobi license can solve a minimal model. The constructive quickstart below disables MILP and does not require a full Gurobi license.
 
 ```bash
 .venv/bin/python - <<'PY'
@@ -97,38 +58,83 @@ print("gurobi optimize check passed")
 PY
 ```
 
-Expected result literal: `gurobi optimize check passed`. A later `Model too large for size-limited Gurobi license` error means the import works but the active license is not suitable for the requested MILP.
+Expected result literal: `gurobi optimize check passed`.
 
-## Offline smoke test
+## Running VeriCCL
 
-The following four marker commands are hardware-independent and are executed in order by the documentation test. Create a new output root first because run directories are never overwritten:
-
-```bash
-export VERICCL_OUTPUT_DIR="$VERICCL_ROOT/runs/docs-smoke-$(date +%Y%m%dT%H%M%S)"
-mkdir -p "$VERICCL_OUTPUT_DIR"
-```
+The packaged inputs are `vericcl/examples/topo/two_rank.json`, `vericcl/examples/sketch/allreduce_8m_1m.json`, and `vericcl/examples/atom/constructive.json`. The help command lists the available CLI operations:
 
 <!-- vericcl-doc-test: help -->
 ```bash
 .venv/bin/python -m vericcl --help
 ```
 
-<!-- vericcl-doc-test: solve -->
+Set `VERICCL_ROOT` to the root of the installed VeriCCL repository. All following relative paths start from this directory.
+
+<!-- vericcl-run-step: set-root -->
 ```bash
-.venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir ${VERICCL_OUTPUT_DIR} --run-id docs
+export VERICCL_ROOT="$(pwd)"
 ```
 
+Use a new `VERICCL_OUTPUT_DIR` for each run; it is the parent directory for this run.
+
+<!-- vericcl-run-step: set-output -->
+```bash
+export VERICCL_OUTPUT_DIR="$VERICCL_ROOT/runs/readme-$(date +%Y%m%dT%H%M%S)"
+```
+
+Create the output root. VeriCCL creates the operator, size, and run-ID directory below it.
+
+<!-- vericcl-run-step: create-output -->
+```bash
+mkdir -p "$VERICCL_OUTPUT_DIR"
+```
+
+`two_rank.json` describes two ranks and their directed links. `allreduce_8m_1m.json` describes an 8 MiB AllReduce split into 1 MiB software slices. `constructive.json` selects the constructive strategy with MILP disabled. `VERICCL_OUTPUT_DIR` is the parent directory for this run, and `quickstart` is the stable run identifier.
+
+<!-- vericcl-run-step: solve -->
+<!-- vericcl-doc-test: solve -->
+```bash
+.venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir "$VERICCL_OUTPUT_DIR" --run-id quickstart
+```
+
+`--xml` points to the final XML from the solve run. The verify output is written under `vericcl_allreduce_8MiB_quickstart-verify/`.
+
+<!-- vericcl-run-step: verify -->
 <!-- vericcl-doc-test: verify -->
 ```bash
-.venv/bin/python -m vericcl verify --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir ${VERICCL_OUTPUT_DIR} --run-id docs-verify --xml ${VERICCL_OUTPUT_DIR}/vericcl_allreduce_8MiB_docs/vericcl_allreduce_8MiB_final.xml
+.venv/bin/python -m vericcl verify --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir "$VERICCL_OUTPUT_DIR" --run-id quickstart-verify --xml "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml"
 ```
+
+Check that `$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml`, the executable MSCCL XML, exists.
+
+<!-- vericcl-run-step: check-xml -->
+```bash
+test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml"
+```
+
+Check that `$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json`, the final offline validation report, exists.
+
+<!-- vericcl-run-step: check-report -->
+```bash
+test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json"
+```
+
+Inspect `$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json`, the final offline validation report rather than the executable XML.
+
+<!-- vericcl-run-step: inspect-report -->
+```bash
+.venv/bin/python -m json.tool "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json"
+```
+
+`$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.schedule.json` is the final XML sidecar. `$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/run-summary.json` records the solve workflow summary.
+
+Run the software regression example independently when checking all directly solved collectives:
 
 <!-- vericcl-doc-test: example-validation -->
 ```bash
 .venv/bin/python -m pytest tests/e2e/test_six_collectives.py -q
 ```
-
-The constructive two-rank example uses an 8 MiB AllReduce split into eight 1 MiB software slices and does not modify its source inputs.
 
 ## MSCCL Strategy A: official source plus bundled patch
 

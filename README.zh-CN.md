@@ -2,54 +2,17 @@
 
 [English](README.md)
 
-## 概述与支持的集合通信
+## 概述
 
-VeriCCL根据拓扑、sketch和atom三类JSON输入生成并验证MSCCL XML调度。验证范围包括输入、集合通信语义、状态、拓扑、时序、资源、缓冲区、端点、死锁、XML兼容性、BDD流、事件模拟及可选在线执行。
+VeriCCL用于规划、求解和验证集合通信调度。它接收topology、sketch和atom三类JSON输入，生成MSCCL XML、调度sidecar及离线验证报告。
 
-可直接求解`broadcast`、`reduce`、`allgather`、`allreduce`、`alltoall`和`reduce_scatter`。`scatter`与`gather`保留完整集合通信语义，但仅作为内部组合阶段，不作为直接输入算子。分层计划通过组合上述八类语义生成满足全局集合通信要求的调度。
+可直接求解`broadcast`、`reduce`、`allgather`、`allreduce`、`alltoall`和`reduce_scatter`。`scatter`与`gather`是内部阶段化算子；它们与六类直接求解算子共同构成八类集合通信语义。
 
-支持的服务器基线为x86_64 Ubuntu 22.04或Ubuntu 24.04、Python 3.10-3.12及一个或多个NVIDIA GPU。多节点运行还要求节点间免密SSH、时钟同步以及各节点使用相同安装路径。
+下述流程仅在软件层面验证生成产物。CUDA编译、MSCCL加载、GPU执行及性能测量属于独立的硬件相关验证步骤；准备这些环境前请阅读[运行时配置](docs/runtime-configuration.md)。
 
-## 安装模式
+## 构建与安装 VeriCCL
 
-离线使用需要Python和Gurobi。完整在线使用还需要兼容的NVIDIA驱动与CUDA Toolkit、VeriCCL MSCCL运行时、Open MPI、启用MPI的NCCL Tests及时钟辅助程序。下述MSCCL策略A或策略C均生成`$MSCCL_ROOT/build/lib`，且运行时相关源码哈希一致。
-
-## Ubuntu前置依赖
-
-在Ubuntu 22.04或Ubuntu 24.04执行以下完整软件包安装序列：
-
-```bash
-sudo apt update
-sudo apt install -y build-essential git patch python3 python3-dev python3-pip python3-venv openmpi-bin libopenmpi-dev wget ca-certificates
-```
-
-本文不固定CUDA版本。应依据NVIDIA当前兼容性表和[CUDA Linux安装指南](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html)选择服务器驱动与CUDA Toolkit。编译MSCCL前，应确认CUDA支持的主机编译器与目标GPU架构兼容。
-
-## CUDA、NCCL与MPI预检
-
-将`CUDA_HOME`设为实际Toolkit路径。下述Open MPI前缀采用Ubuntu multiarch软件包布局，避免将alternatives包装器误解析为`/usr`。
-
-```bash
-uname -m
-. /etc/os-release && printf '%s %s\n' "$NAME" "$VERSION_ID"
-python3 --version
-gcc --version
-nvidia-smi
-export CUDA_HOME=/usr/local/cuda
-test -x "$CUDA_HOME/bin/nvcc"
-"$CUDA_HOME/bin/nvcc" --version
-mpirun --version
-mpicxx --showme:version
-export MPI_HOME="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/openmpi"
-test -f "$MPI_HOME/include/mpi.h"
-test -d "$MPI_HOME/lib"
-```
-
-这些命令仅验证工具可发现性，不构成端到端CUDA或NCCL兼容性证据。后续测试通过MSCCL构建使用相应NCCL实现。
-
-## 克隆与Python安装
-
-优先使用SSH克隆：
+通过SSH克隆，创建虚拟环境，安装开发依赖并以可编辑模式安装VeriCCL：
 
 ```bash
 git clone git@github.com:SlienceZDL/VeriCCL.git
@@ -60,14 +23,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 ```
 
-若无法使用SSH认证，可改用HTTPS，然后在仓库中执行上一代码块相同的虚拟环境命令：
+若无法使用SSH认证，可通过HTTPS克隆，然后执行上一代码块中的相同虚拟环境命令：
 
 ```bash
 git clone https://github.com/SlienceZDL/VeriCCL.git
 cd VeriCCL
 ```
 
-检查可编辑安装及依赖导入：
+设置仓库根目录，并检查依赖、导入和CLI版本：
 
 ```bash
 export VERICCL_ROOT="$(pwd)"
@@ -78,11 +41,9 @@ export VERICCL_ROOT="$(pwd)"
 
 预期版本字面量：`0.1.0`。
 
-## Gurobi许可证
+### Gurobi许可证检查
 
-`gurobipy` wheel仅附带规模受限许可证。该许可证可完成下述单变量检查，但完整VeriCCL MILP模型需要适用的academic、commercial、evaluation、WLS、local或network许可证。仅使用构造式求解时，可选择`vericcl/examples/atom/constructive.json`，无需调用MILP求解器。
-
-Linux常见默认许可证位置为`~/gurobi.lic`与`/opt/gurobi/gurobi.lic`。非默认文件应通过`GRB_LICENSE_FILE`指定绝对路径。请参考Gurobi的[Python安装说明](https://support.gurobi.com/hc/en-us/articles/360044290292-How-do-I-install-Gurobi-for-Python)和[完整许可证说明](https://support.gurobi.com/hc/en-us/articles/360051597492-How-do-I-resolve-a-Model-too-large-for-size-limited-Gurobi-license-error)。禁止提交许可证文件、WLS凭据、access ID、secret或站点令牌。
+该单变量检查确认当前Gurobi许可证可以求解最小模型。下述构造式快速示例禁用MILP，因此不需要完整Gurobi许可证。
 
 ```bash
 .venv/bin/python - <<'PY'
@@ -97,38 +58,83 @@ print("gurobi optimize check passed")
 PY
 ```
 
-预期结果字面量：`gurobi optimize check passed`。后续若出现`Model too large for size-limited Gurobi license`，表示导入成功，但当前许可证不适用于请求的MILP规模。
+预期结果字面量：`gurobi optimize check passed`。
 
-## 离线冒烟测试
+## 运行 VeriCCL
 
-以下四个标记命令不依赖硬件，文档测试会按顺序执行。运行目录不会被覆盖，因此应先创建新的输出根目录：
-
-```bash
-export VERICCL_OUTPUT_DIR="$VERICCL_ROOT/runs/docs-smoke-$(date +%Y%m%dT%H%M%S)"
-mkdir -p "$VERICCL_OUTPUT_DIR"
-```
+仓库内示例输入为`vericcl/examples/topo/two_rank.json`、`vericcl/examples/sketch/allreduce_8m_1m.json`和`vericcl/examples/atom/constructive.json`。以下帮助命令列出可用CLI操作：
 
 <!-- vericcl-doc-test: help -->
 ```bash
 .venv/bin/python -m vericcl --help
 ```
 
-<!-- vericcl-doc-test: solve -->
+将`VERICCL_ROOT`设为已安装VeriCCL仓库的根目录。后续相对路径均以该目录为起点。
+
+<!-- vericcl-run-step: set-root -->
 ```bash
-.venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir ${VERICCL_OUTPUT_DIR} --run-id docs
+export VERICCL_ROOT="$(pwd)"
 ```
 
+每次运行使用新的`VERICCL_OUTPUT_DIR`，它是本次运行的父目录。
+
+<!-- vericcl-run-step: set-output -->
+```bash
+export VERICCL_OUTPUT_DIR="$VERICCL_ROOT/runs/readme-$(date +%Y%m%dT%H%M%S)"
+```
+
+创建输出根目录。VeriCCL会在其下创建包含算子、数据大小和run ID的目录。
+
+<!-- vericcl-run-step: create-output -->
+```bash
+mkdir -p "$VERICCL_OUTPUT_DIR"
+```
+
+`two_rank.json`描述两个Rank及其有向链路。`allreduce_8m_1m.json`描述一个切分为1 MiB软件slice的8 MiB AllReduce。`constructive.json`选择禁用MILP的构造式策略。`VERICCL_OUTPUT_DIR`是本次运行的父目录，`quickstart`是稳定的run标识。
+
+<!-- vericcl-run-step: solve -->
+<!-- vericcl-doc-test: solve -->
+```bash
+.venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir "$VERICCL_OUTPUT_DIR" --run-id quickstart
+```
+
+`--xml`指向solve阶段生成的最终XML。verify输出写入`vericcl_allreduce_8MiB_quickstart-verify/`。
+
+<!-- vericcl-run-step: verify -->
 <!-- vericcl-doc-test: verify -->
 ```bash
-.venv/bin/python -m vericcl verify --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir ${VERICCL_OUTPUT_DIR} --run-id docs-verify --xml ${VERICCL_OUTPUT_DIR}/vericcl_allreduce_8MiB_docs/vericcl_allreduce_8MiB_final.xml
+.venv/bin/python -m vericcl verify --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --output-dir "$VERICCL_OUTPUT_DIR" --run-id quickstart-verify --xml "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml"
 ```
+
+检查`$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml`是否存在；该文件是可执行的MSCCL XML。
+
+<!-- vericcl-run-step: check-xml -->
+```bash
+test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.xml"
+```
+
+检查`$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json`是否存在；该文件是最终离线验证报告。
+
+<!-- vericcl-run-step: check-report -->
+```bash
+test -f "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json"
+```
+
+查看`$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json`这一最终离线验证报告；该文件不是可执行XML。
+
+<!-- vericcl-run-step: inspect-report -->
+```bash
+.venv/bin/python -m json.tool "$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.validation.json"
+```
+
+`$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/vericcl_allreduce_8MiB_final.schedule.json`是最终XML的sidecar。`$VERICCL_OUTPUT_DIR/vericcl_allreduce_8MiB_quickstart/run-summary.json`记录solve工作流摘要。
+
+检查全部直接求解算子时，可单独运行软件回归示例：
 
 <!-- vericcl-doc-test: example-validation -->
 ```bash
 .venv/bin/python -m pytest tests/e2e/test_six_collectives.py -q
 ```
-
-该两Rank构造式示例执行8 MiB AllReduce，并将消息划分为八个1 MiB软件slice；运行过程中不会修改源输入。
 
 ## MSCCL策略A：官方源码与内置补丁
 

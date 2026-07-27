@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
-import sys
 
 import pytest
 
@@ -25,6 +25,11 @@ COMMAND_PATTERN = re.compile(
     r"<!-- vericcl-doc-test: ([a-z-]+) -->\s*"
     r"```bash\s*\n([^\n]+)\n```"
 )
+RUN_STEP_PATTERN = re.compile(
+    r"<!-- vericcl-run-step: ([a-z-]+) -->\s*"
+    r"(?:<!-- vericcl-doc-test: [a-z-]+ -->\s*)?"
+    r"```bash\s*\n([^\n]+)\n```"
+)
 BASH_BLOCK_PATTERN = re.compile(r"```bash\s*\n(.*?)\n```", re.DOTALL)
 INLINE_CODE_PATTERN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 OUTPUT_SETUP_PATTERN = re.compile(
@@ -42,20 +47,16 @@ DOCUMENTED_COMMAND_ORDER = (
     "verify",
     "example-validation",
 )
-REQUIRED_README_FRAGMENTS = {
-    "Ubuntu 22.04",
-    "Ubuntu 24.04",
-    "b23e9cd5dd63f82ee1c5aae7e0a2042079be903a",
-    "vericcl-runtime-v0.1.0",
-    "782ee5f72cf48c1ae1a2365bcf525019f5620175",
-    "NCCL_BUFFSIZE=2097152",
-    "VERICCL_CALIBRATION_LINK_CLASS",
-    "vericcl/examples/topo/two_rank.json",
-    "vericcl/examples/topo/two_node_gateway.json",
-    "vericcl/examples/sketch/allreduce_8m_1m.json",
-    "vericcl/examples/atom/constructive.json",
-    "vericcl/examples/atom/default.json",
-}
+DOCUMENTED_RUN_STEP_ORDER = (
+    "set-root",
+    "set-output",
+    "create-output",
+    "solve",
+    "verify",
+    "check-xml",
+    "check-report",
+    "inspect-report",
+)
 EXAMPLE_SECTION_ANCHORS = (
     "vericcl/examples/legacy",
     "vericcl/examples/templates",
@@ -64,6 +65,10 @@ EXAMPLE_SECTION_ANCHORS = (
 
 def _commands_from(path):
     return dict(COMMAND_PATTERN.findall(path.read_text(encoding="utf-8")))
+
+
+def _run_steps_from(path):
+    return tuple(RUN_STEP_PATTERN.findall(path.read_text(encoding="utf-8")))
 
 
 def _example_section(path):
@@ -205,13 +210,44 @@ def test_bilingual_readmes_have_identical_tested_commands():
     assert _commands_from(README_EN) == _commands_from(README_ZH)
 
 
-@pytest.mark.parametrize("path", (README_EN, README_ZH))
-def test_readmes_retain_the_installation_and_example_contract(path):
-    text = path.read_text(encoding="utf-8")
-    missing = {
-        fragment for fragment in REQUIRED_README_FRAGMENTS if fragment not in text
-    }
-    assert not missing
+def test_bilingual_readmes_have_identical_run_steps():
+    assert _run_steps_from(README_EN) == _run_steps_from(README_ZH)
+
+
+def test_documented_run_steps_execute_and_write_bound_artifacts(tmp_path):
+    steps = _run_steps_from(README_EN)
+    assert tuple(name for name, _ in steps) == DOCUMENTED_RUN_STEP_ORDER
+    commands = [command for _, command in steps]
+    commands[1] = "export VERICCL_OUTPUT_DIR={}".format(
+        shlex.quote(str(tmp_path / "runs"))
+    )
+
+    completed = subprocess.run(
+        ["bash", "-eu", "-o", "pipefail", "-c", "\n".join(commands)],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    run_root = tmp_path / "runs" / "vericcl_allreduce_8MiB_quickstart"
+    xml = run_root / "vericcl_allreduce_8MiB_final.xml"
+    sidecar = run_root / "vericcl_allreduce_8MiB_final.schedule.json"
+    report = run_root / "vericcl_allreduce_8MiB_final.validation.json"
+    summary = run_root / "run-summary.json"
+    assert xml.is_file()
+    assert sidecar.is_file()
+    assert report.is_file()
+    assert summary.is_file()
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["accepted"] is True
+    verify_summary = (
+        tmp_path / "runs" / "vericcl_allreduce_8MiB_quickstart-verify"
+        / "run-summary.json"
+    )
+    verify_payload = json.loads(verify_summary.read_text(encoding="utf-8"))
+    assert verify_payload["mode"] == "verify"
 
 
 @pytest.mark.parametrize("path", (README_EN, README_ZH))
@@ -305,18 +341,14 @@ def test_atom_rejects_unknown_top_level_fields(tmp_path):
 
 
 def _run(command, output_dir):
-    expanded = command.replace(
-        "${VERICCL_OUTPUT_DIR}",
-        str(output_dir),
-    )
-    arguments = shlex.split(expanded)
-    assert arguments[:1] == [".venv/bin/python"]
-    arguments[0] = sys.executable
+    environment = os.environ.copy()
+    environment["VERICCL_OUTPUT_DIR"] = str(output_dir)
     return subprocess.run(
-        arguments,
+        ["bash", "-eu", "-o", "pipefail", "-c", command],
         cwd=PROJECT_ROOT,
         capture_output=True,
         check=False,
+        env=environment,
         text=True,
     )
 
