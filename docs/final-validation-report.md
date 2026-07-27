@@ -90,3 +90,28 @@
 | `rg -n '[\p{Han}]' vericcl tests runtime --glob '*.py' --glob '*.c' --glob '*.cc' --glob '*.cu' --glob '*.h' --glob '*.json'` | 退出码1；无匹配，受检代码与机器可读文件未发现中文字符 |
 
 验收主机为macOS/Darwin纯软件环境，覆盖率命令使用Python 3.9.6；该环境不替代安装指南规定的Ubuntu 22.04/24.04与Python 3.10-3.12目标环境。CUDA/MSCCL编译和`nccl-tests`执行均为`not_run`；上述补丁一致性、静态检查与跳过的硬件测试不构成Ubuntu GPU服务器上的编译、功能或性能验证证据。
+
+## 2026-07-27 README项目指南验收
+
+本节追加本次新鲜软件验证证据，不替代或重新解释前述验收记录。
+
+### 文档与软件测试矩阵
+
+| 范围 | 命令 | 结果 |
+|---|---|---|
+| README、工作流与运行时补丁文档门禁 | `.venv/bin/python -m pytest tests/integration/test_documented_commands.py tests/integration/test_workflow_artifacts.py tests/unit/online/test_runtime_patch.py -q` | 退出码0；51 passed, 1 skipped |
+| 完整硬件无关覆盖率门禁 | `.venv/bin/python -m pytest -m 'not hardware and not gurobi' --cov=vericcl --cov-report=term-missing --cov-fail-under=90 -q` | 退出码0；1134 passed, 1 skipped, 22 deselected；总覆盖率92.10%（阈值90%） |
+| Gurobi 标记矩阵 | `.venv/bin/python -m pytest -m gurobi -q` | 退出码0；14 passed, 1143 deselected |
+| hardware 标记矩阵 | `.venv/bin/python -m pytest -m hardware -q` | 退出码0；8 skipped, 1149 deselected；`not_run` |
+
+文档门禁包含中英文 README Bash 块逐字一致性检查、七个分阶段命令的执行，以及公开 `help`、`solve`、`verify` 与示例验证命令的依次执行。两份 README 的仓库相对路径由测试确认均存在且受 Git 跟踪；`Ubuntu` 和 `SyCCL` 的 README 扫描无匹配，排除内容未出现。
+
+### 静态检查
+
+| 命令 | 结果 |
+|---|---|
+| `python3 -m compileall -q vericcl tests runtime/msccl-trace/tools` | 退出码0 |
+| `git diff --check` | 退出码0；无格式错误 |
+| `rg -n '[\p{Han}]' vericcl tests runtime --glob '*.py' --glob '*.c' --glob '*.cc' --glob '*.cu' --glob '*.h' --glob '*.json'` | 退出码1；无匹配（`rg` 用退出码1表示未找到匹配），受检源码与 JSON 未发现中文字符 |
+
+验收主机仍为 macOS/Darwin 纯软件环境。CUDA/MSCCL 编译和 `nccl-tests` GPU 执行均为`not_run`；hardware 标记测试的跳过结果不构成 GPU、CUDA、MSCCL 或 `nccl-tests` 的实机验证证据。
