@@ -8,7 +8,7 @@ VeriCCL用于规划、求解和验证集合通信调度。它接收topology、sk
 
 可直接求解`broadcast`、`reduce`、`allgather`、`allreduce`、`alltoall`和`reduce_scatter`。`scatter`与`gather`是内部阶段化算子；它们与六类直接求解算子共同构成八类集合通信语义。
 
-下述流程仅在软件层面验证生成产物。CUDA编译、MSCCL加载、GPU执行及性能测量属于独立的硬件相关验证步骤；准备这些环境前请阅读[运行时配置](docs/runtime-configuration.md)。
+硬件验证：`not_run`。下述流程仅在软件层面验证生成产物，不能推断CUDA编译、MSCCL加载、GPU执行或性能结果；准备这些环境前请阅读[运行时配置](docs/runtime-configuration.md)。
 
 ## 构建与安装 VeriCCL
 

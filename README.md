@@ -8,7 +8,7 @@ VeriCCL plans, solves, and validates collective-communication schedules. It cons
 
 Direct solving supports `broadcast`, `reduce`, `allgather`, `allreduce`, `alltoall`, and `reduce_scatter`. `scatter` and `gather` are internal staged operators; together with the six directly solved operators, they define eight collective semantics.
 
-The workflow below validates generated artifacts in software. CUDA compilation, MSCCL loading, GPU execution, and performance measurement remain separate hardware-dependent validation steps; see [runtime configuration](docs/runtime-configuration.md) before preparing those environments.
+Hardware validation: `not_run`. The workflow below validates generated artifacts in software and cannot establish CUDA compilation, MSCCL loading, GPU execution, or performance results; see [runtime configuration](docs/runtime-configuration.md) before preparing those environments.
 
 ## Building and Installing VeriCCL
 
