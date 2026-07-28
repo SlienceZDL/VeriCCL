@@ -1,9 +1,18 @@
 diff --git a/src/collectives/device/msccl_interpreter.h b/src/collectives/device/msccl_interpreter.h
-index dabba68..70d5539 100644
+index 04bd0ea..82bcede 100644
 --- a/src/collectives/device/msccl_interpreter.h
 +++ b/src/collectives/device/msccl_interpreter.h
-@@ -82,6 +82,35 @@ namespace {
-     }
+@@ -53,37 +53,68 @@ namespace {
+     else if(sizeof(U) == 2)
+       asm("st.volatile.global.b16 [%0],%1;" :: "l"(dst), "h"(u2));
+     else if(sizeof(U) == 4)
+       asm("st.volatile.global.b32 [%0],%1;" :: "l"(dst), "r"(u4));
+     else
+       asm("st.volatile.global.b64 [%0],%1;" :: "l"(dst), "l"(u8));
+   }
+ 
+   inline __device__ void barrier(int nthreads) {
+     asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15));
    }
  
 +  inline __device__ int16_t vericclTracePeer(
@@ -38,239 +47,1117 @@ index dabba68..70d5539 100644
    template<typename T, typename RedOp, typename Proto>
    __device__ __forceinline__ void runInterpreter(ncclWorkElem *args, int sizeMultiplier) {
      const int tid = threadIdx.x;
-@@ -124,11 +153,9 @@ namespace {
+     const int nthreads = args->header.nWarps*WARP_SIZE;
+     const int bid = blockIdx.x;
++    const int rank = ncclShmem.comm.rank;
+     struct mscclThreadBlock* mscclTB = &ncclShmem.mscclShmem.mscclTB;
+ 
+     // User pointers for primitives
+     T* thisInput = (T*)args->sendbuff;
+     T* thisOutput = (T*)args->recvbuff;
+     T* thisScratch = (T*)ncclShmem.mscclShmem.scratchBuffer;
+     int recvPeer = mscclTB->recvpeer;
+     int sendPeer = mscclTB->sendpeer;
++    const int channelId = ncclShmem.channel.id;
+ 
+     const ssize_t chunkSize = int(Proto::calcBytePerStep()/sizeof(T) * (Proto::Id == NCCL_PROTO_SIMPLE ? MSCCL_CHUNKSTEPS : 1));
+     int minChunkSize;
+     if (Proto::Id == NCCL_PROTO_LL)
+       minChunkSize = nthreads*(Proto::calcBytePerGrain()/sizeof(T));
+     if (Proto::Id == NCCL_PROTO_LL128) {
+       // We should not need the final /2 but it makes performance much, much smoother. Might be a bug somewhere.
+       minChunkSize = nthreads*(Proto::calcBytePerGrain()/sizeof(T))/2;
+     }
+ 
+     NPKIT_GPU_SYNC_TIME(bid, tid);
+ 
+@@ -93,114 +124,168 @@ namespace {
+ 
+     NPKIT_GPU_SET_CTX_ID(prims);
+ 
+     const ssize_t size = args->count;
+     const ssize_t sizePerMscclChunk = (size*sizeMultiplier)/ncclShmem.mscclShmem.nchunksPerLoop;
+     uint16_t mscclMaxAllowedCount = args->mscclWork.mscclMaxAllowedCount;
+     int8_t needsFence = ncclShmem.mscclShmem.needsFence;
+ 
+     // msccl flags all start out with 0. this is used as a part of the flag to make sure different work items deal with different synchronization flags
      // this still needs more work. when we make a way around the queue, the flag might have been set to undesired values. will be fixed in subsequent versions.
      const int64_t workIndex = ncclShmem.mscclShmem.workIndex;
      volatile struct mscclFlag* mscclFlags = ncclShmem.mscclShmem.flags;
--
--    int loopcount = 0;
--    uint64_t stime = 0;
--    uint64_t wtime = 0;
--    uint64_t otime = 0;
 +    struct mscclDevCommInfo* traceCommInfo = ncclShmem.comm.mscclInfo;
 +    const bool traceEnabled =
 +        traceCommInfo != NULL && traceCommInfo->traceRecords != NULL;
- 
++
      for (ssize_t gridOffset = 0, iter = 0; gridOffset < sizePerMscclChunk; gridOffset += chunkSize, iter++) {
        ssize_t realChunkSize;
-@@ -146,12 +173,14 @@ namespace {
+       if (Proto::Id == NCCL_PROTO_SIMPLE) {
+         realChunkSize = min(chunkSize, sizePerMscclChunk-gridOffset);
+         realChunkSize = roundUp(realChunkSize, (nthreads-WARP_SIZE)*sizeof(uint64_t)/sizeof(T));
+       }
+       else
+         realChunkSize = min(chunkSize, divUp(sizePerMscclChunk-gridOffset, minChunkSize)*minChunkSize);
+       realChunkSize = int(realChunkSize);
+       int nelem = min(realChunkSize, sizePerMscclChunk-gridOffset);
+ 
+       ssize_t srcoffset, dstoffset;
+       T* srcPointer, * dstPointer;
        int step = 0;
        for (int i = 0; i < mscclTB->nsteps; i++){
          struct mscclTransfer* msccltran = &mscclTB->transfers[i];
 +        uint64_t tbReach = 0;
 +        uint64_t dependencyDone = 0;
-+        if (traceEnabled && tid == 0) tbReach = mscclTraceClock();
-+        if (traceEnabled) barrier(nthreads);
++        VericclRawStepTraceRecord* rawTrace = NULL;
++        if (traceEnabled) {
++          if (tid == 0) {
++            tbReach = mscclTraceClock();
++            ncclShmem.mscclShmem.traceRecord =
++                vericclTraceReserve(traceCommInfo);
++            if (ncclShmem.mscclShmem.traceRecord != NULL) {
++              ncclShmem.mscclShmem.traceRecord->transfer_start = 0;
++            }
++          }
++          barrier(nthreads);
++          rawTrace = ncclShmem.mscclShmem.traceRecord;
++        }
          // first wait if there is a dependence
          int16_t numDependences = msccltran->numDependences;
          if (numDependences > 0){
            NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DEP_CHECK_ENTRY, msccltran->numDependences);
--          
--          uint64_t time1 = mscclTraceClock();
- 
+           
            if (tid < numDependences){
              int16_t dependentPointer = msccltran->depencePointer;
-@@ -165,12 +194,11 @@ namespace {
+             int8_t dependentBid = mscclTB->dependentBid[dependentPointer+tid];
+             int16_t dependentStep = mscclTB->dependentStep[dependentPointer+tid];
+             uint64_t goalFlag = COMPUTE_FLAG(workIndex, iter, dependentStep);
+             while (true){
+               uint64_t curFlag = (mscclFlags + dependentBid)->flag;
+               if (curFlag >= goalFlag && GET_WORKINDEX_FROM_FLAG(curFlag) == workIndex) break;
+             }
            }
            step += numDependences-1;
            barrier(nthreads);
--
--          uint64_t time2 = mscclTraceClock();
--          stime += time2 - time1;
--
+ 
            NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DEP_CHECK_EXIT, msccltran->numDependences);
-+        } else if (traceEnabled) {
-+          barrier(nthreads);
          }
-+        if (traceEnabled && tid == 0) dependencyDone = mscclTraceClock();
++        if (traceEnabled) {
++          barrier(nthreads);
++          if (tid == 0) dependencyDone = mscclTraceClock();
++          barrier(nthreads);
++        }
  
          srcPointer = (msccltran->srcbuffer == MSCCL_INPUT_BUFFER) ? thisInput : ((msccltran->srcbuffer == MSCCL_OUTPUT_BUFFER) ? thisOutput : thisScratch);
          dstPointer = (msccltran->dstbuffer == MSCCL_INPUT_BUFFER) ? thisInput : ((msccltran->dstbuffer == MSCCL_OUTPUT_BUFFER) ? thisOutput : thisScratch);
-@@ -181,43 +209,27 @@ namespace {
+         prims.setDataPtrs(srcPointer, dstPointer);
+         int count = msccltran->count;
+         for (int c = 0; c < count; c += mscclMaxAllowedCount) {
+           srcoffset = gridOffset + (ssize_t) (msccltran->srcoffset+c) * sizePerMscclChunk;
            dstoffset = gridOffset + (ssize_t) (msccltran->dstoffset+c) * sizePerMscclChunk;
            int thisCount = min(mscclMaxAllowedCount, count-c);
            int thisNelem = nelem*thisCount;
--          MscclTraceInfo traceInfo;
--          traceInfo.rank = rank;
--          traceInfo.bid = bid;
--          traceInfo.channelId = channelId;
--          traceInfo.protoId = Proto::Id;
--          traceInfo.opType = msccltran->type;
--          traceInfo.resourceMask = mscclTraceResourceMask(msccltran->type);
--          traceInfo.recvPeer = recvPeer;
--          traceInfo.sendPeer = sendPeer;
--          traceInfo.iter = iter;
--          traceInfo.transferIndex = i;
--          traceInfo.step = step;
--          traceInfo.chunkOffset = gridOffset;
--          traceInfo.countIndex = c;
--          traceInfo.srcBuffer = msccltran->srcbuffer;
--          traceInfo.dstBuffer = msccltran->dstbuffer;
--          traceInfo.srcOffset = (long long)srcoffset;
--          traceInfo.dstOffset = (long long)dstoffset;
--          traceInfo.elemCount = thisNelem;
-+          VericclRawStepTraceRecord* rawTrace = NULL;
-+          uint64_t transferStart = 0;
-+          if (traceEnabled && tid == 0) {
-+            rawTrace = vericclTraceReserve(traceCommInfo);
-+          }
-+          if (traceEnabled) {
-+            barrier(nthreads);
-+            if (tid == 0) transferStart = mscclTraceClock();
-+            barrier(nthreads);
-+          }
-           if (msccltran->type == MSCCL_SEND){
-             __syncthreads();
--            uint64_t time1 = mscclTraceClock();
--            prims.sendWithBarrier(srcoffset, thisNelem, &wtime, &traceInfo); // LL.send is the only situation where there is no barrier at the end.
-+            prims.sendWithBarrier(srcoffset, thisNelem); // LL.send is the only situation where there is no barrier at the end.
-             __syncthreads();
--            uint64_t time2 = mscclTraceClock();
--            otime += time2 - time1;
-           }
-           else if (msccltran->type == MSCCL_RECV){
-             __syncthreads();
--            uint64_t time1 = mscclTraceClock();
--            prims.recv(dstoffset, thisNelem, 0, &wtime, &traceInfo);
-+            prims.recv(dstoffset, thisNelem, 0);
-             __syncthreads();
--            uint64_t time2 = mscclTraceClock();
--            otime += time2 - time1;
-           }
+           if (msccltran->type == MSCCL_SEND)
+-            prims.sendWithBarrier(srcoffset, thisNelem); // LL.send is the only situation where there is no barrier at the end.
++            prims.sendWithBarrier(srcoffset, thisNelem, rawTrace); // LL.send is the only situation where there is no barrier at the end.
+           else if (msccltran->type == MSCCL_RECV)
+-            prims.recv(dstoffset, thisNelem);
++            prims.recv(dstoffset, thisNelem, false, rawTrace);
            else if (msccltran->type == MSCCL_REDUCE) {
--            uint64_t deviceStart = mscclTraceClock();
              int numReductions = msccltran->numReductions;
              if (thisNelem < nthreads){
                NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_REDUCE_ENTRY, thisNelem*sizeof(T));
-@@ -246,30 +258,45 @@ namespace {
+ 
++              if (thisNelem > 0) mscclTraceStart(rawTrace);
++              if (traceEnabled) barrier(nthreads);
++
+               if (tid < thisNelem){
+                 dstoffset = gridOffset + (ssize_t) (msccltran->dstoffset+c) * sizePerMscclChunk;
+                 T* dst_index = dstPointer + dstoffset +tid;
+                 T o = load(dst_index);
+                 for (int r = 0; r < numReductions; r++){
+                   srcoffset = gridOffset + (ssize_t) (mscclTB->reductionSrcOffsets[msccltran->reductionPointer+r]+c) * sizePerMscclChunk;
+                   T t = load(srcPointer + srcoffset + tid);
+                   o = redFn(t,o);
+                 }
+                 store(dst_index, o);
                }
-               prims.reduce(srcs, numReductions, &dst, 1, thisNelem);
+               barrier(nthreads);
+ 
+               NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_REDUCE_EXIT, thisNelem*sizeof(T));
+             } else {
+               T* srcs[MSCCL_MAX_REDUCE_FUSION+1]; // +1 is for SIMPLE protocol as dst is added in the list of srcs
+               dstoffset = gridOffset + (ssize_t) (msccltran->dstoffset+c) * sizePerMscclChunk;
+               T* dst = dstPointer + dstoffset;
+               for (int r = 0; r < numReductions; r++) {
+                 srcoffset = gridOffset + (ssize_t) (mscclTB->reductionSrcOffsets[msccltran->reductionPointer+r]+c) * sizePerMscclChunk;
+                 srcs[r] = srcPointer + srcoffset;
+               }
+-              prims.reduce(srcs, numReductions, &dst, 1, thisNelem);
++              prims.reduce(
++                  srcs, numReductions, &dst, 1, thisNelem, rawTrace);
              }
--            mscclTracePrint(&traceInfo, 0, deviceStart, mscclTraceClock());
              if (c == 0) step += (numReductions-1); // only advance step once!
            } else if (msccltran->type == MSCCL_RECV_COPY_SEND)
--            prims.recvCopySend(dstoffset, thisNelem, false, &wtime, &traceInfo);
-+            prims.recvCopySend(dstoffset, thisNelem, false);
+-            prims.recvCopySend(dstoffset, thisNelem);
++            prims.recvCopySend(dstoffset, thisNelem, false, rawTrace);
            else if (msccltran->type == MSCCL_RECV_REDUCE_SEND)
--            prims.recvReduceSend(srcoffset, thisNelem, false, &wtime, &traceInfo);
-+            prims.recvReduceSend(srcoffset, thisNelem, false);
+-            prims.recvReduceSend(srcoffset, thisNelem);
++            prims.recvReduceSend(srcoffset, thisNelem, false, rawTrace);
            else if (msccltran->type == MSCCL_RECV_REDUCE_COPY_SEND)
--            prims.recvReduceCopySend(srcoffset, dstoffset, thisNelem, false, &wtime, &traceInfo);
-+            prims.recvReduceCopySend(srcoffset, dstoffset, thisNelem, false);
+-            prims.recvReduceCopySend(srcoffset, dstoffset, thisNelem);
++            prims.recvReduceCopySend(
++                srcoffset, dstoffset, thisNelem, false, rawTrace);
            else if (msccltran->type == MSCCL_RECV_REDUCE_COPY)
-           {
-             __syncthreads();
--            uint64_t time1 = mscclTraceClock();
--            prims.recvReduceCopy(srcoffset, dstoffset, thisNelem, 0, &wtime, &traceInfo);
-+            prims.recvReduceCopy(srcoffset, dstoffset, thisNelem, 0);
-             __syncthreads();
--            uint64_t time2 = mscclTraceClock();
--            otime += time2 - time1;
-           }
-           else if (msccltran->type == MSCCL_LOCAL_COPY) {
--            uint64_t deviceStart = mscclTraceClock();
-             prims.localCopy(srcPointer+srcoffset, dstPointer+dstoffset, thisNelem);
--            mscclTracePrint(&traceInfo, 0, deviceStart, mscclTraceClock());
-           }
+-            prims.recvReduceCopy(srcoffset, dstoffset, thisNelem);
++            prims.recvReduceCopy(
++                srcoffset, dstoffset, thisNelem, false, rawTrace);
+           else if (msccltran->type == MSCCL_LOCAL_COPY)
+-            prims.localCopy(srcPointer+srcoffset, dstPointer+dstoffset, thisNelem);
++            prims.localCopy(
++                srcPointer+srcoffset, dstPointer+dstoffset,
++                thisNelem, rawTrace);
            else
              return;
-+          if (traceEnabled) {
-+            barrier(nthreads);
-+            if (tid == 0 && rawTrace != NULL) {
-+              rawTrace->rank = (uint32_t)rank;
-+              rawTrace->tb_id = (uint16_t)bid;
-+              rawTrace->step_index = (uint16_t)i;
-+              rawTrace->endpoint_type = (uint16_t)msccltran->type;
-+              rawTrace->peer = vericclTracePeer(
-+                  msccltran->type, recvPeer, sendPeer);
-+              rawTrace->channel = (uint16_t)channelId;
-+              rawTrace->iteration = (uint32_t)workIndex;
-+              rawTrace->tb_reach = tbReach;
-+              rawTrace->dependency_done = dependencyDone;
-+              rawTrace->transfer_start = transferStart;
-+              rawTrace->transfer_end = mscclTraceClock();
-+              rawTrace->flags =
-+                  (uint32_t)mscclTraceResourceMask(msccltran->type);
-+              rawTrace->reserved = 0;
-+            }
-+            barrier(nthreads);
-+          }
          }
++        if (traceEnabled) {
++          barrier(nthreads);
++          if (tid == 0 && rawTrace != NULL) {
++            rawTrace->rank = (uint32_t)rank;
++            rawTrace->tb_id = (uint16_t)bid;
++            rawTrace->step_index = (uint16_t)i;
++            rawTrace->endpoint_type = (uint16_t)msccltran->type;
++            rawTrace->peer = vericclTracePeer(
++                msccltran->type, recvPeer, sendPeer);
++            rawTrace->channel = (uint16_t)channelId;
++            rawTrace->iteration = (uint32_t)workIndex;
++            rawTrace->tb_reach = tbReach;
++            rawTrace->dependency_done = dependencyDone;
++            rawTrace->transfer_end = mscclTraceClock();
++            if (rawTrace->transfer_start == 0) {
++              atomicExch(traceCommInfo->traceOverflow, 1U);
++            }
++            rawTrace->flags = mscclTraceResourceMask(msccltran->type);
++            rawTrace->reserved = 0;
++          }
++          barrier(nthreads);
++        }
          if (msccltran->has_dependence && tid == nthreads-1){
  	        if (needsFence) __threadfence();
-@@ -277,9 +304,6 @@ namespace {
+           mscclFlags[bid].flag = (uint64_t) COMPUTE_FLAG(workIndex, iter, step);
          }
          step++;
        }
--      ++loopcount;
      }
--    __syncthreads();
--    if(tid==0)printf("\n===============================Rank:%d,Bid:%d,Count:%d|SyncTime:%llu,OtherTime:%llu,Wtime:%llu=================================\n",rank,bid,loopcount,(unsigned long long)stime,(unsigned long long)otime,(unsigned long long)wtime);
    }
  }
 diff --git a/src/collectives/device/primitives.h b/src/collectives/device/primitives.h
-index 8f4b6be..61fe8c7 100644
+index ccc0d22..e2742ec 100644
 --- a/src/collectives/device/primitives.h
 +++ b/src/collectives/device/primitives.h
-@@ -51,18 +51,10 @@ __device__ __forceinline__ uint64_t mscclTraceClock() {
- __device__ __forceinline__ void mscclTracePrint(
-     const MscclTraceInfo* trace, int sliceIndex, uint64_t startClockTicks,
-     uint64_t endClockTicks) {
--#if defined(ENABLE_MSCCL_TIMELINE_TRACE)
--  if (trace != NULL && threadIdx.x == 0) {
--    printf(
--        "MSCCLTRACE|rank=%d|bid=%d|channel=%d|proto=%d|op=%d|mask=%d|recv_peer=%d|send_peer=%d|iter=%d|transfer=%d|step=%d|chunk=%d|count=%d|slice=%d|srcbuf=%d|dstbuf=%d|srcoff=%lld|dstoff=%lld|nelem=%d|start=%llu|end=%llu\n",
--        trace->rank, trace->bid, trace->channelId, trace->protoId,
--        trace->opType, trace->resourceMask, trace->recvPeer, trace->sendPeer,
--        trace->iter, trace->transferIndex, trace->step, trace->chunkOffset,
--        trace->countIndex, sliceIndex, trace->srcBuffer, trace->dstBuffer,
--        trace->srcOffset, trace->dstOffset, trace->elemCount,
--        (unsigned long long)startClockTicks, (unsigned long long)endClockTicks);
--  }
--#endif
-+  (void)trace;
-+  (void)sliceIndex;
-+  (void)startClockTicks;
-+  (void)endClockTicks;
- }
+@@ -1,27 +1,73 @@
+ /*************************************************************************
+  * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
+  *
+  * See LICENSE.txt for license information
+  ************************************************************************/
  
+ #ifndef NCCL_PRIMITIVES_H_
+ #define NCCL_PRIMITIVES_H_
+ 
+ #include <type_traits>
+ #include "reduce_kernel.h" // for reduction funcs
+ #include "common.h"
++#include "vericcl_trace_format.h"
+ 
+ #define NCCL_SPINS_BEFORE_CHECK_ABORT 1000000
+ 
++#define MSCCL_TRACE_SEND_LINK 0x1U
++#define MSCCL_TRACE_RECV_LINK 0x2U
++#define MSCCL_TRACE_DEVICE 0x4U
++
++__device__ __forceinline__ uint64_t mscclTraceClock() {
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
++  uint64_t timestamp = 0;
++  asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(timestamp));
++  return timestamp;
++#else
++  return clock64();
++#endif
++}
++
++__device__ __forceinline__ void mscclTraceStart(
++    VericclRawStepTraceRecord* trace) {
++  if (trace != NULL) {
++    const unsigned long long timestamp =
++        (unsigned long long)mscclTraceClock();
++    atomicCAS(
++        (unsigned long long*)&trace->transfer_start, 0ULL, timestamp);
++  }
++}
++
++__device__ __forceinline__ uint32_t mscclTraceResourceMask(uint8_t type) {
++  switch (type) {
++    case MSCCL_SEND:
++      return MSCCL_TRACE_SEND_LINK;
++    case MSCCL_RECV:
++      return MSCCL_TRACE_RECV_LINK;
++    case MSCCL_RECV_COPY_SEND:
++    case MSCCL_RECV_REDUCE_SEND:
++    case MSCCL_RECV_REDUCE_COPY_SEND:
++      return MSCCL_TRACE_RECV_LINK | MSCCL_TRACE_SEND_LINK |
++             MSCCL_TRACE_DEVICE;
++    case MSCCL_RECV_REDUCE_COPY:
++      return MSCCL_TRACE_RECV_LINK | MSCCL_TRACE_DEVICE;
++    case MSCCL_LOCAL_COPY:
++    case MSCCL_REDUCE:
++      return MSCCL_TRACE_DEVICE;
++    default:
++      return 0;
++  }
++}
++
  /* Protocol classes: ProtoSimple, ProtoLL, ProtoLL128
+  * We use these as template args to the Primtiives class instead of integral
+  * enums (e.g. NCCL_PROTO_LL) because for SIMPLE we need to carry a few extra
+  * numbers. Also these types hold methods which let us compute numbers important
+  * to how that protocol operates with a consistent interface so that our
+  * algorithm code can operate protocol parametrically.
+  */
+ template<int SlicePerChunk_1, int StepPerSlice_1, int Unroll_1 = COLL_UNROLL>
+ struct ProtoSimple {
+   static constexpr int Id = NCCL_PROTO_SIMPLE;
+   static constexpr int SlicePerChunk = SlicePerChunk_1;
+   static constexpr int StepPerSlice = StepPerSlice_1;
+diff --git a/src/collectives/device/prims_ll.h b/src/collectives/device/prims_ll.h
+index 375433a..4eca9af 100644
+--- a/src/collectives/device/prims_ll.h
++++ b/src/collectives/device/prims_ll.h
+@@ -235,54 +235,62 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
+       T elt[EltPerLine];
+     };
+     u8 = val;
+     #pragma unroll
+     for(int i=0; i < EltPerLine; i++) {
+       if (i==0 || i < eltN)
+         store(dst+i, elt[i]);
+         // dst[i] = elt[i];
+     }
+   }
+ 
+   template <int RECV, int SEND, int SrcBuf, int DstBuf>
+-  __device__ __forceinline__ void LLGenericOp(intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp) {
++  __device__ __forceinline__ void LLGenericOp(
++      intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_PRIMS_OP_INIT(tid);
+ 
+     constexpr int SRC = SrcBuf != -1 ? 1 : 0;
+     constexpr int DST = DstBuf != -1 ? 1 : 0;
+     T *srcElts = SrcBuf == -1 ? nullptr : userBufs[SrcBuf] + srcIx;
+     T *dstElts = DstBuf == -1 ? nullptr : userBufs[DstBuf] + dstIx;
+ 
+     // Always waitSend in case of cleanup
+     nelem = nelem < 0 ? 0 : nelem;
+     if (SEND) waitSend(divUp(nelem, EltPerLine)*sizeof(ncclLLFifoLine));
+ 
+     nelem -= tid*EltPerLine;
+     srcElts += tid*EltPerLine;
+     dstElts += tid*EltPerLine;
+     int offset = tid;
+     int eltPerTrip = nthreads*EltPerLine;
+     while (nelem > 0) {
+       int eltInLine = EltPerLine < nelem ? EltPerLine : nelem;
+ 
++      // waitSend has acquired FIFO/credit; the next local load feeds the send.
++      if (!RECV) mscclTraceStart(trace);
++
+       DataLoader dl;
+       ncclLLFifoLine line[MaxRecv];
+       uint64_t data, peerData;
+       if (SRC) {
+         dl.loadBegin(srcElts, eltInLine);
+         srcElts += eltPerTrip;
+       }
+       if (RECV) {
+         readLLBeginAll<1>(offset, line);
+         peerData = readLL(offset, 0);
++        // The valid peer FIFO load is the first communication data operation.
++        // Later peer waits remain part of this transfer's active duration.
++        mscclTraceStart(trace);
+       }
+       if (SRC) {
+         data = dl.loadFinish();
+         if (SrcBuf == Input) data = MULTI<RedOp, T>().preOp(redOp, data);
+       }
+       if (RECV) {
+         data = !SRC ? peerData : MULTI<RedOp,T>()(redOp, peerData, data);
+         #pragma unroll MaxRecv
+         for (int i=1; i < MaxRecv && i < fan.nrecv(); i++) {
+           peerData = readLLFinish(offset, line, i);
+           data = MULTI<RedOp,T>()(redOp, peerData, data);
+         }
+@@ -306,48 +314,52 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
+     if (RECV) {
+       for (int i=0; i < MaxRecv; i++) incRecv(i);
+       postRecv();
+     }
+     if (SEND) {
+       for (int i=1; i < MaxSend && i < fan.nsend(); i++)
+         incSend(i, offset);
+       incSend(0, offset);
+     }
+   }
+ 
+   template <int REDUCE, int COPY, int MULTISRCS, int MULTIDSTS>
+-  __device__ __forceinline__ void MSCCLLLGenericOp(T** srcs, int nsrcs, T** dsts, int ndsts, int nelem) {
++  __device__ __forceinline__ void MSCCLLLGenericOp(
++      T** srcs, int nsrcs, T** dsts, int ndsts, int nelem,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_PRIMS_OP_INIT(tid);
+ 
+     nelem = nelem < 0 ? 0 : nelem;
+     T *srcElts = srcs[0];
+     T *dstElts = dsts[0];
+     nelem -= tid*EltPerLine;
+     srcElts += tid*EltPerLine;
+     dstElts += tid*EltPerLine;
+     if (MULTISRCS){
+       for (int i = 1; i < nsrcs; i++){
+         srcs[i] += tid*EltPerLine;
+       }
+     }
+     if (MULTIDSTS){
+       for (int i = 1; i < ndsts; i++){
+         dsts[i] += tid*EltPerLine;
+       }
+     }
+     int offset = tid;
+     int eltPerTrip = nthreads*EltPerLine;
+     while (nelem > 0) {
+       int eltInLine = EltPerLine < nelem ? EltPerLine : nelem;
+ 
++      mscclTraceStart(trace);
++
+       DataLoader dl;
+       uint64_t data;
+       dl.loadBegin(srcElts, eltInLine);
+       srcElts += eltPerTrip;
+       data = dl.loadFinish();
+       if (REDUCE) {
+         uint64_t dataD;
+         dl.loadBegin(dstElts, eltInLine);
+         dataD = dl.loadFinish();
+         dataD = MULTI<RedOp,T>()(redOp, dataD, data);
+         if (MULTISRCS){
+           for (int i = 1; i < nsrcs; i++){
+@@ -449,90 +461,107 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
+   __device__ void moveDataPtrs(intptr_t delta) {
+     userBufs[Input] += delta;
+     userBufs[Output] += delta;
+   }
+ 
+   __device__ void send(intptr_t inpIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_SEND_ENTRY, eltN*sizeof(T));
+ 
+     LLGenericOp<0, 1, Input, -1>(inpIx, -1, eltN, false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void sendWithBarrier(intptr_t inpIx, int eltN) {
++  __device__ void sendWithBarrier(
++      intptr_t inpIx, int eltN, VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    LLGenericOp<0, 1, Input, -1>(inpIx, -1, eltN, false);
++    LLGenericOp<0, 1, Input, -1>(inpIx, -1, eltN, false, trace);
+     // only primitive.instruction where there is no barrier at the end
+     barrier();
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_SEND_EXIT, eltN*sizeof(T));
+   }  
+   __device__ void sendFromOutput(intptr_t outIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_SEND_FROM_OUTPUT_ENTRY, eltN*sizeof(T));
+ 
+     LLGenericOp<0, 1, Output, -1>(outIx, -1, eltN, false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_SEND_FROM_OUTPUT_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recv(intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ void recv(
++      intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_ENTRY, eltN*sizeof(T));
+ 
+-    LLGenericOp<1, 0, -1, Output>(-1, outIx, eltN, postOp);
++    LLGenericOp<1, 0, -1, Output>(-1, outIx, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recvReduceSend(intptr_t inpIx, int eltN) {
++  __device__ void recvReduceSend(
++      intptr_t inpIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_REDUCE_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    LLGenericOp<1, 1, Input, -1>(inpIx, -1, eltN, false);
++    LLGenericOp<1, 1, Input, -1>(inpIx, -1, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_REDUCE_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recvReduceCopy(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ void recvReduceCopy(
++      intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_ENTRY, eltN*sizeof(T));
+ 
+-    LLGenericOp<1, 0, Input, Output>(inpIx, outIx, eltN, postOp);
++    LLGenericOp<1, 0, Input, Output>(
++        inpIx, outIx, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_EXIT, eltN*sizeof(T));
+   }
+   __device__ void copySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+     LLGenericOp<0, 1, Input, Output>(inpIx, outIx, eltN, postOp);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recvCopySend(intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ void recvCopySend(
++      intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    LLGenericOp<1, 1, -1, Output>(-1, outIx, eltN, postOp);
++    LLGenericOp<1, 1, -1, Output>(-1, outIx, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recvReduceCopySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ void recvReduceCopySend(
++      intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    LLGenericOp<1, 1, Input, Output>(inpIx, outIx, eltN, postOp);
++    LLGenericOp<1, 1, Input, Output>(
++        inpIx, outIx, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void localCopy(T* srcs, T* dsts, int eltN) {
++  __device__ void localCopy(
++      T* srcs, T* dsts, int eltN,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_LOCAL_COPY_ENTRY, eltN*sizeof(T));
+ 
+     // LLGenericOp<0, 0, Input, Output>(inpIx, outIx, eltN, postOp);
+-    MSCCLLLGenericOp<0,1,0,0>(&srcs, 1, &dsts, 1, eltN);
++    MSCCLLLGenericOp<0,1,0,0>(&srcs, 1, &dsts, 1, eltN, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_LOCAL_COPY_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void reduce(T** srcs, int nsrcs, T** dsts, int ndsts, int eltN){
++  __device__ void reduce(
++      T** srcs, int nsrcs, T** dsts, int ndsts, int eltN,
++      VericclRawStepTraceRecord* trace = NULL){
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_REDUCE_ENTRY, eltN*sizeof(T));
+ 
+     if (nsrcs == 1) {
+-      MSCCLLLGenericOp<1,0,0,0>(srcs, 1, dsts, 1, eltN);
++      MSCCLLLGenericOp<1,0,0,0>(srcs, 1, dsts, 1, eltN, trace);
+     } else {
+-      MSCCLLLGenericOp<1,0,1,0>(srcs, nsrcs, dsts, 1, eltN);
++      MSCCLLLGenericOp<1,0,1,0>(srcs, nsrcs, dsts, 1, eltN, trace);
+     }
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_REDUCE_EXIT, eltN*sizeof(T));
+   }
+ };
+diff --git a/src/collectives/device/prims_ll128.h b/src/collectives/device/prims_ll128.h
+index 93a319a..c10457d 100644
+--- a/src/collectives/device/prims_ll128.h
++++ b/src/collectives/device/prims_ll128.h
+@@ -173,25 +173,27 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
+     __syncwarp();
+     // Write rest from shmem to dst. No need to coalesce stores to 16-bytes,
+     // the hardware keeps up fine.
+     T *shm = (T*)ncclShmem.ll128warp[warp];
+     int skip = misalignment == 0 ? eltN & -EltPer16B : 0;
+     for(int i=skip+wid; i < eltN; i += WARP_SIZE)
+       dst[i] = shm[i];
+   }
+ 
+   #define WARP_MASK 0xffffffff
+ 
+   template <int ELEMS_PER_THREAD, int RECV, int SEND, int SrcBuf, int DstBuf>
+-  __device__ __forceinline__ void recvReduceSendCopy(uint64_t(&v)[ELEMS_PER_THREAD], int ll128Offset, bool postOp) {
++  __device__ __forceinline__ void recvReduceSendCopy(
++      uint64_t(&v)[ELEMS_PER_THREAD], int ll128Offset, bool postOp,
++      VericclRawStepTraceRecord* trace = NULL) {
+     constexpr int SRC = SrcBuf != -1 ? 1 : 0;
+     uint64_t vr[ELEMS_PER_THREAD];
+ 
+     __syncwarp();
+     /************************ Wait first recv ********************/
+     if (RECV) {
+       uint64_t* ptr = recvPtr(0)+ll128Offset;
+       uint64_t flag = recvFlag(0);
+       bool needReload;
+       int spins = 0;
+ 
+       NPKIT_GPU_PRIMS_WAIT_BEGIN_WITH_SPIN(tid);
+@@ -200,24 +202,27 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
+         needReload = false;
+         #pragma unroll
+         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
+           load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
+           needReload |= flagThread && (vr[u+1] != flag);
+         }
+   
+         NPKIT_GPU_PRIMS_WAIT_INC_SPIN();
+ 
+       } while (__any_sync(WARP_MASK, needReload) && checkAbort(spins, 0, 0) == 0);
+ 
+       NPKIT_GPU_PRIMS_WAIT_END_WITH_SPIN(tid);
++      // Valid peer data is now available; consumption, reduction, and send
++      // begin next. Later peer waits remain in the active transfer duration.
++      mscclTraceStart(trace);
+     }
+ 
+     /************* Finish register load **************/
+     if (SRC) {
+       // By deferring register shuffle here we've overlapped spinning on first
+       // peer's data with memory loads of src data.
+       loadRegsFinish(v);
+       if (SrcBuf == Input) {
+         #pragma unroll
+         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
+           v[u] = MULTI<RedOp, T>().preOp(redOp, v[u]);
+           if (!flagThread)
+@@ -291,25 +296,27 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
+       #pragma unroll
+       for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
+         store128(ptr+u*WARP_SIZE, v[u], flagThread ? flag : v[u+1]);
+       }
+     }
+     /********************** End Send ************************/
+   }
+ 
+   static constexpr int WireWordPerSlice = WARP_SIZE*NCCL_LL128_SHMEM_ELEMS_PER_THREAD;
+   static constexpr int DataEltPerSlice = (WireWordPerSlice - WireWordPerSlice/NCCL_LL128_LINEELEMS)*(sizeof(uint64_t)/sizeof(T));
+ 
+   template <int RECV, int SEND, int SrcBuf, int DstBuf>
+-  __device__ __forceinline__ void GenericOp(intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp) {
++  __device__ __forceinline__ void GenericOp(
++      intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_PRIMS_OP_INIT(tid);
+ 
+     constexpr int SRC = SrcBuf != -1 ? 1 : 0;
+     constexpr int DST = DstBuf != -1 ? 1 : 0;
+     static_assert(-1<=SrcBuf && SrcBuf < 2, "Uhoh");
+     static_assert(-1<=DstBuf && DstBuf < 2, "Uhoh");
+     static_assert(DstBuf!=Input, "Mistake?");
+     #if 0
+     assert((SrcBuf==-1) == (srcIx==-1));
+     assert((DstBuf==-1) == (dstIx==-1));
+     #endif
+ 
+@@ -317,67 +324,75 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
+     T       *dstPtr = DstBuf == -1 ? nullptr : userBufs[DstBuf] + dstIx;
+     int wireOffset = WireWordPerSlice*warp + 2*wid;
+     const int nwarps = nthreads/WARP_SIZE;
+     nelem = nelem < 0 ? 0 : nelem;
+ 
+     if (SEND) waitSend(divUp(nelem, DataEltPerSlice)*WireWordPerSlice*sizeof(uint64_t));
+     barrier();
+     nelem -= DataEltPerSlice*warp;
+     srcPtr += DataEltPerSlice*warp;
+     dstPtr += DataEltPerSlice*warp;
+     while (nelem > 0) {
+       const int eltInSlice = min(nelem, DataEltPerSlice);
++      // waitSend and the block barrier completed; the next local load feeds
++      // the send-only path.
++      if (!RECV) mscclTraceStart(trace);
+       uint64_t regs[NCCL_LL128_SHMEM_ELEMS_PER_THREAD];
+       if (SRC) loadRegsBegin(regs, srcPtr, eltInSlice);
+-      recvReduceSendCopy<NCCL_LL128_SHMEM_ELEMS_PER_THREAD, RECV, SEND, SrcBuf, DstBuf>(regs, wireOffset, postOp);
++      recvReduceSendCopy<
++          NCCL_LL128_SHMEM_ELEMS_PER_THREAD, RECV, SEND, SrcBuf, DstBuf>(
++              regs, wireOffset, postOp, trace);
+       if (DST) storeRegs(dstPtr, regs, eltInSlice);
+ 
+       wireOffset += WireWordPerSlice*nwarps;
+       srcPtr += DataEltPerSlice*nwarps;
+       dstPtr += DataEltPerSlice*nwarps;
+       nelem -= DataEltPerSlice*nwarps;
+     }
+ 
+     barrier();
+     if (SEND) for (int i=0; i < MaxSend; i++) sendStep[i] += 1;
+     if (SEND) postSend();
+     if (RECV) for (int i=0; i < MaxRecv; i++) recvStep[i] += 1;
+     if (RECV) postRecv();
+   }
+ 
+   template <int REDUCE, int COPY, int MULTISRCS, int MULTIDSTS>
+-  __device__ __forceinline__ void MSCCLGenericOp(T** srcs, int nsrcs, T** dsts, int ndsts, int nelem) {
++  __device__ __forceinline__ void MSCCLGenericOp(
++      T** srcs, int nsrcs, T** dsts, int ndsts, int nelem,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_PRIMS_OP_INIT(tid);
+ 
+     T const *srcPtr = srcs[0];
+     T       *dstPtr = dsts[0];
+     int wireOffset = WireWordPerSlice*warp + 2*wid;
+     const int nwarps = nthreads/WARP_SIZE;
+     nelem = nelem < 0 ? 0 : nelem;
+ 
+     nelem -= DataEltPerSlice*warp;
+     srcPtr += DataEltPerSlice*warp;
+     dstPtr += DataEltPerSlice*warp;
+     if (MULTISRCS){
+       for (int i = 1; i < nsrcs; i++){
+         srcs[i] += DataEltPerSlice*warp;
+       }
+     }
+     if (MULTIDSTS){
+       for (int i = 1; i < ndsts; i++){
+         dsts[i] += DataEltPerSlice*warp;
+       }
+     }    
+     while (nelem > 0) {
+       const int eltInSlice = min(nelem, DataEltPerSlice);
++      mscclTraceStart(trace);
+       uint64_t regs[NCCL_LL128_SHMEM_ELEMS_PER_THREAD];
+       loadRegsBegin(regs, srcPtr, eltInSlice);
+       loadRegsFinish(regs);
+       if (REDUCE){
+         uint64_t regsD[NCCL_LL128_SHMEM_ELEMS_PER_THREAD];
+         loadRegsBegin(regsD, dstPtr, eltInSlice);
+         loadRegsFinish(regsD);
+         #pragma unroll
+         for (int u=0; u<NCCL_LL128_SHMEM_ELEMS_PER_THREAD; u+=2) {
+           regsD[u] = MULTI<RedOp, T>()(redOp, regs[u], regsD[u]);
+           if (!flagThread)
+             regsD[u+1] = MULTI<RedOp, T>()(redOp, regs[u+1], regsD[u+1]);
+@@ -500,88 +515,105 @@ public:
+   __device__ void moveDataPtrs(intptr_t delta) {
+     userBufs[Input] += delta;
+     userBufs[Output] += delta;
+   }
+ 
+   __device__ void send(intptr_t inpIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_SEND_ENTRY, eltN*sizeof(T));
+ 
+     GenericOp<0, 1, Input, -1>(inpIx, -1, eltN, false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void sendWithBarrier(intptr_t inpIx, int eltN) {
++  __device__ void sendWithBarrier(
++      intptr_t inpIx, int eltN, VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    GenericOp<0, 1, Input, -1>(inpIx, -1, eltN, false);
++    GenericOp<0, 1, Input, -1>(inpIx, -1, eltN, false, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_SEND_EXIT, eltN*sizeof(T));
+   }  
+   __device__ void sendFromOutput(intptr_t outIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_SEND_FROM_OUTPUT_ENTRY, eltN*sizeof(T));
+ 
+     GenericOp<0, 1, Output, -1>(outIx, -1, eltN, false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_SEND_FROM_OUTPUT_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recv(intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ void recv(
++      intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_ENTRY, eltN*sizeof(T));
+ 
+-    GenericOp<1, 0, -1, Output>(-1, outIx, eltN, postOp);
++    GenericOp<1, 0, -1, Output>(-1, outIx, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recvReduceSend(intptr_t inpIx, int eltN) {
++  __device__ void recvReduceSend(
++      intptr_t inpIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_REDUCE_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    GenericOp<1, 1, Input, -1>(inpIx, -1, eltN, false);
++    GenericOp<1, 1, Input, -1>(inpIx, -1, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_REDUCE_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recvReduceCopy(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ void recvReduceCopy(
++      intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_ENTRY, eltN*sizeof(T));
+ 
+-    GenericOp<1, 0, Input, Output>(inpIx, outIx, eltN, postOp);
++    GenericOp<1, 0, Input, Output>(
++        inpIx, outIx, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_EXIT, eltN*sizeof(T));
+   }
+   __device__ void copySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+     GenericOp<0, 1, Input, Output>(inpIx, outIx, eltN, postOp);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recvCopySend(intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ void recvCopySend(
++      intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    GenericOp<1, 1, -1, Output>(-1, outIx, eltN, postOp);
++    GenericOp<1, 1, -1, Output>(-1, outIx, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void recvReduceCopySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ void recvReduceCopySend(
++      intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    GenericOp<1, 1, Input, Output>(inpIx, outIx, eltN, postOp);
++    GenericOp<1, 1, Input, Output>(
++        inpIx, outIx, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void localCopy(T* srcs, T* dsts, int eltN) {
++  __device__ void localCopy(
++      T* srcs, T* dsts, int eltN,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_LOCAL_COPY_ENTRY, eltN*sizeof(T));
+ 
+     // LLGenericOp<0, 0, Input, Output>(inpIx, outIx, eltN, postOp);
+-    MSCCLGenericOp<0,1,0,0>(&srcs, 1, &dsts, 1, eltN);
++    MSCCLGenericOp<0,1,0,0>(&srcs, 1, &dsts, 1, eltN, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_LOCAL_COPY_EXIT, eltN*sizeof(T));
+   }
+-  __device__ void reduce(T** srcs, int nsrcs, T** dsts, int ndsts, int eltN){
++  __device__ void reduce(
++      T** srcs, int nsrcs, T** dsts, int ndsts, int eltN,
++      VericclRawStepTraceRecord* trace = NULL){
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_REDUCE_ENTRY, eltN*sizeof(T));
+ 
+     if (nsrcs == 1) {
+-      MSCCLGenericOp<1,0,0,0>(srcs, 1, dsts, 1, eltN);
++      MSCCLGenericOp<1,0,0,0>(srcs, 1, dsts, 1, eltN, trace);
+     } else {
+-      MSCCLGenericOp<1,0,1,0>(srcs, nsrcs, dsts, 1, eltN);
++      MSCCLGenericOp<1,0,1,0>(srcs, nsrcs, dsts, 1, eltN, trace);
+     }
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_REDUCE_EXIT, eltN*sizeof(T));
+   }
+ };
 diff --git a/src/collectives/device/prims_simple.h b/src/collectives/device/prims_simple.h
-index b8b87b3..015f520 100644
+index 0f51c99..515eb40 100644
 --- a/src/collectives/device/prims_simple.h
 +++ b/src/collectives/device/prims_simple.h
-@@ -185,10 +185,11 @@ class Primitives<
+@@ -120,25 +120,26 @@ class Primitives<
+   }
+ 
+   template<int Recv, int Send>
+   inline __device__ void postPeer() {
+     if (flags & (Recv*RolePostRecv | Send*RolePostSend)) {
+       step += StepPerSlice;
+       *connStepPtr = step;
+     }
+   }
+ 
+   template <int DirectRecv1, int DirectSend1, int Recv, int Send, int SrcBuf, int DstBuf>
+   __device__ __forceinline__ void genericOp(
+-      intptr_t srcIx, intptr_t dstIx, intptr_t remoteIx, int nelem, bool postOp
++      intptr_t srcIx, intptr_t dstIx, intptr_t remoteIx, int nelem, bool postOp,
++      VericclRawStepTraceRecord* trace = NULL
+     ) {
+     NPKIT_GPU_PRIMS_OP_INIT(tid);
+ 
+     constexpr int DirectRecv = 1 && Direct && DirectRecv1;
+     constexpr int DirectSend = 1 && Direct && DirectSend1;
+     constexpr int Src = SrcBuf != -1;
+     constexpr int Dst = DstBuf != -1;
+ 
+     nelem = nelem < 0 ? 0 : nelem;
+     int sliceSize = stepSize*StepPerSlice;
+     sliceSize = max(divUp(nelem, 16*SlicePerChunk)*16, sliceSize/32);
+     int slice = 0;
+@@ -177,24 +178,28 @@ class Primitives<
+       do {
+         sliceSize = sliceSize < nelem-offset ? sliceSize : nelem-offset;
+         if (Src && (flags & (SrcBuf==Input ? RoleInput : RoleOutput)))
+           ncclShmem.groups[group].srcs[0] = userBuff + srcIx + offset;
+         if (Dst && (flags & (DstBuf==Input ? RoleInput : RoleOutput)))
+           ncclShmem.groups[group].dsts[0] = userBuff + dstIx + offset;
+ 
          NPKIT_GPU_PRIMS_WAIT_BEGIN(tid);
  
-         uint64_t waitStart = 0, waitEnd = 0, dataStart = 0, dataEnd = 0;
--        if (tid == 0) waitStart = mscclTraceClock();
-+        if (tid == 0 && (wtime != NULL || trace != NULL))
-+          waitStart = mscclTraceClock();
          waitPeer<DirectRecv, DirectSend, Recv, Send, Src, Dst>(dstIx, remoteIx, offset, sliceSize);
          subBarrier();
--        if (tid == 0) {
-+        if (tid == 0 && (wtime != NULL || trace != NULL)) {
-           waitEnd = mscclTraceClock();
-           if (wtime != NULL) *wtime += waitEnd - waitStart;
-           if (sliceSize > 0) dataStart = waitEnd;
-@@ -223,8 +224,10 @@ class Primitives<
-              sliceSize);
+ 
++        // Peer/FIFO/credit readiness is complete; the next operation starts
++        // communication data work.
++        mscclTraceStart(trace);
++
+         NPKIT_GPU_PRIMS_WAIT_END(tid);
+ 
+         if (DirectRecv && ncclShmem.groups[group].srcs[0] == ncclShmem.groups[group].dsts[0]) {
+           // We can only have one direct receive. Since srcs[0] == dstPtr+offset, skip one copy
+           if (Send) {
+             // (1-Send) is only there to avoid compilation errors in case MaxSend=0 (and Send=0).
+             ReduceOrCopyMulti<Unroll, RedOp, T, 1, 1, 1, (1-Send)+MaxSend, 0>
+               (tid, nworkers, nullptr, false,
+                1, (T const**)ncclShmem.groups[group].srcs,
+                fan.nsend(), (T**)ncclShmem.groups[group].dsts+1,
+                sliceSize);
+           }
+@@ -241,28 +246,31 @@ class Primitives<
+ 
+       NPKIT_GPU_PRIMS_WAIT_END(tid);
+ 
+       if (Send && (flags & RolePostSend) && sliceSize > 0 && index == 0) __threadfence_system();
+       __syncwarp();
+       postPeer<Recv, Send>();
+       offset += sliceSize;
+       slice += 1;
+     }
+   }
+ 
+   template <int REDUCE, int COPY, int MULTISRCS, int MULTIDSTS>
+-  __device__ __forceinline__ void MSCCLgenericOp(T** srcs, int nsrcs, T** dsts, int ndsts, int nelem) {
++  __device__ __forceinline__ void MSCCLgenericOp(
++      T** srcs, int nsrcs, T** dsts, int ndsts, int nelem,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_PRIMS_OP_INIT(tid);
+ 
+     nelem = nelem < 0 ? 0 : nelem;
++    if (nelem > 0) mscclTraceStart(trace);
+     if (tid < nworkers) {
+       if (REDUCE){
+         srcs[nsrcs] = dsts[0];
+         nsrcs++;
+         if (MULTISRCS){
+           ReduceOrCopyMulti<Unroll, RedOp, T, 3, MSCCL_MAX_REDUCE_FUSION, 1, 1, 0>
+             (tid, nworkers, ncclShmem.redOpArgs, false, nsrcs, (T const**)srcs, 1, (T**)dsts, nelem);
+         } else {
+           ReduceOrCopyMulti<Unroll, RedOp, T, 2, 2, 1, 1, 0>
+             (tid, nworkers, ncclShmem.redOpArgs, false, 2, (T const**)srcs, 1, (T**)dsts, nelem);
          }
-         barrier(); // This barrier has a counterpart in following loop
--        if (tid == 0 && sliceSize > 0) dataEnd = mscclTraceClock();
--        if (sliceSize > 0) mscclTracePrint(trace, slice, dataStart, dataEnd);
-+        if (tid == 0 && trace != NULL && sliceSize > 0)
-+          dataEnd = mscclTraceClock();
-+        if (trace != NULL && sliceSize > 0)
-+          mscclTracePrint(trace, slice, dataStart, dataEnd);
-         if (Send && (flags & RolePostSend) && index == 0) __threadfence_system();
-         __syncwarp();
-         postPeer<Recv, Send>();
+       }
+@@ -585,28 +593,29 @@ class Primitives<
+   // For MSCCL purposes
+   __device__ __forceinline__ void setDataPtrs(void const *inputBuf, void *outputBuf) {
+     if (flags & RoleInput) userBuff = (T*)inputBuf;
+     if (flags & RoleOutput) userBuff = (T*)outputBuf;    
+   }
+   __device__ __forceinline__ void send(intptr_t inpIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_SEND_ENTRY, eltN*sizeof(T));
+ 
+     genericOp<0, 0, 0, 1, Input, -1>(inpIx, -1, -1, eltN, false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_SEND_EXIT, eltN*sizeof(T));
+   }
+-  __device__ __forceinline__ void sendWithBarrier(intptr_t inpIx, int eltN) {
++  __device__ __forceinline__ void sendWithBarrier(
++      intptr_t inpIx, int eltN, VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    genericOp<0, 0, 0, 1, Input, -1>(inpIx, -1, -1, eltN, false);
++    genericOp<0, 0, 0, 1, Input, -1>(inpIx, -1, -1, eltN, false, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_SEND_EXIT, eltN*sizeof(T));
+   }  
+   __device__ __forceinline__ void sendFromOutput(intptr_t outIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_SEND_FROM_OUTPUT_ENTRY, eltN*sizeof(T));
+ 
+     genericOp<0, 0, 0, 1, Output, -1>(outIx, -1, -1, eltN, false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_SEND_FROM_OUTPUT_EXIT, eltN*sizeof(T));
+   }
+   __device__ __forceinline__ void directSend(intptr_t inpIx, intptr_t remoteOutIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DIRECT_SEND_ENTRY, eltN*sizeof(T));
+@@ -614,28 +623,30 @@ class Primitives<
+     genericOp<0, 1, 0, 1, Input, -1>(inpIx, -1, remoteOutIx, eltN, false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_DIRECT_SEND_EXIT, eltN*sizeof(T));
+   }
+   __device__ __forceinline__ void directSendFromOutput(intptr_t outIx, intptr_t remoteOutIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DIRECT_SEND_FROM_OUTPUT_ENTRY, eltN*sizeof(T));
+ 
+     genericOp<0, 1, 0, 1, Output, -1>(outIx, -1, remoteOutIx, eltN, false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_DIRECT_SEND_FROM_OUTPUT_EXIT, eltN*sizeof(T));
+   }
+ 
+-  __device__ __forceinline__ void recv(intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ __forceinline__ void recv(
++      intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_ENTRY, eltN*sizeof(T));
+ 
+-    genericOp<0, 0, 1, 0, -1, Output>(-1, outIx, -1, eltN, postOp);
++    genericOp<0, 0, 1, 0, -1, Output>(-1, outIx, -1, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_EXIT, eltN*sizeof(T));
+   }
+   __device__ __forceinline__ void directRecv(intptr_t outIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DIRECT_RECV_ENTRY, eltN*sizeof(T));
+ 
+     genericOp<1, 0, 1, 0, -1, Output>(-1, outIx, -1, eltN, /*postOp=*/false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_DIRECT_RECV_EXIT, eltN*sizeof(T));
+   }
+ 
+   __device__ __forceinline__ void copySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
+@@ -644,100 +655,115 @@ class Primitives<
+     genericOp<0, 0, 0, 1, Input, Output>(inpIx, outIx, -1, eltN, postOp);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+   __device__ __forceinline__ void directCopySend(intptr_t inpIx, intptr_t outIx, intptr_t remoteOutIx, int eltN, bool postOp=false) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DIRECT_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+     genericOp<0, 1, 0, 1, Input, Output>(inpIx, outIx, remoteOutIx, eltN, postOp);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_DIRECT_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+ 
+-  __device__ __forceinline__ void recvCopySend(intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ __forceinline__ void recvCopySend(
++      intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    genericOp<0, 0, 1, 1, -1, Output>(-1, outIx, -1, eltN, postOp);
++    genericOp<0, 0, 1, 1, -1, Output>(-1, outIx, -1, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+   __device__ __forceinline__ void directRecvCopySend(intptr_t outIx, intptr_t remoteOutIx, int eltN) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DIRECT_RECV_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+     genericOp<1, 1, 1, 1, -1, Output>(-1, outIx, remoteOutIx, eltN, false);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_DIRECT_RECV_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+   __device__ __forceinline__ void recvCopyDirectSend(intptr_t outIx, intptr_t remoteOutIx, int eltN, bool postOp=false) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_COPY_DIRECT_SEND_ENTRY, eltN*sizeof(T));
+ 
+     genericOp<0, 1, 1, 1, -1, Output>(-1, outIx, remoteOutIx, eltN, postOp);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_COPY_DIRECT_SEND_EXIT, eltN*sizeof(T));
+   }
+ 
+-  __device__ __forceinline__ void recvReduceCopy(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ __forceinline__ void recvReduceCopy(
++      intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_ENTRY, eltN*sizeof(T));
+ 
+-    genericOp<0, 0, 1, 0, Input, Output>(inpIx, outIx, -1, eltN, postOp);
++    genericOp<0, 0, 1, 0, Input, Output>(
++        inpIx, outIx, -1, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_EXIT, eltN*sizeof(T));
+   }
+ 
+-  __device__ __forceinline__ void recvReduceSend(intptr_t inpIx, int eltN, bool postOp=false) {
++  __device__ __forceinline__ void recvReduceSend(
++      intptr_t inpIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_REDUCE_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    genericOp<0, 0, 1, 1, Input, -1>(inpIx, -1, -1, eltN, postOp);
++    genericOp<0, 0, 1, 1, Input, -1>(
++        inpIx, -1, -1, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_REDUCE_SEND_EXIT, eltN*sizeof(T));
+   }
+   __device__ __forceinline__ void directRecvReduceSend(intptr_t inpIx, intptr_t remoteInpIx, int eltN, bool postOp=false) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DIRECT_RECV_REDUCE_SEND_ENTRY, eltN*sizeof(T));
+ 
+     genericOp<1, 0, 1, 1, Input, -1>(inpIx, -1, remoteInpIx, eltN, postOp);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_DIRECT_RECV_REDUCE_SEND_EXIT, eltN*sizeof(T));
+   }
+ 
+-  __device__ __forceinline__ void recvReduceCopySend(intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false) {
++  __device__ __forceinline__ void recvReduceCopySend(
++      intptr_t inpIx, intptr_t outIx, int eltN, bool postOp=false,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+-    genericOp<0, 0, 1, 1, Input, Output>(inpIx, outIx, -1, eltN, postOp);
++    genericOp<0, 0, 1, 1, Input, Output>(
++        inpIx, outIx, -1, eltN, postOp, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_RECV_REDUCE_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+   __device__ __forceinline__ void directRecvReduceCopySend(intptr_t inpIx, intptr_t outIx, intptr_t remoteOutIx, int eltN, bool postOp=false) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DIRECT_RECV_REDUCE_COPY_SEND_ENTRY, eltN*sizeof(T));
+ 
+     // Direct is only for the send part
+     genericOp<0, 1, 1, 1, Input, Output>(inpIx, outIx, remoteOutIx, eltN, postOp);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_DIRECT_RECV_REDUCE_COPY_SEND_EXIT, eltN*sizeof(T));
+   }
+   // MSCCL local copy
+-  __device__ __forceinline__ void localCopy(T* srcs, T* dsts, int eltN) {
++  __device__ __forceinline__ void localCopy(
++      T* srcs, T* dsts, int eltN,
++      VericclRawStepTraceRecord* trace = NULL) {
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_LOCAL_COPY_ENTRY, eltN*sizeof(T));
+ 
+     // LLGenericOp<0, 0, Input, Output>(inpIx, outIx, eltN, postOp);
+-    MSCCLgenericOp<0,1,0,0>(&srcs, 1, &dsts, 1, eltN);
++    MSCCLgenericOp<0,1,0,0>(&srcs, 1, &dsts, 1, eltN, trace);
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_LOCAL_COPY_EXIT, eltN*sizeof(T));
+   }
+-  __device__ __forceinline__ void reduce(T** srcs, int nsrcs, T** dsts, int ndsts, int eltN){
++  __device__ __forceinline__ void reduce(
++      T** srcs, int nsrcs, T** dsts, int ndsts, int eltN,
++      VericclRawStepTraceRecord* trace = NULL){
+     NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_REDUCE_ENTRY, eltN*sizeof(T));
+ 
+     if (nsrcs == 1) {
+-      MSCCLgenericOp<1,0,0,0>(srcs, 1, dsts, 1, eltN);
++      MSCCLgenericOp<1,0,0,0>(srcs, 1, dsts, 1, eltN, trace);
+     } else {
+-      MSCCLgenericOp<1,0,1,0>(srcs, nsrcs, dsts, 1, eltN);
++      MSCCLgenericOp<1,0,1,0>(srcs, nsrcs, dsts, 1, eltN, trace);
+     }
+ 
+     NPKIT_GPU_COLLECT_EVENT(NPKIT_EVENT_REDUCE_EXIT, eltN*sizeof(T));
+   }
+   __device__ __forceinline__ void
+   scatter(intptr_t inpIx, int totalElem, int peerElem, int skip, int shift) {
+     ScatterGatherOp<0, 0, 0, 1>(inpIx, -1, totalElem, peerElem, skip, shift, /*postOp=*/false);
+   }
+   __device__ __forceinline__ void
+   directScatter(intptr_t inpIx, int totalElem, int peerElem, int skip, int shift) {
+     ScatterGatherOp<0, 1, 0, 1>(inpIx, -1, totalElem, peerElem, skip, shift, /*postOp=*/false);
+   }
 diff --git a/src/include/msccl.h b/src/include/msccl.h
-index 05c7674..2487c94 100644
+index 05c7674..cde0434 100644
 --- a/src/include/msccl.h
 +++ b/src/include/msccl.h
-@@ -2,6 +2,7 @@
+@@ -1,26 +1,27 @@
+ #ifndef MSCCL_H_
  #define MSCCL_H_
  
  #include <stdint.h>
@@ -278,7 +1165,8 @@ index 05c7674..2487c94 100644
  
  #define MSCCL_MAX_NUM_STEPS 256
  #define MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL 32
-@@ -10,8 +11,8 @@
+ #define MSCCL_MAX_NUM_THREAD_BLOCKS (108*2) // set this to 108 which is the number of SMs on A100
+ #define MSCCL_MAX_NUM_ALGOS 4
  #define MSCCL_MAX_COUNT 72 // make sure this does not overflow wrt the size of mscclWorkElem::mscclMaxAllowCount
  #define MSCCL_MAX_REDUCE_FUSION 16
  
@@ -289,7 +1177,39 @@ index 05c7674..2487c94 100644
  
  static_assert(MAXCHANNELS*MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL >= MSCCL_MAX_NUM_THREAD_BLOCKS);
  static_assert(MSCCL_MAX_NUM_STEPS <= 256, "MSCCL interpreter doesn't allow for more than nthreads dependences");
-@@ -141,6 +142,10 @@ struct mscclDevCommInfo {
+ 
+ #define MSCCL_INPUT_BUFFER 0
+ #define MSCCL_OUTPUT_BUFFER 1
+ #define MSCCL_SCRATCH_BUFFER 2
+ 
+ #define MSCCL_SEND 0
+ #define MSCCL_RECV 1
+ #define MSCCL_RECV_COPY_SEND 2
+ #define MSCCL_RECV_REDUCE_SEND 3
+@@ -119,53 +120,60 @@ struct mscclAlgorithm {
+   // the arrays in this struct can be inferred from mscclTB. they are created to use NCCL API easily
+   struct mscclChannelInfo mscclChannels[MAXCHANNELS];
+   // number of scratch chunks that MSCCL will use
+   int nScratchChunks;
+   int8_t needsProxy;
+ };
+ 
+ // Only related MSCCL algorithm elements necessary for a threadblock
+ struct mscclSharedMemoryInfo {
+   struct mscclThreadBlock mscclTB;
+   volatile struct mscclFlag* flags;
+   void* scratchBuffer;
++  VericclRawStepTraceRecord* traceRecord;
+   int nchunksPerLoop;
+   int8_t needsFence;
+   uint32_t workIndex;
+ };
+ 
+ // All MSCCL algorithm info that will be in ncclDevComm
+ struct mscclDevCommInfo {
+   struct mscclAlgorithm mscclAlgos[MSCCL_MAX_NUM_ALGOS];
+   int8_t needsFence; // a global flag to indicate whether we need to have a fence for any of the MSCCL algos
+   // allocate enough MSCCL flags (MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL * MAXCHANNELS) to synchronize across thread blocks
    struct mscclFlag* flags;
    // declaration for scratchBuffer. This is only to be accessed by the host
    void* scratchBuffer;
@@ -300,7 +1220,22 @@ index 05c7674..2487c94 100644
  };
  
  struct mscclRegistration {
-@@ -163,6 +168,8 @@ struct mscclHostCommInfo {
+   int algoIndex;
+   int64_t minBytes;
+   int64_t maxBytes;
+   int protocol;
+ };
+ 
+ // All MSCCL algorithm info that will be in ncclComm
+ struct mscclHostCommInfo {
+   int numberOfMSCCLAlgorithms;
+   mscclDevCommInfo mscclDevComm;
+   size_t scratchBufferSize;
+ 
+   // registered algorithms
+   struct mscclRegistration *mscclRegistrations;
+   int nMscclRegistrations;
+ 
    int inMSCCLConnectionSetupPhase;
    uint32_t workIndex;
    int flagsNeedReset;
@@ -309,11 +1244,23 @@ index 05c7674..2487c94 100644
  };
  
  // Stride copy for 2D alltoall
+ cudaError_t strideMemcpyAsync(void* dst, const void* src, const size_t size, const int height, const int width, cudaStream_t stream);
+ 
+ #endif
 diff --git a/src/init.cc b/src/init.cc
-index e36aecc..6db7152 100644
+index e36aecc..6660f74 100644
 --- a/src/init.cc
 +++ b/src/init.cc
-@@ -26,6 +26,8 @@
+@@ -17,24 +17,26 @@
+ #include "graph.h"
+ #include "argcheck.h"
+ #include "graph/topo.h"
+ #include "npkit/npkit.h"
+ #include <fcntl.h>
+ #include <string.h>
+ #include <errno.h>
+ #include <assert.h>
+ #include <dlfcn.h>
  #include <sys/types.h>
  #include <sys/stat.h>
  #include <unistd.h>
@@ -322,7 +1269,25 @@ index e36aecc..6db7152 100644
  
  #define STR2(v) #v
  #define STR(v) STR2(v)
-@@ -111,6 +113,131 @@ void NCCL_NO_OPTIMIZE commPoison(ncclComm_t comm) {
+ 
+ #ifdef ENABLE_TRACE
+ std::chrono::high_resolution_clock::time_point ncclEpoch;
+ #endif
+ 
+ #if CUDART_VERSION >= 9020
+ #define NCCL_GROUP_CUDA_STREAM 0 // CGMD: CUDA 9.2,10.X Don't need to use an internal CUDA stream
+ #else
+ #define NCCL_GROUP_CUDA_STREAM 1 // CGMD: CUDA 9.0,9.1 Need to use an internal CUDA stream
+@@ -102,24 +104,170 @@ ncclResult_t ncclGetUniqueId(ncclUniqueId* out) {
+ #ifdef __clang__
+ #define NCCL_NO_OPTIMIZE __attribute__((optnone))
+ #else
+ #define NCCL_NO_OPTIMIZE __attribute__((optimize("O0")))
+ #endif
+ 
+ void NCCL_NO_OPTIMIZE commPoison(ncclComm_t comm) {
+   comm->rank = comm->cudaDev = comm->busId = comm->nRanks = -1;
+ }
  
  #undef NCCL_NO_OPTIMIZE
  
@@ -340,13 +1305,27 @@ index e36aecc..6db7152 100644
 +  return ncclSuccess;
 +}
 +
++static void vericclTraceDiscard(ncclComm_t comm) {
++  struct mscclHostCommInfo* hostInfo = &comm->mscclHostComm;
++  struct mscclDevCommInfo* traceInfo = &hostInfo->mscclDevComm;
++  if (traceInfo->traceRecords != NULL)
++    CUDACHECKIGNORE(cudaFree(traceInfo->traceRecords));
++  if (traceInfo->traceRecordCount != NULL)
++    CUDACHECKIGNORE(cudaFree(traceInfo->traceRecordCount));
++  if (traceInfo->traceOverflow != NULL)
++    CUDACHECKIGNORE(cudaFree(traceInfo->traceOverflow));
++  traceInfo->traceRecords = NULL;
++  traceInfo->traceRecordCount = NULL;
++  traceInfo->traceOverflow = NULL;
++  traceInfo->traceCapacity = 0;
++  free(hostInfo->traceFilePrefix);
++  hostInfo->traceFilePrefix = NULL;
++  hostInfo->traceEnabled = 0;
++}
++
 +static ncclResult_t vericclTraceInit(ncclComm_t comm) {
 +  struct mscclHostCommInfo* hostInfo = &comm->mscclHostComm;
 +  struct mscclDevCommInfo* traceInfo = &hostInfo->mscclDevComm;
-+  NCCLCHECK(vericclCheckStepSignature(
-+      "VERICCL_EXPECTED_MSCCL_CHUNKSTEPS", MSCCL_CHUNKSTEPS));
-+  NCCLCHECK(vericclCheckStepSignature(
-+      "VERICCL_EXPECTED_MSCCL_SLICESTEPS", MSCCL_SLICESTEPS));
 +  const char* enabled = getenv("VERICCL_TRACE_ENABLE");
 +  if (enabled == NULL || enabled[0] == '\0' || strcmp(enabled, "0") == 0) {
 +    return ncclSuccess;
@@ -371,12 +1350,19 @@ index e36aecc..6db7152 100644
 +  if (hostInfo->traceFilePrefix == NULL) return ncclSystemError;
 +
 +  traceInfo->traceCapacity = capacity;
-+  NCCLCHECK(ncclCudaCalloc(
-+      &traceInfo->traceRecords, (size_t)capacity));
-+  NCCLCHECK(ncclCudaCalloc(&traceInfo->traceRecordCount, 1));
-+  NCCLCHECK(ncclCudaCalloc(&traceInfo->traceOverflow, 1));
++  ncclResult_t res = ncclSuccess;
++  NCCLCHECKGOTO(ncclCudaCalloc(
++      &traceInfo->traceRecords, (size_t)capacity), res, trace_init_fail);
++  NCCLCHECKGOTO(
++      ncclCudaCalloc(&traceInfo->traceRecordCount, 1), res, trace_init_fail);
++  NCCLCHECKGOTO(
++      ncclCudaCalloc(&traceInfo->traceOverflow, 1), res, trace_init_fail);
 +  hostInfo->traceEnabled = 1;
 +  return ncclSuccess;
++
++trace_init_fail:
++  vericclTraceDiscard(comm);
++  return res;
 +}
 +
 +static ncclResult_t vericclTraceFlush(ncclComm_t comm) {
@@ -454,7 +1440,25 @@ index e36aecc..6db7152 100644
  static ncclResult_t commFree(ncclComm_t comm) {
    if (comm == NULL)
      return ncclSuccess;
-@@ -140,6 +267,20 @@ static ncclResult_t commFree(ncclComm_t comm) {
+ 
+   // First stop all threads before we free anything.
+   NCCLCHECK(ncclProxyDestroy(comm));
+ 
+   delete[] comm->userRedOps;
+ 
+   free(comm->connectSend);
+   free(comm->connectRecv);
+   for (int peer=0; peer<comm->nRanks; peer++) {
+@@ -131,24 +279,38 @@ static ncclResult_t commFree(ncclComm_t comm) {
+   free(comm->asyncOps);
+ 
+   free(comm->peerInfo);
+   ncclTopoFree(comm->topo);
+   for (int n=0; n<comm->nNodes; n++) free(comm->nodeRanks[n].localRankToRank);
+   free(comm->nodeRanks);
+   free(comm->rankToNode);
+   free(comm->rankToLocalRank);
+ 
    if (comm->bootstrap)
      NCCLCHECK(bootstrapClose(comm->bootstrap));
  
@@ -475,11 +1479,107 @@ index e36aecc..6db7152 100644
    CUDACHECK(cudaFree(comm->mscclHostComm.mscclDevComm.flags));
    CUDACHECK(cudaFree((ncclDevCommAndChannels*)comm->devComm));
  
-@@ -299,6 +440,7 @@ static ncclResult_t devCommSetup(ncclComm_t comm) {
+   for (int channel=0; channel<MAXCHANNELS; channel++)
+     NCCLCHECK(freeChannel(comm->channels+channel, comm->nRanks));
+ 
+   if (comm->doneEvent != NULL)
+     CUDACHECK(cudaEventDestroy(comm->doneEvent));
+ 
+   if (comm->intDoneEvent != NULL)
+     CUDACHECK(cudaEventDestroy(comm->intDoneEvent));
+ 
+@@ -273,51 +435,87 @@ static ncclResult_t commAlloc(ncclComm_t* comret, int ndev, int rank) {
+   comm->p2pSendCount = comm->p2pRecvCount = 0;
+   NCCLCHECK(ncclCalloc(&comm->p2pSends, comm->nRanks));
+   NCCLCHECK(ncclCalloc(&comm->p2pRecvs, comm->nRanks));
+ 
+   // Mark channels as non initialized.
+   for (int c=0; c<MAXCHANNELS; c++) comm->channels[c].id = -1;
+ 
+   *comret = comm;
+   return ncclSuccess;
+ }
+ 
+ static ncclResult_t devCommSetup(ncclComm_t comm) {
+-  ncclDevCommAndChannels *devCommAndChans;
++  ncclResult_t res = ncclSuccess;
++  ncclDevCommAndChannels *devCommAndChans = NULL;
++  int nChannels = 0;
++
++  NCCLCHECK(vericclCheckStepSignature(
++      "VERICCL_EXPECTED_MSCCL_CHUNKSTEPS", MSCCL_CHUNKSTEPS));
++  NCCLCHECK(vericclCheckStepSignature(
++      "VERICCL_EXPECTED_MSCCL_SLICESTEPS", MSCCL_SLICESTEPS));
++
+   NCCLCHECK(ncclCudaCalloc(&devCommAndChans, 1));
+   comm->devComm = &devCommAndChans->comm;
+   comm->hostDevComm.channels = devCommAndChans->channels;
+   comm->hostDevComm.mscclInfo = devCommAndChans->mscclInfo;
+ 
+   // Duplicate the channels on the device
+-  int nChannels = std::max(comm->nChannels, comm->p2pnChannels);
+-  NCCLCHECK(ncclCudaMemcpy(comm->hostDevComm.channels, comm->channels, nChannels));
++  nChannels = std::max(comm->nChannels, comm->p2pnChannels);
++  NCCLCHECKGOTO(
++      ncclCudaMemcpy(comm->hostDevComm.channels, comm->channels, nChannels),
++      res, dev_comm_fail);
+ 
+   // Copy userRanks and peers
+   for (int r=0; r<comm->nChannels; r++) {
+-    NCCLCHECK(ncclCudaMemcpy(comm->channels[r].ring.devUserRanks, comm->channels[r].ring.userRanks, comm->nRanks));
++    NCCLCHECKGOTO(
++        ncclCudaMemcpy(comm->channels[r].ring.devUserRanks,
++                       comm->channels[r].ring.userRanks, comm->nRanks),
++        res, dev_comm_fail);
+   }
  
    // Allocating and copying MSCCL elements
-   NCCLCHECK(ncclCudaCalloc(&comm->mscclHostComm.mscclDevComm.flags, MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL * MAXCHANNELS));
-+  NCCLCHECK(vericclTraceInit(comm));
+-  NCCLCHECK(ncclCudaCalloc(&comm->mscclHostComm.mscclDevComm.flags, MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL * MAXCHANNELS));
++  NCCLCHECKGOTO(
++      ncclCudaCalloc(&comm->mscclHostComm.mscclDevComm.flags,
++                     MSCCL_MAX_NUM_THREAD_BLOCKS_PER_CHANNEL * MAXCHANNELS),
++      res, dev_comm_fail);
++  NCCLCHECKGOTO(vericclTraceInit(comm), res, dev_comm_fail);
    comm->mscclHostComm.workIndex = 1; // start workIndex from 1 since flags are initialized to 0
    comm->mscclHostComm.flagsNeedReset = 0; // since we just allocated them
-   NCCLCHECK(ncclCudaMemcpy(comm->hostDevComm.mscclInfo, &comm->mscclHostComm.mscclDevComm, 1));
+-  NCCLCHECK(ncclCudaMemcpy(comm->hostDevComm.mscclInfo, &comm->mscclHostComm.mscclDevComm, 1));
++  NCCLCHECKGOTO(
++      ncclCudaMemcpy(comm->hostDevComm.mscclInfo,
++                     &comm->mscclHostComm.mscclDevComm, 1),
++      res, dev_comm_fail);
+ 
+   // Init NPKit
+   NPKIT_INIT();
+ 
+   // Duplicate the dev comm on the device
+-  NCCLCHECK(ncclCudaMemcpy(comm->devComm, &comm->hostDevComm, 1));
++  NCCLCHECKGOTO(
++      ncclCudaMemcpy(comm->devComm, &comm->hostDevComm, 1),
++      res, dev_comm_fail);
+   return ncclSuccess;
++
++dev_comm_fail:
++  vericclTraceDiscard(comm);
++  if (comm->mscclHostComm.mscclDevComm.flags != NULL) {
++    CUDACHECKIGNORE(cudaFree(comm->mscclHostComm.mscclDevComm.flags));
++    comm->mscclHostComm.mscclDevComm.flags = NULL;
++  }
++  if (devCommAndChans != NULL) {
++    CUDACHECKIGNORE(cudaFree(devCommAndChans));
++  }
++  comm->devComm = NULL;
++  comm->hostDevComm.channels = NULL;
++  comm->hostDevComm.mscclInfo = NULL;
++  return res;
+ }
+ 
+ // Pre-process the string so that running "strings" on the lib can quickly reveal the version.
+ #define VERSION_STRING "NCCL version " STR(NCCL_MAJOR) "." STR(NCCL_MINOR) "." STR(NCCL_PATCH) NCCL_SUFFIX ".MSCCL." STR(MSCCL_VERSION) "+cuda" STR(CUDA_MAJOR) "." STR(CUDA_MINOR)
+ static void showVersion() {
+   static int shown = 0;
+   if (shown == 0 && ncclDebugLevel >= NCCL_LOG_VERSION) {
+     printf("%s\n", VERSION_STRING);
+     fflush(stdout);
+     if (ncclDebugFile != stdout)
+       INFO(NCCL_ALL,"%s", VERSION_STRING); // Also log NCCL version in one of the files
+     shown = 1;

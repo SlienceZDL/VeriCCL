@@ -21,7 +21,10 @@ setup(
     data_files=[
         (
             "share/vericcl/runtime/msccl-trace",
-            ["runtime/msccl-trace/README.md"],
+            [
+                "runtime/msccl-trace/README.md",
+                "runtime/msccl-trace/upstream.json",
+            ],
         ),
         (
             "share/vericcl/runtime/msccl-trace/include",
