@@ -12,6 +12,13 @@ VeriCCL用于规划、求解和验证集合通信调度。它接收topology、sk
 
 ## 构建与安装 VeriCCL
 
+VeriCCL支持CPython 3.10-3.13。请在创建虚拟环境前运行以下预检：
+
+<!-- vericcl-doc-test: python-version -->
+```bash
+python3 -c 'import sys; v = sys.version_info[:2]; sys.exit("VeriCCL requires Python 3.10-3.13; found {}.{}.".format(*v)) if not (3, 10) <= v < (3, 14) else print("VeriCCL Python version check passed: {}.{}".format(*v))'
+```
+
 通过SSH克隆，创建虚拟环境，安装开发依赖并以可编辑模式安装VeriCCL：
 
 ```bash

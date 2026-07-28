@@ -52,12 +52,13 @@ setup(
     },
     install_requires=[
         "argcomplete",
-        "dd>=0.5.7,<0.6",
+        'dd>=0.5.7,<0.6; python_version == "3.10"',
+        'dd>=0.6,<0.7; python_version >= "3.11"',
         "gurobipy",
         "lxml",
         "numpy",
         "ply",
         "z3-solver",
     ],
-    python_requires=">=3.9",
+    python_requires=">=3.10,<3.14",
 )

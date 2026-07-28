@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
+import sys
 
 import pytest
 
@@ -51,6 +52,7 @@ UNKNOWN_FIELD_CONTRACT = (
     "atom-top-extra=rejected -->"
 )
 DOCUMENTED_COMMAND_ORDER = (
+    "python-version",
     "help",
     "solve",
     "verify",
@@ -467,9 +469,40 @@ def _run(command, output_dir):
     )
 
 
+def _run_version_check(command, version):
+    arguments = shlex.split(command)
+    assert arguments[:2] == ["python3", "-c"]
+    script = "import sys; sys.version_info = {!r}; ".format(version)
+    return subprocess.run(
+        [sys.executable, "-c", script + arguments[2]],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize("version", ((3, 10), (3, 11), (3, 12), (3, 13)))
+def test_documented_python_version_check_accepts_supported_versions(version):
+    command = _commands_from(README_EN)["python-version"]
+    completed = _run_version_check(command, version)
+    assert completed.returncode == 0, completed.stderr
+    assert "{}.{}".format(*version) in completed.stdout
+
+
+@pytest.mark.parametrize("version", ((3, 9), (3, 14)))
+def test_documented_python_version_check_rejects_unsupported_versions(version):
+    command = _commands_from(README_EN)["python-version"]
+    completed = _run_version_check(command, version)
+    assert completed.returncode != 0
+    assert "{}.{}".format(*version) in completed.stderr
+    assert "3.10-3.13" in completed.stderr
+
+
 def test_documented_repository_commands_execute_in_order(tmp_path):
     commands = _commands()
     assert set(commands) == {
+        "python-version",
         "help",
         "solve",
         "verify",
