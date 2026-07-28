@@ -119,3 +119,41 @@ MSCCL文档行为测试在隔离临时目录中执行策略A与策略C命令块�
 | `rg -n '[\p{Han}]' vericcl tests runtime --glob '*.py' --glob '*.c' --glob '*.cc' --glob '*.cu' --glob '*.h' --glob '*.json'` | 退出码1；无匹配（`rg` 用退出码1表示未找到匹配），受检源码与 JSON 未发现中文字符 |
 
 验收主机仍为 macOS/Darwin 纯软件环境。CUDA/MSCCL 编译和 `nccl-tests` GPU 执行均为`not_run`；hardware 标记测试的跳过结果不构成 GPU、CUDA、MSCCL 或 `nccl-tests` 的实机验证证据。
+
+## 2026-07-28 Python 3.13与dd依赖兼容验收
+
+本节记录 Python 3.13 隔离安装、BDD 回归、完整软件测试及 Linux wheel 制品检查的独立验证结果。验收主机为 macOS/Darwin；安装、导入和测试均成功，但 `pip check` 因既有第三方 `z3-solver` wheel 标签不兼容而失败，二者在结论中分别记录。
+
+### Python 3.13隔离安装与测试
+
+| 范围 | 命令 | 结果 |
+|---|---|---|
+| 开发依赖安装 | `uv pip install --python /tmp/vericcl-py313.zK7JUd/.venv/bin/python -r requirements-dev.txt` | 退出码0；Python 3.13.13 环境，4个包已满足 |
+| VeriCCL可编辑安装 | `uv pip install --python /tmp/vericcl-py313.zK7JUd/.venv/bin/python -e .` | 退出码0；构建并安装 VeriCCL 0.1.0 |
+| 依赖导入与版本 | `/tmp/vericcl-py313.zK7JUd/.venv/bin/python -c 'import dd, vericcl; print(dd.__version__, vericcl.__version__)'` | 退出码0；`0.6.0 0.1.0` |
+| BDD定向回归 | `/tmp/vericcl-py313.zK7JUd/.venv/bin/python -m pytest tests/unit/verification/test_bdd_flow.py tests/unit/verification/test_bdd_order.py -q` | 退出码0；20 passed |
+| Python 3.13完整测试 | `/tmp/vericcl-py313.zK7JUd/.venv/bin/python -m pytest -q` | 退出码0；1159 passed, 9 skipped |
+| 既有环境完整测试 | `.venv/bin/python -m pytest -q` | 退出码0；Python 3.9.6；1159 passed, 9 skipped |
+
+`/tmp/vericcl-py313.zK7JUd/.venv/bin/python -m pip check` 退出码为1，唯一输出为 `z3-solver 5.0.0.0 is not supported on this platform`。该发行包的 `WHEEL` 元数据声明 `py3-none-macosx_13_3_arm64`，而当前 pip 26.1.2 的兼容标签包含 `py3-none-macosx_13_0_arm64`、不包含 `py3-none-macosx_13_3_arm64`。`import z3` 成功且 `z3.get_version_string()` 返回 `5.0.0`；该问题属于既有第三方 `z3-solver` wheel 标签，不由本次 `dd` 依赖变更引入，也未在本次任务中修复。因此，本节不声明 `pip check` 通过，但保留可编辑安装、依赖导入和测试通过的独立证据。
+
+### Linux wheel制品检查
+
+通过官方 PyPI JSON 端点检查 `dd` 0.5.7 和 0.6.0，脚本输出 `supported Linux dd wheels verified`，并确认以下制品存在：
+
+- CPython 3.10：`dd-0.5.7-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
+- CPython 3.11：`dd-0.6.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
+- CPython 3.12：`dd-0.6.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
+- CPython 3.13：`dd-0.6.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`
+
+该检查仅证明官方制品可用性，不构成 Linux 安装或执行证据。
+
+### 静态门禁与环境限制
+
+| 命令 | 结果 |
+|---|---|
+| `python3 -m compileall -q vericcl tests runtime/msccl-trace/tools` | 退出码0 |
+| `git diff --check` | 退出码0；无格式错误 |
+| `rg -n '[\p{Han}]' vericcl tests runtime setup.py --glob '*.py' --glob '*.c' --glob '*.cc' --glob '*.cu' --glob '*.h' --glob '*.json'` | 退出码1；无匹配，受检源码与机器可读文件未发现中文字符 |
+
+Linux 执行、CUDA/MSCCL 编译、GPU 执行和 `nccl-tests` 性能测试均为`not_run`。PyPI 元数据、macOS 安装及跳过的硬件测试不得解释为上述平台或硬件验证。
