@@ -12,6 +12,13 @@ Hardware validation: `not_run`. The workflow below validates generated artifacts
 
 ## Building and Installing VeriCCL
 
+VeriCCL supports CPython 3.10-3.13. Run this preflight before creating a virtual environment:
+
+<!-- vericcl-doc-test: python-version -->
+```bash
+python3 -c 'import sys; v = sys.version_info[:2]; sys.exit("VeriCCL requires Python 3.10-3.13; found {}.{}.".format(*v)) if not (3, 10) <= v < (3, 14) else print("VeriCCL Python version check passed: {}.{}".format(*v))'
+```
+
 Clone with SSH, create a virtual environment, install the development dependencies, and install VeriCCL in editable mode:
 
 ```bash
