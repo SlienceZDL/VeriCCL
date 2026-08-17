@@ -370,6 +370,14 @@ MILP达到求解时间上限时，若Gurobi已经得到可行incumbent，则提�
 
 独立MILP模型可以并行求解，默认`max_parallel_models = 4`。独立模型是指其CollectiveSpec、通信域、拓扑、分层阶段接口、目标模式和channel候选均已固定，且构造当前模型不依赖其他模型的求解结果；依赖路由结果的调度模型、由latency下界筛选结果决定是否构造的throughput模型，以及同一候选的求解、验证和修复流程不得错误并行。同构通信组只求解一次并复用结果，不得将副本计为多个独立模型。
 
+同构复用采用“代表路由求解、真实slice实例化、全局时间调度”的三段式边界。等价类必须提供显式且逐项验证的Rank、contributors和逻辑位置映射；同一通信组、同一root或owner且仅逻辑slice位置不同的问题使用恒等Rank映射复用，不同通信组只有在全部单向链路、方向、性能、channel上限、共享资源和角色按Rank数字顺序映射后完全一致时才能复用。slice专属禁用项映射不一致时，受影响slice必须拆分为独立等价类。不得使用近似拓扑标签合并问题。
+
+代表路由MILP只负责需求流守恒、共享树边、单父节点、无环层级、合法拓扑、禁用项以及latency路径代价或throughput资源负载，不展开全部真实slice的channel slot、`st_time/ed_time`和两两区间不重叠析取约束。代表解只复用路径结构，禁止复制时间、channel和共享资源slot。全部真实slice实例化后，Composer在固定K下统一选择合法channel和资源slot，并根据语义ready time、lane可用时间及共享资源可用时间执行确定性最早完成时间调度，重建完整atom路径、依赖、`st_time`和`ed_time`。最终调度仍须满足同一有向链路每个channel及每个共享资源slot区间不重叠，并执行全部既有验证。
+
+自动分层的实际应用状态必须由规范化PlanDAG记录，不能直接复制用户请求布尔值。PlanDAG使用稳定`planning_mode`区分`direct`、`manual`、`gateway_allreduce`和`gateway_allgather`，并使用`planning_reason`记录选择或回退原因；报告分别记录请求策略、实际策略和无法应用自动分层时的原因。具备真实且精确同构网关通信域的AllGather使用“节点内Gather到网关、网关间AllGather、节点内从网关分发”的分层模板；每个节点具有多个一一对应网关时，全部网关组均参与，原始slice按`slice_id mod gateway_count`分配到唯一rail，不复制slice。不存在覆盖全部节点的真实网关组时回退直接计划，不生成虚拟跨节点通信组。
+
+模板路由与确定性全局调度属于受限组合，必须记录`template_route_composition`和既有`independent_node_composition`，不得由代表模型最优推导全局`proven_optimal=true`。精确等价类去重始终启用，不受用户的`symmetry`布尔值控制；`symmetry`和`batching`仍作为独立搜索限制记录。BDD和离线调优始终分析实例化后的完整真实slice调度；拥塞修复只重分配受影响slice的候选路径或为局部模板生成新RoutePattern，不得因单个提示恢复为全部slice的单体全局MILP。用户显式设置`require_proven_optimal=true`时，Orchestrator必须绕过模板组合并调用保留的完整时间MILP；完整模型未在未受限搜索空间中获得严格最优状态时，本次求解失败，不得使用模板候选代替最优性证明。
+
 并行调度器检测可用CPU核心数`C`，当前批次实际并行数为`J = min(ready_independent_models, max_parallel_models, C)`，每个模型设置`Threads = max(1, min(12, floor(C / J)))`，保证所有并行模型的Gurobi线程总数不超过`C`。默认`solver_seed = 0`，表示使用Gurobi默认随机种子以固定内部搜索扰动；用户可以在`sketch.json`中覆盖。固定seed有利于同一模型的实验复现，但模型生成顺序、Gurobi版本、线程数、硬件或墙钟超时变化时不保证结果完全一致。并行批次仍共享`total_solve_timeout_s`墙钟预算；某个模型完成后可以启动新的独立模型，但不得动态增加仍在运行模型的线程数。
 
 求解器使用精确签名的两级缓存。已验证缓存保存调度、目标值、best bound、MIP gap、最优性证明状态和验证报告；命中后可以跳过MILP求解，但在本次输出前仍必须重新执行集合通信语义检查、BDD机会分析、动态并发事件模拟和XML验证。warm-start缓存保存尚未验证的incumbent或中断模型的Gurobi初始解，只能作为后续求解的初始解，禁止直接输出。
