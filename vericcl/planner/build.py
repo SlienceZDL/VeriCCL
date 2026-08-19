@@ -5,6 +5,7 @@ from vericcl.input.models import ResolvedInput
 from vericcl.planner.direct import build_direct_plan
 from vericcl.planner.groups import discover_communication_groups
 from vericcl.planner.hierarchy import (
+    _eligible_gateway_group,
     _eligible_gateway_rails,
     build_gateway_allgather_plan,
     build_gateway_allreduce_plan,
@@ -39,7 +40,11 @@ def build_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
         CollectiveKind.ALL_REDUCE,
     }:
         groups = discover_communication_groups(topology)
-        if _eligible_gateway_rails(topology, groups):
+        if inputs.collective.kind is CollectiveKind.ALL_GATHER:
+            eligible = bool(_eligible_gateway_rails(topology, groups))
+        else:
+            eligible = _eligible_gateway_group(topology, groups) is not None
+        if eligible:
             if inputs.collective.kind is CollectiveKind.ALL_GATHER:
                 plan = build_gateway_allgather_plan(inputs, topology, groups)
             else:

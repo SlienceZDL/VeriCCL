@@ -133,6 +133,8 @@ def gateway_rank_correspondence(
         return ()
     rail_count = len(gateways_by_node[0])
     return tuple(
-        tuple(gateways[rail_index] for gateways in gateways_by_node)
+        tuple(
+            sorted(gateways[rail_index] for gateways in gateways_by_node)
+        )
         for rail_index in range(rail_count)
     )

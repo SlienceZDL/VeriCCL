@@ -43,6 +43,17 @@ def allgather_inputs(rank_count=8, slice_count=4):
     )
 
 
+def allreduce_inputs(rank_count=8, slice_count=4):
+    return replace(
+        allgather_inputs(rank_count=rank_count, slice_count=slice_count),
+        collective=CollectiveSpec(
+            kind=CollectiveKind.ALL_REDUCE,
+            datatype="float32",
+            reduction_op="sum",
+        ),
+    )
+
+
 def gateway_topology(
     node_ranks,
     gateways,
@@ -181,6 +192,42 @@ def test_four_gateways_build_four_independent_slice_partitioned_rails():
         producer_rail = int(edge.producer_id.rsplit("-", 1)[-1])
         consumer_rail = int(edge.consumer_id.rsplit("-", 1)[-1])
         assert producer_rail == consumer_rail
+
+
+def test_interleaved_local_domains_use_sorted_real_gateway_group():
+    inputs = allgather_inputs(rank_count=4, slice_count=2)
+    topology = gateway_topology(
+        ((0, 3), (1, 2)),
+        ((3,), (2,)),
+        ((2, 3),),
+    )
+
+    plan = build_plan(inputs, topology)
+
+    assert plan.planning_mode is PlanningMode.GATEWAY_ALLGATHER
+    gateway = next(
+        node for node in plan.nodes if node.node_id == "gateway-allgather-rail-0"
+    )
+    assert gateway.communication_group == (2, 3)
+
+
+def test_unequal_gateway_counts_preserve_allreduce_covering_group():
+    topology = gateway_topology(
+        ((0, 1), (2, 3)),
+        ((0, 1), (2,)),
+        ((0, 2),),
+    )
+
+    allgather = build_plan(allgather_inputs(rank_count=4), topology)
+    allreduce = build_plan(allreduce_inputs(rank_count=4), topology)
+
+    assert allgather.planning_mode is PlanningMode.DIRECT
+    assert allgather.planning_reason == "no_eligible_gateway_domain"
+    assert allreduce.planning_mode is PlanningMode.GATEWAY_ALLREDUCE
+    gateway = next(
+        node for node in allreduce.nodes if node.node_id == "gateway-reduce-scatter"
+    )
+    assert gateway.communication_group == (0, 2)
 
 
 @pytest.mark.parametrize(

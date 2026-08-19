@@ -498,8 +498,16 @@ def _eligible_gateway_group(
     topology: Topology,
     groups: CommunicationGroups,
 ) -> Optional[Tuple[int, ...]]:
-    rails = _eligible_gateway_rails(topology, groups)
-    return rails[0] if rails else None
+    node_count = len(set(topology.node_membership.values()))
+    return next(
+        (
+            group
+            for group in groups.inter_node
+            if len({topology.node_membership[rank] for rank in group})
+            == node_count
+        ),
+        None,
+    )
 
 
 def _bidirectionally_connected(
