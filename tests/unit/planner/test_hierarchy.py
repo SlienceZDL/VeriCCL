@@ -209,6 +209,38 @@ def test_hierarchy_without_cross_node_group_falls_back_to_direct_plan():
     assert plan.planning_reason == "no_eligible_gateway_domain"
 
 
+def test_hierarchy_with_noncovering_gateway_domain_falls_back_to_direct_plan():
+    inputs = resolve_inputs(
+        EXAMPLES / "topo" / "two_node_gateway.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    inputs = replace(
+        inputs,
+        strategies=replace(inputs.strategies, hierarchy=True),
+    )
+    base_topology = load_topology(inputs)
+    topology = replace(
+        base_topology,
+        links={
+            key: link
+            for key, link in base_topology.links.items()
+            if 7 not in (key.src_rank, key.dst_rank)
+        },
+        node_membership={
+            rank: 0 if rank < 4 else 1 if rank < 7 else 2
+            for rank in range(inputs.rank_count)
+        },
+        gateways=frozenset({0, 4, 7}),
+        isomorphism_signature="",
+    )
+
+    plan = build_plan(inputs, topology)
+
+    assert plan.planning_mode is PlanningMode.DIRECT
+    assert plan.planning_reason == "no_eligible_gateway_domain"
+
+
 def test_gateway_allreduce_records_eligible_gateway_domain():
     inputs = resolve_inputs(
         EXAMPLES / "topo" / "two_node_gateway.json",

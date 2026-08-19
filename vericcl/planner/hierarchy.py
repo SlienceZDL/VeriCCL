@@ -1,5 +1,5 @@
 from collections import deque
-from typing import Dict, Mapping, Sequence, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 from vericcl.errors import InputValidationError, SemanticError
 from vericcl.input.models import ResolvedInput
@@ -490,15 +490,12 @@ def build_manual_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
     )
 
 
-def build_gateway_allreduce_plan(
-    inputs: ResolvedInput,
+def _eligible_gateway_group(
     topology: Topology,
     groups: CommunicationGroups,
-) -> PlanDAG:
-    if inputs.collective.kind is not CollectiveKind.ALL_REDUCE:
-        raise InputValidationError("gateway template requires AllReduce")
+) -> Optional[Tuple[int, ...]]:
     node_count = len(set(topology.node_membership.values()))
-    gateway_group = next(
+    return next(
         (
             group
             for group in groups.inter_node
@@ -507,6 +504,16 @@ def build_gateway_allreduce_plan(
         ),
         None,
     )
+
+
+def build_gateway_allreduce_plan(
+    inputs: ResolvedInput,
+    topology: Topology,
+    groups: CommunicationGroups,
+) -> PlanDAG:
+    if inputs.collective.kind is not CollectiveKind.ALL_REDUCE:
+        raise InputValidationError("gateway template requires AllReduce")
+    gateway_group = _eligible_gateway_group(topology, groups)
     if gateway_group is None:
         raise InputValidationError(
             "no real gateway communication group covers every node"
