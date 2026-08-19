@@ -23,6 +23,7 @@ from vericcl.errors import SemanticError
 from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import ResolvedInput
 from vericcl.planner.build import build_plan
+from vericcl.planner.model import PlanDAG, PlanningMode
 from vericcl.semantics.atom import Schedule
 from vericcl.solver.model import SolveCandidate, SolveRequest
 from vericcl.solver.orchestrator import solve
@@ -190,8 +191,10 @@ def _timeout(context: RunContext, configured: int) -> float:
     return float(configured if context.timeout_s is None else context.timeout_s)
 
 
-def _hierarchy_plan(plan) -> dict:
+def _hierarchy_plan(plan: PlanDAG) -> dict:
     return {
+        "planning_mode": plan.planning_mode.value,
+        "planning_reason": plan.planning_reason,
         "nodes": tuple(
             {
                 "node_id": node.node_id,
@@ -212,10 +215,10 @@ def _hierarchy_plan(plan) -> dict:
     }
 
 
-def _applied_strategies(inputs) -> dict:
+def _applied_strategies(inputs: ResolvedInput, plan: PlanDAG) -> dict:
     values = inputs.strategies
     return {
-        "hierarchy": values.hierarchy,
+        "hierarchy": plan.planning_mode is not PlanningMode.DIRECT,
         "symmetry": values.symmetry,
         "shortest_paths": values.shortest_paths,
         "batching": values.batching,
@@ -981,7 +984,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
                 )
             calibration_message = "online_calibration_applied"
     hierarchy = _hierarchy_plan(plan)
-    applied = _applied_strategies(inputs)
+    applied = _applied_strategies(inputs, plan)
     records = lineage_records + [
         _CandidateRecord(
             candidate=candidate,
@@ -1146,6 +1149,7 @@ def execute_verify(context: RunContext) -> RunArtifacts:
     if sidecar.normalized_input_sha256 != inputs.input_sha256:
         raise SemanticError("schedule sidecar resolved input hash does not match")
     topology = load_topology(inputs)
+    plan = build_plan(inputs, topology)
     signature = candidate_signature(
         sidecar.schedule,
         inputs,
@@ -1254,8 +1258,11 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             == final_candidate_id,
             accepted=record.accepted,
             rejection_reason=record.rejection_reason,
-            applied_strategies=_applied_strategies(inputs),
-            hierarchy_plan={"source": "schedule_sidecar"},
+            applied_strategies=_applied_strategies(inputs, plan),
+            hierarchy_plan={
+                "source": "schedule_sidecar",
+                **_hierarchy_plan(plan),
+            },
             tuning_strategy=record.tuning_strategy,
             overlay=record.overlay,
         )

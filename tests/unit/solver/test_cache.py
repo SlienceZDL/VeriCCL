@@ -6,6 +6,7 @@ import pytest
 from vericcl.errors import SemanticError
 from vericcl.input.loader import resolve_inputs
 from vericcl.planner.build import build_plan
+from vericcl.planner.model import PlanningMode
 from vericcl.solver.cache import (
     CandidateCache,
     candidate_cache_key,
@@ -102,6 +103,28 @@ def test_cache_key_is_stable_for_equivalent_request():
     value = request()
 
     assert candidate_cache_key(value) == candidate_cache_key(replace(value))
+
+
+def test_planning_metadata_changes_cache_key():
+    value = request()
+
+    changed_mode = replace(
+        value,
+        plan=replace(
+            value.plan,
+            planning_mode=PlanningMode.MANUAL,
+        ),
+    )
+    changed_reason = replace(
+        value,
+        plan=replace(
+            value.plan,
+            planning_reason="manual_hierarchy",
+        ),
+    )
+
+    assert candidate_cache_key(value) != candidate_cache_key(changed_mode)
+    assert candidate_cache_key(value) != candidate_cache_key(changed_reason)
 
 
 def test_expired_cache_entry_is_not_returned():

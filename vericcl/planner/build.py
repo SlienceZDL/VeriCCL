@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from vericcl.errors import InputValidationError
 from vericcl.input.models import ResolvedInput
 from vericcl.planner.direct import build_direct_plan
@@ -6,7 +8,7 @@ from vericcl.planner.hierarchy import (
     build_gateway_allreduce_plan,
     build_manual_plan,
 )
-from vericcl.planner.model import PlanDAG
+from vericcl.planner.model import PlanDAG, PlanningMode
 from vericcl.semantics.collective import CollectiveKind
 from vericcl.topology.model import Topology
 
@@ -38,7 +40,11 @@ def build_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
         if groups.inter_node:
             plan = build_gateway_allreduce_plan(inputs, topology, groups)
         else:
-            plan = build_direct_plan(inputs, topology)
+            plan = replace(
+                build_direct_plan(inputs, topology),
+                planning_mode=PlanningMode.DIRECT,
+                planning_reason="no_eligible_gateway_domain",
+            )
     else:
         plan = build_direct_plan(inputs, topology)
     _validate_stage_count(plan, inputs.atom_constraints.stage_num)

@@ -141,6 +141,32 @@ def test_solve_workflow_writes_complete_lineage_and_final_alias(tmp_path):
         ]
 
 
+def test_hierarchy_fallback_reports_requested_and_effective_strategies(tmp_path):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+    atom_payload = json.loads(atom.read_text(encoding="utf-8"))
+    atom_payload["strategies"]["hierarchy"] = True
+    atom.write_text(json.dumps(atom_payload), encoding="utf-8")
+
+    result = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="hierarchy-fallback",
+        )
+    )
+
+    report = json.loads(result.final_report.read_text(encoding="utf-8"))
+    assert report["requested_strategies"]["hierarchy"] is True
+    assert report["applied_strategies"]["hierarchy"] is False
+    assert report["hierarchy_plan"]["planning_mode"] == "direct"
+    assert (
+        report["hierarchy_plan"]["planning_reason"]
+        == "no_eligible_gateway_domain"
+    )
+
+
 def test_verify_workflow_reconstructs_schedule_and_uses_same_validation(tmp_path):
     topology, sketch, atom = _write_constructive_inputs(tmp_path)
     solved = execute_solve(

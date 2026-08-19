@@ -9,6 +9,7 @@ from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
     PlanNode,
+    PlanningMode,
     StageInterface,
 )
 from vericcl.semantics.collective import (
@@ -355,6 +356,8 @@ def _allreduce_plan(
         final_outputs=StageInterface(
             required_outputs(inputs.collective, rank_count, slice_count)
         ),
+        planning_mode=PlanningMode.DIRECT,
+        planning_reason="direct_request",
     )
 
 
@@ -463,6 +466,8 @@ def build_direct_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
         final_outputs=StageInterface(
             required_outputs(inputs.collective, rank_count, slice_count)
         ),
+        planning_mode=PlanningMode.DIRECT,
+        planning_reason="direct_request",
     )
 
 

@@ -17,6 +17,7 @@ from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
     PlanNode,
+    PlanningMode,
     StageInterface,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "PlanDAG",
     "PlanEdge",
     "PlanNode",
+    "PlanningMode",
     "StageInterface",
     "build_direct_plan",
     "build_plan",

@@ -15,6 +15,7 @@ from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
     PlanNode,
+    PlanningMode,
     StageInterface,
 )
 from vericcl.semantics.collective import (
@@ -81,6 +82,8 @@ def test_allgather_plan_is_sum_of_broadcasts():
         2,
         2,
     )
+    assert plan.planning_mode is PlanningMode.DIRECT
+    assert plan.planning_reason == "direct_request"
 
 
 def test_broadcast_creates_one_node_per_logical_slice():
@@ -244,6 +247,19 @@ def test_plan_rejects_incorrect_final_interface():
 
     with pytest.raises(SemanticError, match="final outputs"):
         replace(plan, final_outputs=incorrect)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("planning_mode", "direct"),
+        ("planning_reason", ""),
+        ("planning_reason", "not_ascii_\\N{SNOWMAN}"),
+    ],
+)
+def test_plan_rejects_invalid_planning_metadata(field, value):
+    with pytest.raises(SemanticError, match="planning"):
+        replace(simple_plan((simple_node("node"),)), **{field: value})
 
 
 def test_direct_plan_rejects_topology_rank_mismatch():

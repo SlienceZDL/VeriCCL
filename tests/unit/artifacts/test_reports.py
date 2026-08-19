@@ -143,6 +143,41 @@ def test_report_contains_reproducibility_validation_and_xml_binding():
     )
 
 
+def test_report_preserves_effective_hierarchy_over_requested_hierarchy():
+    schedule = two_rank_allreduce_schedule()
+    input_value = inputs()
+    input_value = replace(
+        input_value,
+        strategies=replace(input_value.strategies, hierarchy=True),
+    )
+    topology_value = topology()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology_value,
+    )
+
+    report = build_candidate_report(
+        _candidate(schedule),
+        input_value,
+        topology_value,
+        outcome,
+        overlay=None,
+        applied_strategies={"hierarchy": False},
+        hierarchy_plan={
+            "planning_mode": "direct",
+            "planning_reason": "no_eligible_gateway_domain",
+        },
+        rejection_reason=None,
+        selected_best=False,
+        tuning_strategy={},
+    )
+    decoded = json.loads(build_validation_json(report))
+
+    assert decoded["requested_strategies"]["hierarchy"] is True
+    assert decoded["applied_strategies"]["hierarchy"] is False
+
+
 def test_candidate_signature_and_binding_are_exact_and_deterministic():
     schedule = two_rank_allreduce_schedule()
     input_value = inputs()
