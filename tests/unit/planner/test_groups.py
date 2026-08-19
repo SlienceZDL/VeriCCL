@@ -228,3 +228,57 @@ def test_three_node_gateway_component_is_deterministic():
     groups = discover_communication_groups(topology_from_mapping(raw))
 
     assert groups.inter_node == ((0, 1, 2),)
+
+
+def test_signature_includes_external_shared_resource_membership():
+    raw = {
+        "ranks": 4,
+        "nodes": [
+            {"id": 0, "ranks": [0, 1], "gateways": [0]},
+            {"id": 1, "ranks": [2, 3], "gateways": [2]},
+        ],
+        "directed_links": [
+            {
+                "src": 0,
+                "dst": 1,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["left-fabric"],
+            },
+            {"src": 1, "dst": 0, "alpha": 1, "invbw": 2},
+            {
+                "src": 1,
+                "dst": 2,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["left-fabric"],
+            },
+            {
+                "src": 2,
+                "dst": 3,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["right-fabric"],
+            },
+            {"src": 3, "dst": 2, "alpha": 1, "invbw": 2},
+        ],
+        "shared_resources": [
+            {
+                "id": "left-fabric",
+                "member_links": [[0, 1], [1, 2]],
+                "alpha": 1,
+                "invbw": 2,
+            },
+            {
+                "id": "right-fabric",
+                "member_links": [[2, 3]],
+                "alpha": 1,
+                "invbw": 2,
+            },
+        ],
+    }
+    topology = topology_from_mapping(raw)
+
+    assert exact_domain_signature(topology, (0, 1)) != (
+        exact_domain_signature(topology, (2, 3))
+    )

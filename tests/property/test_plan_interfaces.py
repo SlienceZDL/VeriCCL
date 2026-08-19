@@ -5,7 +5,9 @@ import pytest
 from hypothesis import given, strategies as st
 
 from vericcl.input.loader import resolve_inputs
+from vericcl.planner.build import build_plan
 from vericcl.planner.direct import build_direct_plan
+from vericcl.planner.model import PlanningMode
 from vericcl.semantics.collective import (
     CollectiveKind,
     CollectiveSpec,
@@ -78,4 +80,45 @@ def test_direct_plan_interfaces_match_collective_semantics(kind, slice_count):
             for link in node.allowed_links
         )
         for node in plan.nodes
+    )
+
+
+@given(slice_count=st.sampled_from((1, 2, 4)))
+def test_gateway_allgather_edges_are_exact_interface_intersections(slice_count):
+    inputs = resolve_inputs(
+        EXAMPLES / "topo" / "two_node_gateway.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    inputs = replace(
+        inputs,
+        collective=CollectiveSpec(
+            kind=CollectiveKind.ALL_GATHER,
+            datatype="float32",
+        ),
+        hyperparameters=replace(
+            inputs.hyperparameters,
+            total_size_bytes=slice_count,
+            slice_size_bytes=1,
+        ),
+        strategies=replace(inputs.strategies, hierarchy=True),
+    )
+
+    plan = build_plan(inputs, load_topology(inputs))
+    nodes = {node.node_id: node for node in plan.nodes}
+
+    assert plan.planning_mode is PlanningMode.GATEWAY_ALLGATHER
+    for edge in plan.edges:
+        producer = nodes[edge.producer_id]
+        consumer = nodes[edge.consumer_id]
+        intersection = {
+            slot: contributors
+            for slot, contributors in producer.logical_output.values.items()
+            if consumer.logical_input.values.get(slot) == contributors
+        }
+        assert dict(edge.interface.values) == intersection
+    assert plan.final_outputs.values == required_outputs(
+        inputs.collective,
+        inputs.rank_count,
+        slice_count,
     )

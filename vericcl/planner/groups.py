@@ -99,3 +99,40 @@ def discover_communication_groups(topology: Topology) -> CommunicationGroups:
         intra_node=intra_node,
         inter_node=tuple(sorted(inter_node)),
     )
+
+
+def gateway_rank_correspondence(
+    topology: Topology,
+    groups: CommunicationGroups,
+) -> Tuple[Tuple[int, ...], ...]:
+    if not isinstance(topology, Topology):
+        raise SemanticError("topology must be a Topology")
+    if not isinstance(groups, CommunicationGroups):
+        raise SemanticError("groups must be CommunicationGroups")
+    if len(groups.intra_node) < 2:
+        return ()
+    covered_ranks = set()
+    covered_nodes = set()
+    gateways_by_node = []
+    for group in groups.intra_node:
+        nodes = {topology.node_membership[rank] for rank in group}
+        if len(nodes) != 1 or covered_ranks.intersection(group):
+            return ()
+        node = next(iter(nodes))
+        if node in covered_nodes:
+            return ()
+        covered_ranks.update(group)
+        covered_nodes.add(node)
+        gateways_by_node.append(
+            tuple(rank for rank in group if rank in topology.gateways)
+        )
+    if covered_ranks != set(range(topology.rank_count)):
+        return ()
+    gateway_counts = {len(gateways) for gateways in gateways_by_node}
+    if len(gateway_counts) != 1 or not next(iter(gateway_counts)):
+        return ()
+    rail_count = len(gateways_by_node[0])
+    return tuple(
+        tuple(gateways[rail_index] for gateways in gateways_by_node)
+        for rail_index in range(rail_count)
+    )

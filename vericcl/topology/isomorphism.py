@@ -29,6 +29,36 @@ def _performance(curve: PerformanceCurve) -> dict:
     }
 
 
+def _resource_member(
+    topology: Topology,
+    key: object,
+    domain_set: set,
+    relative_rank: dict,
+) -> dict:
+    def endpoint(rank: int) -> tuple:
+        if rank in domain_set:
+            return ("domain", relative_rank[rank])
+        node = topology.node_membership[rank]
+        node_ranks = sorted(
+            member
+            for member, member_node in topology.node_membership.items()
+            if member_node == node
+        )
+        return (
+            "external",
+            node_ranks.index(rank),
+            rank in topology.gateways,
+        )
+
+    edge = topology.links[key]
+    return {
+        "src": endpoint(key.src_rank),
+        "dst": endpoint(key.dst_rank),
+        "max_channels": edge.max_channels,
+        "performance": _performance(edge.performance),
+    }
+
+
 def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
     if not isinstance(topology, Topology):
         raise SemanticError("topology must be a Topology")
@@ -56,17 +86,20 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
         for resource_id in edge.resource_ids:
             resource = topology.shared_resources[resource_id]
             members = [
-                (
-                    relative_rank[member.src_rank],
-                    relative_rank[member.dst_rank],
+                _resource_member(
+                    topology,
+                    member,
+                    domain_set,
+                    relative_rank,
                 )
                 for member in resource.member_links
-                if member.src_rank in domain_set
-                and member.dst_rank in domain_set
             ]
             resources.append(
                 {
-                    "members": sorted(members),
+                    "members": sorted(
+                        members,
+                        key=lambda value: sha256_json(value),
+                    ),
                     "max_channels": resource.max_channels,
                     "performance": _performance(resource.performance),
                 }

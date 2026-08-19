@@ -3,7 +3,10 @@ from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 from vericcl.errors import InputValidationError, SemanticError
 from vericcl.input.models import ResolvedInput
-from vericcl.planner.groups import CommunicationGroups
+from vericcl.planner.groups import (
+    CommunicationGroups,
+    gateway_rank_correspondence,
+)
 from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
@@ -17,6 +20,7 @@ from vericcl.semantics.collective import (
     OutputSlot,
     required_outputs,
 )
+from vericcl.topology.isomorphism import exact_domain_signature
 from vericcl.topology.model import Topology
 
 
@@ -494,15 +498,251 @@ def _eligible_gateway_group(
     topology: Topology,
     groups: CommunicationGroups,
 ) -> Optional[Tuple[int, ...]]:
-    node_count = len(set(topology.node_membership.values()))
-    return next(
-        (
-            group
-            for group in groups.inter_node
-            if len({topology.node_membership[rank] for rank in group})
-            == node_count
+    rails = _eligible_gateway_rails(topology, groups)
+    return rails[0] if rails else None
+
+
+def _bidirectionally_connected(
+    topology: Topology,
+    ranks: Tuple[int, ...],
+) -> bool:
+    reached = {ranks[0]}
+    pending = deque([ranks[0]])
+    while pending:
+        rank = pending.popleft()
+        for peer in ranks:
+            if peer in reached:
+                continue
+            if topology.has_link(rank, peer) and topology.has_link(peer, rank):
+                reached.add(peer)
+                pending.append(peer)
+    return len(reached) == len(ranks)
+
+
+def _eligible_gateway_rails(
+    topology: Topology,
+    groups: CommunicationGroups,
+) -> Tuple[Tuple[int, ...], ...]:
+    rails = gateway_rank_correspondence(topology, groups)
+    if not rails:
+        return ()
+    if any(
+        rail not in groups.inter_node
+        or not _bidirectionally_connected(topology, rail)
+        for rail in rails
+    ):
+        return ()
+    signatures = {
+        exact_domain_signature(topology, group)
+        for group in groups.intra_node
+    }
+    if len(signatures) != 1:
+        return ()
+    return rails
+
+
+def _rail_slice_ids(
+    ranks: Sequence[int],
+    slice_count: int,
+    rail_index: int,
+    rail_count: int,
+) -> Tuple[int, ...]:
+    return tuple(
+        rank * slice_count + logical_address
+        for rank in ranks
+        for logical_address in range(slice_count)
+        if (rank * slice_count + logical_address) % rail_count == rail_index
+    )
+
+
+def build_gateway_allgather_plan(
+    inputs: ResolvedInput,
+    topology: Topology,
+    groups: CommunicationGroups,
+) -> PlanDAG:
+    if inputs.collective.kind is not CollectiveKind.ALL_GATHER:
+        raise InputValidationError("gateway template requires AllGather")
+    rails = _eligible_gateway_rails(topology, groups)
+    if not rails:
+        raise InputValidationError(
+            "no real gateway communication rails cover every node"
+        )
+    slice_count = inputs.hyperparameters.slice_count
+    rail_count = len(rails)
+    local_groups = tuple(groups.intra_node)
+    local_gather_nodes = []
+    gateway_nodes = []
+    local_allgather_nodes = []
+    edges = []
+
+    local_outputs = {}
+    local_nodes = {}
+    for rail_index, rail in enumerate(rails):
+        gateways_by_node = {
+            topology.node_membership[gateway]: gateway for gateway in rail
+        }
+        for group in local_groups:
+            node_id = topology.node_membership[group[0]]
+            gateway = gateways_by_node[node_id]
+            slice_ids = _rail_slice_ids(
+                group,
+                slice_count,
+                rail_index,
+                rail_count,
+            )
+            if not slice_ids:
+                continue
+            logical_input = StageInterface(
+                {
+                    OutputSlot(
+                        slice_id // slice_count,
+                        slice_id % slice_count,
+                    ): frozenset({slice_id})
+                    for slice_id in slice_ids
+                }
+            )
+            logical_output = StageInterface(
+                {
+                    OutputSlot(gateway, slice_id): frozenset({slice_id})
+                    for slice_id in slice_ids
+                }
+            )
+            node = _plan_node(
+                node_id="local-gather-node-{}-rail-{}".format(
+                    node_id,
+                    rail_index,
+                ),
+                stage_id=0,
+                local_collective=_local_spec(
+                    CollectiveKind.GATHER,
+                    inputs.collective,
+                    root=gateway,
+                ),
+                group=group,
+                logical_input=logical_input,
+                logical_output=logical_output,
+                topology=topology,
+            )
+            local_gather_nodes.append(node)
+            local_outputs[(node_id, rail_index)] = logical_output
+            local_nodes[(node_id, rail_index)] = node
+
+    for rail_index, rail in enumerate(rails):
+        inter_input_values = {}
+        for group in local_groups:
+            node_id = topology.node_membership[group[0]]
+            local_output = local_outputs.get((node_id, rail_index))
+            if local_output is not None:
+                inter_input_values.update(local_output.values)
+        inter_input = StageInterface(inter_input_values)
+        rail_slice_ids = _rail_slice_ids(
+            range(inputs.rank_count),
+            slice_count,
+            rail_index,
+            rail_count,
+        )
+        inter_output = StageInterface(
+            {
+                OutputSlot(gateway, slice_id): frozenset({slice_id})
+                for gateway in rail
+                for slice_id in rail_slice_ids
+            }
+        )
+        gateway_node = _plan_node(
+            node_id="gateway-allgather-rail-{}".format(rail_index),
+            stage_id=1,
+            local_collective=_local_spec(
+                CollectiveKind.ALL_GATHER,
+                inputs.collective,
+            ),
+            group=rail,
+            logical_input=inter_input,
+            logical_output=inter_output,
+            topology=topology,
+        )
+        gateway_nodes.append(gateway_node)
+        for group in local_groups:
+            node_id = topology.node_membership[group[0]]
+            local_node = local_nodes.get((node_id, rail_index))
+            if local_node is not None:
+                edges.append(
+                    PlanEdge(
+                        local_node.node_id,
+                        gateway_node.node_id,
+                        local_node.logical_output,
+                    )
+                )
+
+    for rail_index, rail in enumerate(rails):
+        rail_slice_ids = _rail_slice_ids(
+            range(inputs.rank_count),
+            slice_count,
+            rail_index,
+            rail_count,
+        )
+        gateways_by_node = {
+            topology.node_membership[gateway]: gateway for gateway in rail
+        }
+        for group in local_groups:
+            node_id = topology.node_membership[group[0]]
+            gateway = gateways_by_node[node_id]
+            logical_input = StageInterface(
+                {
+                    OutputSlot(gateway, slice_id): frozenset({slice_id})
+                    for slice_id in rail_slice_ids
+                }
+            )
+            logical_output = StageInterface(
+                {
+                    OutputSlot(rank, slice_id): frozenset({slice_id})
+                    for rank in group
+                    for slice_id in rail_slice_ids
+                }
+            )
+            local_node = _plan_node(
+                node_id="local-allgather-node-{}-rail-{}".format(
+                    node_id,
+                    rail_index,
+                ),
+                stage_id=2,
+                local_collective=_local_spec(
+                    CollectiveKind.ALL_GATHER,
+                    inputs.collective,
+                ),
+                group=group,
+                logical_input=logical_input,
+                logical_output=logical_output,
+                topology=topology,
+            )
+            local_allgather_nodes.append(local_node)
+            edges.append(
+                PlanEdge(
+                    "gateway-allgather-rail-{}".format(rail_index),
+                    local_node.node_id,
+                    logical_input,
+                )
+            )
+
+    return PlanDAG(
+        collective=inputs.collective,
+        rank_count=inputs.rank_count,
+        slice_count=slice_count,
+        initial_inputs=_initial_inputs(inputs.rank_count, slice_count),
+        nodes=(
+            tuple(local_gather_nodes)
+            + tuple(gateway_nodes)
+            + tuple(local_allgather_nodes)
         ),
-        None,
+        edges=tuple(edges),
+        final_outputs=StageInterface(
+            required_outputs(
+                inputs.collective,
+                inputs.rank_count,
+                slice_count,
+            )
+        ),
+        planning_mode=PlanningMode.GATEWAY_ALLGATHER,
+        planning_reason="eligible_gateway_domain",
     )
 
 
