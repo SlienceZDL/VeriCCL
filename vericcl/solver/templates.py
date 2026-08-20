@@ -6,7 +6,8 @@ from vericcl.input.json_codec import sha256_json
 from vericcl.planner.model import PlanNode, PlanningMode, StageInterface
 from vericcl.semantics.collective import CollectiveKind
 from vericcl.solver.demands import SolverProblem, TransferDemand
-from vericcl.topology.model import LinkKey, PerformanceCurve, Topology
+from vericcl.topology.isomorphism import exact_domain_signature
+from vericcl.topology.model import LinkKey
 
 
 _TREE_KINDS = frozenset(
@@ -203,14 +204,6 @@ def split_routing_units(problem: SolverProblem) -> tuple[RoutingUnit, ...]:
     )
 
 
-def _performance(curve: PerformanceCurve) -> tuple:
-    return (
-        curve.alpha_us,
-        curve.invbw_us,
-        tuple(curve.bandwidth_bytes_per_us.items()),
-    )
-
-
 def _rank_indices(problem: SolverProblem) -> Dict[int, int]:
     return {
         rank: index
@@ -325,52 +318,6 @@ def _offset_token(
 
 def _link_token(key: LinkKey, rank_indices: Mapping[int, int]) -> tuple:
     return (rank_indices[key.src_rank], rank_indices[key.dst_rank])
-
-
-def _resource_descriptor(
-    resource_id: str,
-    problem: SolverProblem,
-    rank_indices: Mapping[int, int],
-) -> tuple:
-    topology = problem.topology
-    resource = topology.shared_resources[resource_id]
-    members = []
-    for key in resource.member_links:
-        edge = topology.link(key)
-        members.append(
-            (
-                _rank_token(key.src_rank, problem, rank_indices),
-                _rank_token(key.dst_rank, problem, rank_indices),
-                edge.max_channels,
-                _performance(edge.performance),
-            )
-        )
-    return (
-        tuple(sorted(members)),
-        resource.max_channels,
-        _performance(resource.performance),
-    )
-
-
-def _link_descriptor(
-    key: LinkKey,
-    problem: SolverProblem,
-    rank_indices: Mapping[int, int],
-) -> tuple:
-    edge = problem.topology.link(key)
-    resources = tuple(
-        sorted(
-            _resource_descriptor(resource_id, problem, rank_indices)
-            for resource_id in edge.resource_ids
-        )
-    )
-    return (
-        _rank_token(key.src_rank, problem, rank_indices),
-        _rank_token(key.dst_rank, problem, rank_indices),
-        edge.max_channels,
-        _performance(edge.performance),
-        resources,
-    )
 
 
 def _interface_descriptor(
@@ -532,9 +479,8 @@ def _exact_signature(
         "dual": problem.node.dual_of_node_id is not None,
         "slice_size_bytes": problem.slice_size_bytes,
         "rank_roles": structural["rank_roles"],
-        "domain_links": structural["domain_links"],
+        "domain_signature": structural["domain_signature"],
         "allowed_links": structural["allowed_links"],
-        "declared_resources": structural["declared_resources"],
         "logical_input": _interface_descriptor(
             problem.node.logical_input,
             problem,
@@ -567,7 +513,6 @@ def _exact_signature(
 
 def _structural_descriptor(problem: SolverProblem) -> dict:
     rank_indices = _rank_indices(problem)
-    group_set = set(problem.node.communication_group)
     node_classes: Dict[int, int] = {}
     roles = []
     for rank in problem.node.communication_group:
@@ -577,30 +522,20 @@ def _structural_descriptor(problem: SolverProblem) -> dict:
         roles.append(
             (node_classes[node_id], rank in problem.topology.gateways)
         )
-    domain_links = tuple(
-        sorted(
-            _link_descriptor(key, problem, rank_indices)
-            for key in problem.topology.links
-            if key.src_rank in group_set and key.dst_rank in group_set
-        )
-    )
-    declared_resources = tuple(
-        sorted(
-            _resource_descriptor(resource_id, problem, rank_indices)
-            for resource_id in problem.node.shared_resource_ids
-        )
-    )
     return {
         "rank_indices": rank_indices,
         "rank_roles": tuple(roles),
-        "domain_links": domain_links,
+        "domain_signature": exact_domain_signature(
+            problem.topology,
+            problem.node.communication_group,
+            problem.node.shared_resource_ids,
+        ),
         "allowed_links": tuple(
             sorted(
                 _link_token(key, rank_indices)
                 for key in problem.node.allowed_links
             )
         ),
-        "declared_resources": declared_resources,
     }
 
 

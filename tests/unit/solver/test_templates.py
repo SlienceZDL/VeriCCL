@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import vericcl.solver.templates as templates_module
 from vericcl.errors import SemanticError
 from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import AtomConstraints, ForbiddenTransfer
@@ -811,6 +812,55 @@ def test_structural_cache_does_not_trust_supplied_topology_signature():
     )
 
     assert len(templates) == 2
+
+
+def test_signature_collision_keeps_failed_mapping_standalone(monkeypatch):
+    inputs = _inputs(3, 4)
+    topology = _topology(((0, 1, 2),))
+    problems = (
+        _tree_problem(
+            inputs,
+            topology,
+            (0, 1, 2),
+            0,
+            0,
+            node_id="collision-valid-a",
+        ),
+        _tree_problem(
+            inputs,
+            topology,
+            (0, 1, 2),
+            1,
+            1,
+            node_id="collision-standalone",
+        ),
+        _tree_problem(
+            inputs,
+            topology,
+            (0, 1, 2),
+            0,
+            2,
+            node_id="collision-valid-b",
+        ),
+    )
+    monkeypatch.setattr(
+        templates_module,
+        "_exact_signature",
+        lambda unit, problem, planning_mode, structural: "forced-collision",
+    )
+
+    templates = build_solver_templates(problems, PlanningMode.DIRECT)
+
+    assert sorted(len(template.members) for template in templates) == [1, 2]
+    standalone = next(
+        template
+        for template in templates
+        if any(
+            member.node_id == "collision-standalone"
+            for member in template.members
+        )
+    )
+    assert len(standalone.members) == 1
 
 
 def test_public_template_models_reject_noninvertible_mappings():

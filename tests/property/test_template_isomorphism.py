@@ -153,6 +153,72 @@ def _topology_with_external_resource(external_dst):
     )
 
 
+def _resource_graph_topology(
+    group,
+    external_rank,
+    *,
+    add_external_coresource=False,
+    signature="caller-supplied-resource-graph",
+):
+    domain_key = LinkKey(group[0], group[1])
+    external_key = LinkKey(group[0], external_rank)
+    primary_id = "primary-{}".format(group[0])
+    coresource_id = "co-{}".format(group[0])
+    external_resources = (
+        (primary_id, coresource_id)
+        if add_external_coresource
+        else (primary_id,)
+    )
+    curve = PerformanceCurve(
+        alpha_us=1.0,
+        invbw_us=2.0,
+        bandwidth_bytes_per_us={1: 1024.0},
+    )
+    links = {
+        domain_key: DirectedLink(
+            key=domain_key,
+            max_channels=4,
+            performance=curve,
+            resource_ids=(primary_id,),
+        ),
+        external_key: DirectedLink(
+            key=external_key,
+            max_channels=4,
+            performance=curve,
+            resource_ids=external_resources,
+        ),
+    }
+    resources = {
+        primary_id: SharedResource(
+            resource_id=primary_id,
+            member_links=(domain_key, external_key),
+            max_channels=2,
+            performance=curve,
+        )
+    }
+    if add_external_coresource:
+        resources[coresource_id] = SharedResource(
+            resource_id=coresource_id,
+            member_links=(external_key,),
+            max_channels=1,
+            performance=curve,
+        )
+    rank_count = 6
+    membership = {
+        rank: rank for rank in range(rank_count)
+    }
+    membership[group[1]] = membership[group[0]]
+    return Topology(
+        rank_count=rank_count,
+        links=links,
+        shared_resources=resources,
+        node_membership=membership,
+        gateways=frozenset({group[0]}),
+        warnings=(),
+        isomorphism_signature=signature,
+    )
+
+
 def _problem(inputs, topology, group, root, logical_position, node_id):
     contributor = root * inputs.hyperparameters.slice_count + logical_position
     contributors = frozenset({contributor})
@@ -293,3 +359,71 @@ def test_external_shared_resource_endpoints_cannot_merge_unsafely():
     )
 
     assert len(templates) == 2
+
+
+def test_member_link_resource_comembership_splits_exact_templates():
+    inputs = replace(_inputs(), rank_count=6)
+    baseline_topology = _resource_graph_topology((0, 1), 4)
+    changed_topology = _resource_graph_topology(
+        (0, 1),
+        4,
+        add_external_coresource=True,
+    )
+    baseline = _problem(
+        inputs,
+        baseline_topology,
+        (0, 1),
+        0,
+        0,
+        "comembership-a",
+    )
+    changed = _problem(
+        inputs,
+        changed_topology,
+        (0, 1),
+        0,
+        1,
+        "comembership-b",
+    )
+
+    templates = build_solver_templates(
+        (baseline, changed),
+        PlanningMode.GATEWAY_ALLGATHER,
+    )
+
+    assert len(templates) == 2
+
+
+def test_external_resource_graph_rank_renumbering_reuses_exact_template():
+    inputs = replace(_inputs(), rank_count=6)
+    first_topology = _resource_graph_topology((0, 1), 4)
+    second_topology = _resource_graph_topology((2, 3), 5)
+    first = _problem(
+        inputs,
+        first_topology,
+        (0, 1),
+        0,
+        0,
+        "renumbered-a",
+    )
+    second = _problem(
+        inputs,
+        second_topology,
+        (2, 3),
+        2,
+        1,
+        "renumbered-b",
+    )
+
+    templates = build_solver_templates(
+        (first, second),
+        PlanningMode.GATEWAY_ALLGATHER,
+    )
+
+    assert len(templates) == 1
+    translated = next(
+        member
+        for member in templates[0].members
+        if member.node_id == "renumbered-b"
+    )
+    assert translated.rank_map == ((0, 2), (1, 3))
