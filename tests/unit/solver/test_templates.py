@@ -425,6 +425,57 @@ def test_real_gateway_batched_offsets_preserve_logical_translation():
     assert {len(template.members) for template in local_allgather} == {4}
 
 
+def test_real_local_dissemination_maps_external_contributor_sources():
+    plan, problems = _real_gateway_allgather(slice_count=2)
+    local_problems = tuple(
+        problem
+        for problem in problems
+        if problem.node.node_id
+        in {
+            "local-allgather-node-0-rail-0",
+            "local-allgather-node-1-rail-0",
+        }
+    )
+
+    templates = build_solver_templates(local_problems, plan.planning_mode)
+
+    node_0_unit = next(
+        unit
+        for unit in split_routing_units(local_problems[0])
+        if {
+            slice_id // 2
+            for demand in unit.demands
+            for slice_id in demand.contributors
+        }
+        == {5}
+        and {demand.logical_position for demand in unit.demands} == {0}
+    )
+    node_1_unit = next(
+        unit
+        for unit in split_routing_units(local_problems[1])
+        if {
+            slice_id // 2
+            for demand in unit.demands
+            for slice_id in demand.contributors
+        }
+        == {1}
+        and {demand.logical_position for demand in unit.demands} == {0}
+    )
+    cross_node = next(
+        template
+        for template in templates
+        if {node_0_unit.unit_id, node_1_unit.unit_id}
+        <= {member.unit_id for member in template.members}
+    )
+    translated = next(
+        member
+        for member in cross_node.members
+        if member.unit_id == node_1_unit.unit_id
+    )
+    assert (5, 1) in translated.rank_map
+    assert len(translated.rank_map) == 5
+
+
 def test_direct_allgather_uses_one_template_per_source_root():
     rank_count = 8
     slice_count = 128
@@ -888,3 +939,102 @@ def test_public_template_models_reject_noninvertible_mappings():
     assert template.members == (member,)
     with pytest.raises(SemanticError, match="invertible"):
         replace(member, rank_map=((0, 0), (1, 0)))
+
+
+def _public_template_fixture():
+    problem = _chain_problem(CollectiveKind.SCATTER)
+    unit = RoutingUnit(
+        unit_id="public-validation-unit",
+        node=problem.node,
+        demands=problem.demands,
+    )
+    member = TemplateMember(
+        unit_id=unit.unit_id,
+        node_id=unit.node.node_id,
+        rank_map=((0, 0), (1, 1), (2, 2)),
+        contributor_map=((0, 0), (1, 1)),
+        logical_position_map=((0, 0), (1, 1)),
+    )
+    return unit, member
+
+
+@pytest.mark.parametrize(
+    ("field", "mapping"),
+    (
+        ("rank_map", ((0, 0), (1, 1))),
+        ("rank_map", ((0, 0), (1, 1), (2, 2), (3, 3))),
+        ("contributor_map", ((0, 0),)),
+        ("contributor_map", ((0, 0), (1, 1), (2, 2))),
+        ("logical_position_map", ((0, 0),)),
+        ("logical_position_map", ((0, 0), (1, 1), (2, 2))),
+    ),
+)
+def test_solver_template_rejects_inexact_mapping_source_coverage(
+    field,
+    mapping,
+):
+    unit, member = _public_template_fixture()
+    member = replace(member, **{field: mapping})
+
+    with pytest.raises(SemanticError, match="source coverage"):
+        SolverTemplate(
+            template_id="invalid-coverage",
+            representative=unit,
+            members=(member,),
+            exact_signature="signature",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("node_id", "another-node"),
+        ("rank_map", ((0, 1), (1, 0), (2, 2))),
+        ("contributor_map", ((0, 1), (1, 0))),
+        ("logical_position_map", ((0, 1), (1, 0))),
+    ),
+)
+def test_solver_template_representative_member_must_be_identity(field, value):
+    unit, member = _public_template_fixture()
+    member = replace(member, **{field: value})
+
+    with pytest.raises(SemanticError, match="representative member"):
+        SolverTemplate(
+            template_id="invalid-representative",
+            representative=unit,
+            members=(member,),
+            exact_signature="signature",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "mapping"),
+    (
+        ("rank_map", ((0, 0), (1, 1))),
+        ("contributor_map", ((0, 0),)),
+        ("logical_position_map", ((0, 0),)),
+    ),
+)
+def test_solver_template_checks_mapping_coverage_for_every_member(
+    field,
+    mapping,
+):
+    unit, representative = _public_template_fixture()
+    incomplete = replace(
+        TemplateMember(
+            unit_id="translated-unit",
+            node_id="translated-node",
+            rank_map=representative.rank_map,
+            contributor_map=representative.contributor_map,
+            logical_position_map=representative.logical_position_map,
+        ),
+        **{field: mapping},
+    )
+
+    with pytest.raises(SemanticError, match="source coverage"):
+        SolverTemplate(
+            template_id="invalid-translated-member",
+            representative=unit,
+            members=(representative, incomplete),
+            exact_signature="signature",
+        )

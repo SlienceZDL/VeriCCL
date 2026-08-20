@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from itertools import permutations
 from typing import Dict, Iterable, List, Mapping, Tuple
 
 from vericcl.errors import SemanticError
@@ -23,6 +24,11 @@ _CHAIN_KINDS = frozenset(
         CollectiveKind.ALL_TO_ALL,
     }
 )
+
+
+# Exact semantic-node labeling is factorial. Seven external nodes need at most
+# 5,040 labelings; larger units retain raw identity and only lose reuse.
+_EXACT_SEMANTIC_EXTERNAL_NODE_LIMIT = 7
 
 
 def _identifier(value: object, field: str) -> str:
@@ -81,6 +87,40 @@ class RoutingUnit:
             "demands",
             tuple(sorted(demands, key=lambda demand: demand.demand_id)),
         )
+        object.__setattr__(
+            self,
+            "_semantic_rank_sources",
+            tuple(self.node.communication_group),
+        )
+
+
+def _unit_slice_ids(unit: RoutingUnit) -> Tuple[int, ...]:
+    return tuple(
+        sorted(
+            {
+                slice_id
+                for demand in unit.demands
+                for values in (demand.contributors, demand.member_slice_ids)
+                for slice_id in values
+            }
+        )
+    )
+
+
+def _unit_logical_positions(unit: RoutingUnit) -> Tuple[int, ...]:
+    return tuple(
+        sorted({demand.logical_position for demand in unit.demands})
+    )
+
+
+def _unit_rank_sources(unit: RoutingUnit) -> Tuple[int, ...]:
+    return tuple(
+        getattr(
+            unit,
+            "_semantic_rank_sources",
+            unit.node.communication_group,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -142,6 +182,37 @@ class SolverTemplate:
             raise SemanticError("solver template member unit IDs must be unique")
         if self.representative.unit_id not in unit_ids:
             raise SemanticError("solver template must include its representative")
+        expected_sources = {
+            "rank_map": set(_unit_rank_sources(self.representative)),
+            "contributor_map": set(_unit_slice_ids(self.representative)),
+            "logical_position_map": set(
+                _unit_logical_positions(self.representative)
+            ),
+        }
+        for member in members:
+            for field, expected in expected_sources.items():
+                actual = {source for source, _ in getattr(member, field)}
+                if actual != expected:
+                    raise SemanticError(
+                        "solver template member mapping source coverage is invalid"
+                    )
+        representative_member = next(
+            member
+            for member in members
+            if member.unit_id == self.representative.unit_id
+        )
+        if representative_member.node_id != self.representative.node.node_id:
+            raise SemanticError(
+                "solver template representative member node does not match"
+            )
+        if any(
+            source != target
+            for field in expected_sources
+            for source, target in getattr(representative_member, field)
+        ):
+            raise SemanticError(
+                "solver template representative member must use identity maps"
+            )
         _identifier(self.exact_signature, "solver_template.exact_signature")
         object.__setattr__(
             self,
@@ -156,6 +227,27 @@ def _unit_id(node: PlanNode, demands: Iterable[TransferDemand]) -> str:
         node.node_id,
         sha256_json(demand_ids)[:16],
     )
+
+
+def _routing_unit(
+    problem: SolverProblem,
+    demands: Tuple[TransferDemand, ...],
+) -> RoutingUnit:
+    unit = RoutingUnit(
+        unit_id=_unit_id(problem.node, demands),
+        node=problem.node,
+        demands=demands,
+    )
+    rank_sources = set(problem.node.communication_group)
+    rank_sources.update(
+        slice_id // problem.slice_count for slice_id in _unit_slice_ids(unit)
+    )
+    object.__setattr__(
+        unit,
+        "_semantic_rank_sources",
+        tuple(sorted(rank_sources)),
+    )
+    return unit
 
 
 def split_routing_units(problem: SolverProblem) -> tuple[RoutingUnit, ...]:
@@ -192,11 +284,7 @@ def split_routing_units(problem: SolverProblem) -> tuple[RoutingUnit, ...]:
     return tuple(
         sorted(
             (
-                RoutingUnit(
-                    unit_id=_unit_id(problem.node, demands),
-                    node=problem.node,
-                    demands=demands,
-                )
+                _routing_unit(problem, demands)
                 for demands in groups
             ),
             key=lambda unit: unit.unit_id,
@@ -222,7 +310,10 @@ def _rank_token(
     rank_indices: Mapping[int, int],
 ) -> tuple:
     if rank in rank_indices:
-        return ("domain", rank_indices[rank])
+        token = rank_indices[rank]
+        if isinstance(token, tuple):
+            return token
+        return ("domain", token)
     return (
         "external",
         rank,
@@ -549,16 +640,87 @@ def _structural_cache_key(problem: SolverProblem) -> tuple:
 
 
 def _all_slice_ids(unit: RoutingUnit) -> Tuple[int, ...]:
-    return tuple(
+    return _unit_slice_ids(unit)
+
+
+def _canonical_unit_signature(
+    unit: RoutingUnit,
+    problem: SolverProblem,
+    planning_mode: PlanningMode,
+    structural: dict,
+) -> tuple[str, dict[int, object]]:
+    group = set(unit.node.communication_group)
+    external_ranks = tuple(
+        rank for rank in _unit_rank_sources(unit) if rank not in group
+    )
+    node_ranks: Dict[int, List[int]] = {}
+    for rank, node_id in problem.topology.node_membership.items():
+        node_ranks.setdefault(node_id, []).append(rank)
+    rank_positions = {
+        rank: position
+        for ranks in node_ranks.values()
+        for position, rank in enumerate(sorted(ranks))
+    }
+    domain_node_labels = {}
+    for rank in unit.node.communication_group:
+        node_id = problem.topology.node_membership[rank]
+        if node_id not in domain_node_labels:
+            domain_node_labels[node_id] = len(domain_node_labels)
+    external_nodes = tuple(
         sorted(
             {
-                slice_id
-                for demand in unit.demands
-                for values in (demand.contributors, demand.member_slice_ids)
-                for slice_id in values
+                problem.topology.node_membership[rank]
+                for rank in external_ranks
+                if problem.topology.node_membership[rank]
+                not in domain_node_labels
             }
         )
     )
+    if len(external_nodes) > _EXACT_SEMANTIC_EXTERNAL_NODE_LIMIT:
+        return (
+            _exact_signature(unit, problem, planning_mode, structural),
+            {
+                rank: ("semantic_identity", rank)
+                for rank in external_ranks
+            },
+        )
+    best = None
+    for node_order in permutations(external_nodes):
+        external_node_labels = {
+            node_id: label for label, node_id in enumerate(node_order)
+        }
+        external_labels = {}
+        for rank in external_ranks:
+            node_id = problem.topology.node_membership[rank]
+            if node_id in domain_node_labels:
+                node_token = (
+                    "semantic_domain_node",
+                    domain_node_labels[node_id],
+                )
+            else:
+                node_token = (
+                    "semantic_external_node",
+                    external_node_labels[node_id],
+                )
+            external_labels[rank] = (
+                node_token,
+                rank_positions[rank],
+                rank in problem.topology.gateways,
+            )
+        descriptor = dict(structural)
+        descriptor["rank_indices"] = dict(structural["rank_indices"])
+        descriptor["rank_indices"].update(external_labels)
+        signature = _exact_signature(
+            unit,
+            problem,
+            planning_mode,
+            descriptor,
+        )
+        candidate = (signature, node_order, external_labels)
+        if best is None or candidate[:2] < best[:2]:
+            best = candidate
+    signature, _, external_labels = best
+    return signature, external_labels
 
 
 def _mapping_dictionary(mapping: Tuple[Tuple[int, int], ...]) -> Dict[int, int]:
@@ -688,19 +850,34 @@ def _target_demand_value(demand: TransferDemand) -> tuple:
 def _template_member(
     representative: RoutingUnit,
     representative_problem: SolverProblem,
+    representative_external_labels: Mapping[int, object],
     unit: RoutingUnit,
     problem: SolverProblem,
+    external_labels: Mapping[int, object],
 ) -> TemplateMember | None:
     if len(representative.node.communication_group) != len(
         unit.node.communication_group
     ):
         return None
-    rank_map = tuple(
+    rank_pairs = list(
         zip(
             representative.node.communication_group,
             unit.node.communication_group,
         )
     )
+    representative_by_label = {
+        label: rank for rank, label in representative_external_labels.items()
+    }
+    member_by_label = {
+        label: rank for rank, label in external_labels.items()
+    }
+    if set(representative_by_label) != set(member_by_label):
+        return None
+    rank_pairs.extend(
+        (representative_by_label[label], member_by_label[label])
+        for label in sorted(representative_by_label, key=repr)
+    )
+    rank_map = tuple(sorted(rank_pairs))
     rank_mapping = _mapping_dictionary(rank_map)
     representative_positions = sorted(
         {demand.logical_position for demand in representative.demands}
@@ -782,7 +959,7 @@ def build_solver_templates(
         if structural is None:
             structural = _structural_descriptor(problem)
             structural_cache[structural_key] = structural
-        signature = _exact_signature(
+        signature, external_labels = _canonical_unit_signature(
             unit,
             problem,
             planning_mode,
@@ -795,8 +972,10 @@ def build_solver_templates(
             candidate = _template_member(
                 item["representative"],
                 item["problem"],
+                item["external_labels"],
                 unit,
                 problem,
+                external_labels,
             )
             if candidate is not None:
                 selected = index
@@ -806,8 +985,10 @@ def build_solver_templates(
             member = _template_member(
                 unit,
                 problem,
+                external_labels,
                 unit,
                 problem,
+                external_labels,
             )
             if member is None:
                 raise SemanticError("routing unit cannot map to itself")
@@ -815,6 +996,7 @@ def build_solver_templates(
                 {
                     "representative": unit,
                     "problem": problem,
+                    "external_labels": external_labels,
                     "signature": signature,
                     "members": [member],
                 }
