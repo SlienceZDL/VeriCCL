@@ -18,6 +18,7 @@ from vericcl.solver.demands import (
     SolverProblem,
     build_solver_problem,
 )
+from vericcl.solver.templates import split_routing_units
 from vericcl.topology.loader import load_topology
 from vericcl.topology.model import (
     DirectedLink,
@@ -317,3 +318,34 @@ def test_monolithic_allreduce_node_must_be_decomposed():
 
     with pytest.raises(SemanticError, match="decomposed"):
         build_solver_problem(node, problem.inputs, problem.topology)
+
+
+def test_batched_broadcast_demands_split_by_logical_payload_tree():
+    problem = allreduce_problem("allreduce-ag-a00000000")
+    first = frozenset({0, 8})
+    second = frozenset({1, 9})
+    node = replace(
+        problem.node,
+        node_id="batched-broadcast",
+        logical_input=StageInterface(
+            {
+                OutputSlot(0, 0): first,
+                OutputSlot(0, 1): second,
+            }
+        ),
+        logical_output=StageInterface(
+            {
+                OutputSlot(0, 0): first,
+                OutputSlot(1, 0): first,
+                OutputSlot(0, 1): second,
+                OutputSlot(1, 1): second,
+            }
+        ),
+    )
+
+    batched = build_solver_problem(node, problem.inputs, problem.topology)
+    units = split_routing_units(batched)
+
+    assert len(batched.demands) == 2
+    assert len(units) == 2
+    assert {unit.demands[0].logical_position for unit in units} == {0, 1}

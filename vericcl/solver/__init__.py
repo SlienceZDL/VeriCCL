@@ -18,6 +18,13 @@ from vericcl.solver.model import (
 from vericcl.solver.objectives import rank_candidates
 from vericcl.solver.orchestrator import solve
 from vericcl.solver.search import allocate_model_threads, search_models
+from vericcl.solver.templates import (
+    RoutingUnit,
+    SolverTemplate,
+    TemplateMember,
+    build_solver_templates,
+    split_routing_units,
+)
 
 __all__ = [
     "ModelBudget",
@@ -28,14 +35,19 @@ __all__ = [
     "SolveRequest",
     "SolveResult",
     "SolveStatus",
+    "SolverTemplate",
     "SolverMetrics",
+    "RoutingUnit",
+    "TemplateMember",
     "allocate_model_threads",
     "build_solver_problem",
+    "build_solver_templates",
     "candidate_cache_key",
     "construct_candidate",
     "rank_candidates",
     "search_models",
     "solve",
     "solve_milp",
+    "split_routing_units",
     "throughput_time_lower_bound",
 ]
