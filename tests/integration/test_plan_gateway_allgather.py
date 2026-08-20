@@ -11,6 +11,7 @@ from vericcl.semantics.collective import (
     CollectiveSpec,
     required_outputs,
 )
+from vericcl.solver.demands import build_solver_problem
 from vericcl.topology.loader import load_topology, topology_from_mapping
 from vericcl.topology.model import LinkKey
 
@@ -194,6 +195,34 @@ def test_four_gateways_build_four_independent_slice_partitioned_rails():
         assert producer_rail == consumer_rail
 
 
+@pytest.mark.parametrize("rail_count", (1, 4))
+def test_gateway_plan_nodes_build_unique_deterministic_demands(rail_count):
+    inputs = allgather_inputs(slice_count=4)
+    if rail_count == 1:
+        topology = load_topology(inputs)
+    else:
+        topology = gateway_topology(
+            ((0, 1, 2, 3), (4, 5, 6, 7)),
+            ((0, 1, 2, 3), (4, 5, 6, 7)),
+            ((0, 4), (1, 5), (2, 6), (3, 7)),
+        )
+    plan = build_plan(inputs, topology)
+    demand_ids = []
+
+    for node in plan.nodes:
+        problem = build_solver_problem(node, inputs, topology)
+        rebuilt = build_solver_problem(node, inputs, topology)
+        node_demand_ids = tuple(demand.demand_id for demand in problem.demands)
+        assert node_demand_ids == tuple(
+            demand.demand_id for demand in rebuilt.demands
+        )
+        assert len(node_demand_ids) == len(set(node_demand_ids))
+        demand_ids.extend(node_demand_ids)
+
+    assert demand_ids
+    assert len(demand_ids) == len(set(demand_ids))
+
+
 def test_interleaved_local_domains_use_sorted_real_gateway_group():
     inputs = allgather_inputs(rank_count=4, slice_count=2)
     topology = gateway_topology(
@@ -228,6 +257,37 @@ def test_unequal_gateway_counts_preserve_allreduce_covering_group():
         node for node in allreduce.nodes if node.node_id == "gateway-reduce-scatter"
     )
     assert gateway.communication_group == (0, 2)
+
+
+def test_infeasible_local_gateway_paths_fall_back_to_feasible_direct_plan():
+    inputs = allgather_inputs(rank_count=4, slice_count=1)
+    topology = topology_from_mapping(
+        {
+            "ranks": 4,
+            "nodes": [
+                {"id": 0, "ranks": [0, 1], "gateways": [0]},
+                {"id": 1, "ranks": [2, 3], "gateways": [2]},
+            ],
+            "directed_links": [
+                {"src": 0, "dst": 1, "alpha": 1, "invbw": 2},
+                {"src": 2, "dst": 3, "alpha": 1, "invbw": 2},
+                {"src": 0, "dst": 2, "alpha": 1, "invbw": 2},
+                {"src": 2, "dst": 0, "alpha": 1, "invbw": 2},
+                {"src": 1, "dst": 2, "alpha": 1, "invbw": 2},
+                {"src": 3, "dst": 0, "alpha": 1, "invbw": 2},
+            ],
+            "shared_resources": [],
+        }
+    )
+
+    plan = build_plan(inputs, topology)
+
+    assert plan.planning_mode is PlanningMode.DIRECT
+    assert plan.planning_reason == "no_eligible_gateway_domain"
+    problems = tuple(
+        build_solver_problem(node, inputs, topology) for node in plan.nodes
+    )
+    assert not any(problem.infeasible_demand_ids for problem in problems)
 
 
 @pytest.mark.parametrize(

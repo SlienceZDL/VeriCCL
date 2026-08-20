@@ -59,6 +59,40 @@ def _resource_member(
     }
 
 
+def _external_node_equivalence(
+    topology: Topology,
+    member_links: tuple,
+    domain_set: set,
+    relative_rank: dict,
+) -> list:
+    occurrences = {}
+    for key in member_links:
+        member = _resource_member(
+            topology,
+            key,
+            domain_set,
+            relative_rank,
+        )
+        for side, rank in (
+            ("src", key.src_rank),
+            ("dst", key.dst_rank),
+        ):
+            if rank in domain_set:
+                continue
+            node = topology.node_membership[rank]
+            occurrences.setdefault(node, []).append(
+                {
+                    "side": side,
+                    "member": member,
+                }
+            )
+    patterns = [
+        sorted(values, key=lambda value: sha256_json(value))
+        for values in occurrences.values()
+    ]
+    return sorted(patterns, key=lambda value: sha256_json(value))
+
+
 def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
     if not isinstance(topology, Topology):
         raise SemanticError("topology must be a Topology")
@@ -99,6 +133,12 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
                     "members": sorted(
                         members,
                         key=lambda value: sha256_json(value),
+                    ),
+                    "external_node_equivalence": _external_node_equivalence(
+                        topology,
+                        resource.member_links,
+                        domain_set,
+                        relative_rank,
                     ),
                     "max_channels": resource.max_channels,
                     "performance": _performance(resource.performance),

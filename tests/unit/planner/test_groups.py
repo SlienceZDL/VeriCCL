@@ -282,3 +282,113 @@ def test_signature_includes_external_shared_resource_membership():
     assert exact_domain_signature(topology, (0, 1)) != (
         exact_domain_signature(topology, (2, 3))
     )
+
+
+def test_signature_preserves_external_node_coreference_without_raw_ids():
+    raw = {
+        "ranks": 10,
+        "nodes": [
+            {"id": 10, "ranks": [0, 1], "gateways": [0]},
+            {"id": 20, "ranks": [2, 3], "gateways": [2]},
+            {"id": 30, "ranks": [4, 5], "gateways": [4]},
+            {"id": 40, "ranks": [6], "gateways": []},
+            {"id": 50, "ranks": [7], "gateways": []},
+            {"id": 60, "ranks": [8], "gateways": []},
+            {"id": 70, "ranks": [9], "gateways": []},
+        ],
+        "directed_links": [
+            {
+                "src": 0,
+                "dst": 1,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["converged-a"],
+            },
+            {"src": 1, "dst": 0, "alpha": 1, "invbw": 2},
+            {
+                "src": 0,
+                "dst": 6,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["converged-a"],
+            },
+            {
+                "src": 1,
+                "dst": 6,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["converged-a"],
+            },
+            {
+                "src": 2,
+                "dst": 3,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["diverged"],
+            },
+            {"src": 3, "dst": 2, "alpha": 1, "invbw": 2},
+            {
+                "src": 2,
+                "dst": 7,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["diverged"],
+            },
+            {
+                "src": 3,
+                "dst": 8,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["diverged"],
+            },
+            {
+                "src": 4,
+                "dst": 5,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["converged-b"],
+            },
+            {"src": 5, "dst": 4, "alpha": 1, "invbw": 2},
+            {
+                "src": 4,
+                "dst": 9,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["converged-b"],
+            },
+            {
+                "src": 5,
+                "dst": 9,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": ["converged-b"],
+            },
+        ],
+        "shared_resources": [
+            {
+                "id": "converged-a",
+                "member_links": [[0, 1], [0, 6], [1, 6]],
+                "alpha": 1,
+                "invbw": 2,
+            },
+            {
+                "id": "diverged",
+                "member_links": [[2, 3], [2, 7], [3, 8]],
+                "alpha": 1,
+                "invbw": 2,
+            },
+            {
+                "id": "converged-b",
+                "member_links": [[4, 5], [4, 9], [5, 9]],
+                "alpha": 1,
+                "invbw": 2,
+            },
+        ],
+    }
+    topology = topology_from_mapping(raw)
+    converged_a = exact_domain_signature(topology, (0, 1))
+    diverged = exact_domain_signature(topology, (2, 3))
+    converged_b = exact_domain_signature(topology, (4, 5))
+
+    assert converged_a != diverged
+    assert converged_a == converged_b

@@ -527,6 +527,30 @@ def _bidirectionally_connected(
     return len(reached) == len(ranks)
 
 
+def _local_gateway_paths_exist(
+    topology: Topology,
+    groups: CommunicationGroups,
+    rails: Tuple[Tuple[int, ...], ...],
+) -> bool:
+    for rail in rails:
+        gateways_by_node = {
+            topology.node_membership[gateway]: gateway for gateway in rail
+        }
+        for group in groups.intra_node:
+            node_id = topology.node_membership[group[0]]
+            gateway = gateways_by_node[node_id]
+            if any(
+                gateway not in _reachable(topology, group, rank)
+                for rank in group
+            ):
+                return False
+            if not set(group).issubset(
+                _reachable(topology, group, gateway)
+            ):
+                return False
+    return True
+
+
 def _eligible_gateway_rails(
     topology: Topology,
     groups: CommunicationGroups,
@@ -545,6 +569,8 @@ def _eligible_gateway_rails(
         for group in groups.intra_node
     }
     if len(signatures) != 1:
+        return ()
+    if not _local_gateway_paths_exist(topology, groups, rails):
         return ()
     return rails
 

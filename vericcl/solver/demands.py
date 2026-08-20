@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import FrozenSet, Tuple
 
 from vericcl.errors import SemanticError
+from vericcl.input.json_codec import sha256_json
 from vericcl.input.models import ForbiddenTransfer, ResolvedInput
 from vericcl.planner.model import PlanNode
 from vericcl.semantics.collective import CollectiveKind
@@ -288,11 +289,18 @@ def _demand(
         contributors,
         inputs.hyperparameters.slice_count,
     )
-    demand_id = "{}-a{:08d}-r{:08d}-l{:08d}".format(
+    member_identity = sha256_json(
+        {
+            "contributors": sorted(contributors),
+            "members": sorted(members),
+        }
+    )[:12]
+    demand_id = "{}-a{:08d}-r{:08d}-l{:08d}-m{}".format(
         node.node_id,
         logical_position,
         root,
         leaf,
+        member_identity,
     )
     forbidden = _matching_forbidden(inputs, members, node.stage_id)
     legal_links, candidate_paths = _candidate_paths(
