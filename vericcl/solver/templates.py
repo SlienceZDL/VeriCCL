@@ -7,7 +7,10 @@ from vericcl.input.json_codec import sha256_json
 from vericcl.planner.model import PlanNode, PlanningMode, StageInterface
 from vericcl.semantics.collective import CollectiveKind
 from vericcl.solver.demands import SolverProblem, TransferDemand
-from vericcl.topology.isomorphism import exact_domain_signature
+from vericcl.topology.isomorphism import (
+    exact_domain_mapping_is_valid,
+    exact_domain_signature,
+)
 from vericcl.topology.model import LinkKey
 
 
@@ -959,6 +962,7 @@ def _template_member(
     unit: RoutingUnit,
     problem: SolverProblem,
     external_labels: Mapping[int, object],
+    resource_mapping_cache: dict,
 ) -> TemplateMember | None:
     if len(representative.node.communication_group) != len(
         unit.node.communication_group
@@ -993,6 +997,30 @@ def _template_member(
     extended_rank_mapping = _mapping_dictionary(
         tuple(sorted(extended_rank_pairs))
     )
+    if len(extended_rank_pairs) != len(route_rank_pairs):
+        resource_mapping_key = (
+            id(representative_problem.topology),
+            representative.node.communication_group,
+            tuple(sorted(representative.node.shared_resource_ids)),
+            id(problem.topology),
+            unit.node.communication_group,
+            tuple(sorted(unit.node.shared_resource_ids)),
+            tuple(sorted(extended_rank_pairs)),
+        )
+        if resource_mapping_key not in resource_mapping_cache:
+            resource_mapping_cache[resource_mapping_key] = (
+                exact_domain_mapping_is_valid(
+                    representative_problem.topology,
+                    representative.node.communication_group,
+                    representative.node.shared_resource_ids,
+                    problem.topology,
+                    unit.node.communication_group,
+                    unit.node.shared_resource_ids,
+                    extended_rank_pairs,
+                )
+            )
+        if not resource_mapping_cache[resource_mapping_key]:
+            return None
     representative_positions = sorted(
         {demand.logical_position for demand in representative.demands}
     )
@@ -1068,6 +1096,7 @@ def build_solver_templates(
     class_indices_by_signature: Dict[str, List[int]] = {}
     structural_cache = {}
     external_label_cache = {}
+    resource_mapping_cache = {}
     for unit, problem in contexts:
         structural_key = _structural_cache_key(problem)
         structural = structural_cache.get(structural_key)
@@ -1092,6 +1121,7 @@ def build_solver_templates(
                 unit,
                 problem,
                 external_labels,
+                resource_mapping_cache,
             )
             if candidate is not None:
                 selected = index
@@ -1105,6 +1135,7 @@ def build_solver_templates(
                 unit,
                 problem,
                 external_labels,
+                resource_mapping_cache,
             )
             if member is None:
                 raise SemanticError("routing unit cannot map to itself")

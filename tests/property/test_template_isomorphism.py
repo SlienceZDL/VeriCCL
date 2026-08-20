@@ -219,6 +219,44 @@ def _resource_graph_topology(
     )
 
 
+def _joint_semantic_resource_topology():
+    resource_id = "shared-external-fabric"
+    member_links = (
+        LinkKey(0, 1),
+        LinkKey(1, 0),
+        LinkKey(0, 2),
+        LinkKey(1, 3),
+    )
+    curve = PerformanceCurve(
+        alpha_us=1.0,
+        invbw_us=2.0,
+        bandwidth_bytes_per_us={1: 1024.0},
+    )
+    return Topology(
+        rank_count=4,
+        links={
+            key: DirectedLink(
+                key=key,
+                max_channels=4,
+                performance=curve,
+                resource_ids=(resource_id,),
+            )
+            for key in member_links
+        },
+        shared_resources={
+            resource_id: SharedResource(
+                resource_id=resource_id,
+                member_links=member_links,
+                max_channels=2,
+                performance=curve,
+            )
+        },
+        node_membership={0: 0, 1: 0, 2: 1, 3: 2},
+        gateways=frozenset({0}),
+        warnings=(),
+    )
+
+
 def _problem(inputs, topology, group, root, logical_position, node_id):
     contributor = root * inputs.hyperparameters.slice_count + logical_position
     contributors = frozenset({contributor})
@@ -275,6 +313,51 @@ def _problem(inputs, topology, group, root, logical_position, node_id):
         candidate_edges=frozenset(),
         infeasible_demand_ids=(),
         restrictions=(),
+    )
+
+
+def _problem_with_external_contributor(
+    inputs,
+    topology,
+    source_rank,
+    logical_position,
+    node_id,
+    group=(0, 1),
+    root=0,
+):
+    problem = _problem(
+        inputs,
+        topology,
+        group,
+        root,
+        logical_position,
+        node_id,
+    )
+    contributor = (
+        source_rank * inputs.hyperparameters.slice_count + logical_position
+    )
+    contributors = frozenset({contributor})
+    return replace(
+        problem,
+        node=replace(
+            problem.node,
+            logical_input=StageInterface(
+                {OutputSlot(root, logical_position): contributors}
+            ),
+            logical_output=StageInterface(
+                {
+                    OutputSlot(rank, logical_position): contributors
+                    for rank in group
+                }
+            ),
+        ),
+        demands=(
+            replace(
+                problem.demands[0],
+                contributors=contributors,
+                member_slice_ids=contributors,
+            ),
+        ),
     )
 
 
@@ -427,3 +510,65 @@ def test_external_resource_graph_rank_renumbering_reuses_exact_template():
         if member.node_id == "renumbered-b"
     )
     assert translated.rank_map == ((0, 2), (1, 3))
+
+
+def test_external_contributor_mapping_must_preserve_resource_graph():
+    inputs = _inputs()
+    topology = _joint_semantic_resource_topology()
+    first = _problem_with_external_contributor(
+        inputs,
+        topology,
+        2,
+        0,
+        "joint-resource-a",
+    )
+    second = _problem_with_external_contributor(
+        inputs,
+        topology,
+        3,
+        1,
+        "joint-resource-b",
+    )
+
+    templates = build_solver_templates(
+        (first, second),
+        PlanningMode.GATEWAY_ALLGATHER,
+    )
+
+    assert len(templates) == 2
+
+
+def test_external_contributor_mapping_reuses_matching_resource_graph():
+    inputs = replace(_inputs(), rank_count=6)
+    first_topology = _resource_graph_topology((0, 1), 4)
+    second_topology = _resource_graph_topology((2, 3), 5)
+    first = _problem_with_external_contributor(
+        inputs,
+        first_topology,
+        4,
+        0,
+        "joint-renumbered-a",
+    )
+    second = _problem_with_external_contributor(
+        inputs,
+        second_topology,
+        5,
+        1,
+        "joint-renumbered-b",
+        group=(2, 3),
+        root=2,
+    )
+
+    templates = build_solver_templates(
+        (first, second),
+        PlanningMode.GATEWAY_ALLGATHER,
+    )
+
+    assert len(templates) == 1
+    translated = next(
+        member
+        for member in templates[0].members
+        if member.node_id == "joint-renumbered-b"
+    )
+    assert translated.rank_map == ((0, 2), (1, 3))
+    assert translated.contributor_map == ((4 * 8, 5 * 8 + 1),)

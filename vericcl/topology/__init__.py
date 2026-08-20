@@ -10,7 +10,10 @@ from vericcl.topology.model import (
 )
 from vericcl.topology.legacy import convert_legacy_topology
 from vericcl.topology.loader import load_topology, topology_from_mapping
-from vericcl.topology.isomorphism import exact_domain_signature
+from vericcl.topology.isomorphism import (
+    exact_domain_mapping_is_valid,
+    exact_domain_signature,
+)
 from vericcl.topology.paths import shortest_path_set
 from vericcl.topology.performance import (
     normalize_performance_curve,
@@ -26,6 +29,7 @@ __all__ = [
     "SharedResource",
     "Topology",
     "convert_legacy_topology",
+    "exact_domain_mapping_is_valid",
     "exact_domain_signature",
     "load_topology",
     "normalize_performance_curve",

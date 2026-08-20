@@ -48,16 +48,31 @@ def _resource_member(
     external_rank_positions: dict,
     resource_labels: dict,
     labeling_mode: str,
+    pinned_external_rank_labels: dict,
 ) -> dict:
     def endpoint(rank: int) -> tuple:
         if rank in domain_set:
             return ("domain", relative_rank[rank])
         node = topology.node_membership[rank]
         if labeling_mode == _IDENTITY_LABELING:
-            return (
+            identity = (
                 "external_identity",
                 node,
                 rank,
+                external_rank_positions[rank],
+                rank in topology.gateways,
+            )
+            if rank in pinned_external_rank_labels:
+                return identity + (
+                    "pinned",
+                    pinned_external_rank_labels[rank],
+                )
+            return identity
+        if rank in pinned_external_rank_labels:
+            return (
+                "external_pinned",
+                pinned_external_rank_labels[rank],
+                external_node_labels[node],
                 external_rank_positions[rank],
                 rank in topology.gateways,
             )
@@ -143,6 +158,7 @@ def _signature_value(
     resource_labels: dict,
     selected_resource_ids: frozenset,
     labeling_mode: str,
+    pinned_external_rank_labels: dict,
 ) -> dict:
     links = []
     for key, edge in domain_links:
@@ -173,6 +189,7 @@ def _signature_value(
                 external_rank_positions,
                 resource_labels,
                 labeling_mode,
+                pinned_external_rank_labels,
             )
             for member in resource.member_links
         ]
@@ -201,10 +218,34 @@ def exact_domain_signature(
     topology: Topology,
     ranks: tuple,
     selected_resource_ids: object = (),
+    pinned_external_rank_labels: object = None,
 ) -> str:
     if not isinstance(topology, Topology):
         raise SemanticError("topology must be a Topology")
     domain = _domain(topology, ranks)
+    if pinned_external_rank_labels is None:
+        pinned_external_rank_labels = {}
+    try:
+        pinned_external_rank_labels = dict(pinned_external_rank_labels)
+    except (TypeError, ValueError) as error:
+        raise SemanticError(
+            "pinned external rank labels must be a mapping"
+        ) from error
+    for rank, label in pinned_external_rank_labels.items():
+        if isinstance(rank, bool) or not isinstance(rank, int):
+            raise SemanticError("pinned external ranks must be integers")
+        if rank < 0 or rank >= topology.rank_count:
+            raise SemanticError("pinned external rank is outside the topology")
+        if rank in domain:
+            raise SemanticError("pinned external rank belongs to the domain")
+        if isinstance(label, bool) or not isinstance(label, int) or label < 0:
+            raise SemanticError(
+                "pinned external rank labels must be non-negative integers"
+            )
+    if len(set(pinned_external_rank_labels.values())) != len(
+        pinned_external_rank_labels
+    ):
+        raise SemanticError("pinned external rank labels must be unique")
     try:
         selected_resource_ids = tuple(sorted(set(selected_resource_ids)))
     except TypeError as error:
@@ -263,6 +304,7 @@ def exact_domain_signature(
             },
             frozenset(selected_resource_ids),
             _IDENTITY_LABELING,
+            pinned_external_rank_labels,
         )
         return sha256_json(value)
 
@@ -282,6 +324,83 @@ def exact_domain_signature(
                 dict(zip(resource_ids, resource_label_values)),
                 frozenset(selected_resource_ids),
                 _CANONICAL_LABELING,
+                pinned_external_rank_labels,
             )
             signatures.append(sha256_json(value))
     return min(signatures)
+
+
+def exact_domain_mapping_is_valid(
+    source_topology: Topology,
+    source_ranks: tuple,
+    source_selected_resource_ids: object,
+    target_topology: Topology,
+    target_ranks: tuple,
+    target_selected_resource_ids: object,
+    rank_mapping: object,
+) -> bool:
+    if not isinstance(source_topology, Topology) or not isinstance(
+        target_topology,
+        Topology,
+    ):
+        raise SemanticError("mapping topologies must be Topology values")
+    source_domain = _domain(source_topology, source_ranks)
+    target_domain = _domain(target_topology, target_ranks)
+    if len(source_domain) != len(target_domain):
+        return False
+    try:
+        pairs = tuple(tuple(pair) for pair in rank_mapping)
+    except TypeError as error:
+        raise SemanticError("rank mapping must be an iterable of pairs") from error
+    if any(len(pair) != 2 for pair in pairs):
+        raise SemanticError("rank mapping must contain pairs")
+    for source, target in pairs:
+        if (
+            isinstance(source, bool)
+            or not isinstance(source, int)
+            or source < 0
+            or source >= source_topology.rank_count
+            or isinstance(target, bool)
+            or not isinstance(target, int)
+            or target < 0
+            or target >= target_topology.rank_count
+        ):
+            raise SemanticError("rank mapping contains an invalid rank")
+    sources = tuple(source for source, _ in pairs)
+    targets = tuple(target for _, target in pairs)
+    if len(sources) != len(set(sources)) or len(targets) != len(set(targets)):
+        return False
+    mapping = dict(pairs)
+    if tuple(mapping.get(rank) for rank in source_domain) != target_domain:
+        return False
+    source_domain_set = set(source_domain)
+    target_domain_set = set(target_domain)
+    external_pairs = tuple(
+        (source, target)
+        for source, target in sorted(pairs)
+        if source not in source_domain_set or target not in target_domain_set
+    )
+    if any(
+        (source in source_domain_set) != (target in target_domain_set)
+        for source, target in external_pairs
+    ):
+        return False
+    source_pins = {
+        source: label
+        for label, (source, _) in enumerate(external_pairs)
+    }
+    target_pins = {
+        target: label
+        for label, (_, target) in enumerate(external_pairs)
+    }
+    return exact_domain_signature(
+        source_topology,
+        source_domain,
+        source_selected_resource_ids,
+        source_pins,
+    ) == exact_domain_signature(
+        target_topology,
+        target_domain,
+        target_selected_resource_ids,
+        target_pins,
+    )
