@@ -1,8 +1,16 @@
+from itertools import permutations
 from typing import Tuple
 
 from vericcl.errors import SemanticError
 from vericcl.input.json_codec import sha256_json
 from vericcl.topology.model import PerformanceCurve, Topology
+
+
+# Exact enumeration is factorial. Seven external nodes require at most 5,040
+# labelings; larger graphs retain raw identity and safely sacrifice reuse.
+_EXACT_EXTERNAL_NODE_LIMIT = 7
+_CANONICAL_LABELING = "canonical_permutation"
+_IDENTITY_LABELING = "identity_fingerprint"
 
 
 def _domain(topology: Topology, ranks: object) -> Tuple[int, ...]:
@@ -34,19 +42,26 @@ def _resource_member(
     key: object,
     domain_set: set,
     relative_rank: dict,
+    external_node_labels: dict,
+    external_rank_positions: dict,
+    labeling_mode: str,
 ) -> dict:
     def endpoint(rank: int) -> tuple:
         if rank in domain_set:
             return ("domain", relative_rank[rank])
         node = topology.node_membership[rank]
-        node_ranks = sorted(
-            member
-            for member, member_node in topology.node_membership.items()
-            if member_node == node
-        )
+        if labeling_mode == _IDENTITY_LABELING:
+            return (
+                "external_identity",
+                node,
+                rank,
+                external_rank_positions[rank],
+                rank in topology.gateways,
+            )
         return (
             "external",
-            node_ranks.index(rank),
+            external_node_labels[node],
+            external_rank_positions[rank],
             rank in topology.gateways,
         )
 
@@ -59,38 +74,89 @@ def _resource_member(
     }
 
 
-def _external_node_equivalence(
+def _external_rank_positions(topology: Topology) -> dict:
+    node_ranks = {}
+    for rank, node in topology.node_membership.items():
+        node_ranks.setdefault(node, []).append(rank)
+    return {
+        rank: position
+        for ranks in node_ranks.values()
+        for position, rank in enumerate(sorted(ranks))
+    }
+
+
+def _external_nodes(
     topology: Topology,
-    member_links: tuple,
+    resource_ids: tuple,
     domain_set: set,
+) -> tuple:
+    nodes = set()
+    for resource_id in resource_ids:
+        resource = topology.shared_resources[resource_id]
+        for key in resource.member_links:
+            if key.src_rank not in domain_set:
+                nodes.add(topology.node_membership[key.src_rank])
+            if key.dst_rank not in domain_set:
+                nodes.add(topology.node_membership[key.dst_rank])
+    return tuple(sorted(nodes))
+
+
+def _signature_value(
+    topology: Topology,
+    domain: tuple,
+    domain_links: tuple,
+    roles: list,
     relative_rank: dict,
-) -> list:
-    occurrences = {}
-    for key in member_links:
-        member = _resource_member(
-            topology,
-            key,
-            domain_set,
-            relative_rank,
-        )
-        for side, rank in (
-            ("src", key.src_rank),
-            ("dst", key.dst_rank),
-        ):
-            if rank in domain_set:
-                continue
-            node = topology.node_membership[rank]
-            occurrences.setdefault(node, []).append(
+    domain_set: set,
+    external_node_labels: dict,
+    external_rank_positions: dict,
+    labeling_mode: str,
+) -> dict:
+    links = []
+    for key, edge in domain_links:
+        resources = []
+        for resource_id in edge.resource_ids:
+            resource = topology.shared_resources[resource_id]
+            members = [
+                _resource_member(
+                    topology,
+                    member,
+                    domain_set,
+                    relative_rank,
+                    external_node_labels,
+                    external_rank_positions,
+                    labeling_mode,
+                )
+                for member in resource.member_links
+            ]
+            resources.append(
                 {
-                    "side": side,
-                    "member": member,
+                    "members": sorted(
+                        members,
+                        key=lambda value: sha256_json(value),
+                    ),
+                    "max_channels": resource.max_channels,
+                    "performance": _performance(resource.performance),
                 }
             )
-    patterns = [
-        sorted(values, key=lambda value: sha256_json(value))
-        for values in occurrences.values()
-    ]
-    return sorted(patterns, key=lambda value: sha256_json(value))
+        links.append(
+            {
+                "src": relative_rank[key.src_rank],
+                "dst": relative_rank[key.dst_rank],
+                "max_channels": edge.max_channels,
+                "performance": _performance(edge.performance),
+                "resources": sorted(
+                    resources,
+                    key=lambda value: sha256_json(value),
+                ),
+            }
+        )
+    return {
+        "rank_count": len(domain),
+        "roles": roles,
+        "external_node_labeling": labeling_mode,
+        "links": sorted(links, key=lambda item: (item["src"], item["dst"])),
+    }
 
 
 def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
@@ -111,54 +177,49 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
                 "gateway": rank in topology.gateways,
             }
         )
-
-    links = []
-    for key, edge in topology.links.items():
-        if key.src_rank not in domain_set or key.dst_rank not in domain_set:
-            continue
-        resources = []
-        for resource_id in edge.resource_ids:
-            resource = topology.shared_resources[resource_id]
-            members = [
-                _resource_member(
-                    topology,
-                    member,
-                    domain_set,
-                    relative_rank,
-                )
-                for member in resource.member_links
-            ]
-            resources.append(
-                {
-                    "members": sorted(
-                        members,
-                        key=lambda value: sha256_json(value),
-                    ),
-                    "external_node_equivalence": _external_node_equivalence(
-                        topology,
-                        resource.member_links,
-                        domain_set,
-                        relative_rank,
-                    ),
-                    "max_channels": resource.max_channels,
-                    "performance": _performance(resource.performance),
-                }
-            )
-        links.append(
+    domain_links = tuple(
+        (key, edge)
+        for key, edge in topology.links.items()
+        if key.src_rank in domain_set and key.dst_rank in domain_set
+    )
+    resource_ids = tuple(
+        sorted(
             {
-                "src": relative_rank[key.src_rank],
-                "dst": relative_rank[key.dst_rank],
-                "max_channels": edge.max_channels,
-                "performance": _performance(edge.performance),
-                "resources": sorted(
-                    resources,
-                    key=lambda value: sha256_json(value),
-                ),
+                resource_id
+                for _, edge in domain_links
+                for resource_id in edge.resource_ids
             }
         )
-    value = {
-        "rank_count": len(domain),
-        "roles": roles,
-        "links": sorted(links, key=lambda item: (item["src"], item["dst"])),
-    }
-    return sha256_json(value)
+    )
+    external_nodes = _external_nodes(topology, resource_ids, domain_set)
+    external_rank_positions = _external_rank_positions(topology)
+
+    if len(external_nodes) > _EXACT_EXTERNAL_NODE_LIMIT:
+        value = _signature_value(
+            topology,
+            domain,
+            domain_links,
+            roles,
+            relative_rank,
+            domain_set,
+            {},
+            external_rank_positions,
+            _IDENTITY_LABELING,
+        )
+        return sha256_json(value)
+
+    signatures = []
+    for labels in permutations(range(len(external_nodes))):
+        value = _signature_value(
+            topology,
+            domain,
+            domain_links,
+            roles,
+            relative_rank,
+            domain_set,
+            dict(zip(external_nodes, labels)),
+            external_rank_positions,
+            _CANONICAL_LABELING,
+        )
+        signatures.append(sha256_json(value))
+    return min(signatures)

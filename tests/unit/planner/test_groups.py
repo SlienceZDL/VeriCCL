@@ -392,3 +392,226 @@ def test_signature_preserves_external_node_coreference_without_raw_ids():
 
     assert converged_a != diverged
     assert converged_a == converged_b
+
+
+def external_cycle_resource_topology():
+    resource_specs = (
+        (
+            "six-cycle",
+            (0, 1),
+            ((6, 7), (7, 8), (8, 9), (9, 10), (10, 11), (11, 6)),
+        ),
+        (
+            "two-three-cycles",
+            (2, 3),
+            ((12, 13), (13, 14), (14, 12), (15, 16), (16, 17), (17, 15)),
+        ),
+        (
+            "renumbered-six-cycle",
+            (4, 5),
+            ((18, 21), (21, 19), (19, 23), (23, 20), (20, 22), (22, 18)),
+        ),
+    )
+    directed_links = []
+    resources = []
+    for resource_id, domain_link, external_links in resource_specs:
+        member_links = (domain_link,) + external_links
+        directed_links.extend(
+            {
+                "src": src,
+                "dst": dst,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": [resource_id],
+            }
+            for src, dst in member_links
+        )
+        directed_links.append(
+            {
+                "src": domain_link[1],
+                "dst": domain_link[0],
+                "alpha": 1,
+                "invbw": 2,
+            }
+        )
+        resources.append(
+            {
+                "id": resource_id,
+                "member_links": member_links,
+                "alpha": 1,
+                "invbw": 2,
+            }
+        )
+    external_node_ids = (
+        101,
+        103,
+        105,
+        107,
+        109,
+        111,
+        202,
+        204,
+        206,
+        208,
+        210,
+        212,
+        905,
+        901,
+        909,
+        903,
+        907,
+        900,
+    )
+    return topology_from_mapping(
+        {
+            "ranks": 24,
+            "nodes": [
+                {"id": 10, "ranks": [0, 1], "gateways": [0]},
+                {"id": 20, "ranks": [2, 3], "gateways": [2]},
+                {"id": 30, "ranks": [4, 5], "gateways": [4]},
+            ]
+            + [
+                {"id": node_id, "ranks": [rank], "gateways": []}
+                for rank, node_id in zip(range(6, 24), external_node_ids)
+            ],
+            "directed_links": directed_links,
+            "shared_resources": resources,
+        }
+    )
+
+
+def test_signature_distinguishes_complete_external_resource_member_graphs():
+    topology = external_cycle_resource_topology()
+
+    assert exact_domain_signature(topology, (0, 1)) != (
+        exact_domain_signature(topology, (2, 3))
+    )
+
+
+def test_signature_is_invariant_to_external_graph_renumbering():
+    topology = external_cycle_resource_topology()
+
+    assert exact_domain_signature(topology, (0, 1)) == (
+        exact_domain_signature(topology, (4, 5))
+    )
+
+
+def test_signature_preserves_external_node_coreference_across_resources():
+    resource_members = {
+        "shared-forward": ((0, 1), (4, 5)),
+        "shared-reverse": ((1, 0), (4, 6)),
+        "distinct-forward": ((2, 3), (7, 9)),
+        "distinct-reverse": ((3, 2), (8, 10)),
+    }
+    directed_links = [
+        {
+            "src": src,
+            "dst": dst,
+            "alpha": 1,
+            "invbw": 2,
+            "resources": [resource_id],
+        }
+        for resource_id, members in resource_members.items()
+        for src, dst in members
+    ]
+    topology = topology_from_mapping(
+        {
+            "ranks": 11,
+            "nodes": [
+                {"id": 10, "ranks": [0, 1], "gateways": [0]},
+                {"id": 20, "ranks": [2, 3], "gateways": [2]},
+            ]
+            + [
+                {"id": 100 + rank, "ranks": [rank], "gateways": []}
+                for rank in range(4, 11)
+            ],
+            "directed_links": directed_links,
+            "shared_resources": [
+                {
+                    "id": resource_id,
+                    "member_links": members,
+                    "alpha": 1,
+                    "invbw": 2,
+                }
+                for resource_id, members in resource_members.items()
+            ],
+        }
+    )
+
+    assert exact_domain_signature(topology, (0, 1)) != (
+        exact_domain_signature(topology, (2, 3))
+    )
+
+
+def test_signature_fallback_does_not_merge_large_external_graphs():
+    resource_specs = (
+        (
+            "nine-cycle",
+            (0, 1),
+            tuple((rank, 4 + (rank - 3) % 9) for rank in range(4, 13)),
+        ),
+        (
+            "three-three-cycles",
+            (2, 3),
+            (
+                (13, 14),
+                (14, 15),
+                (15, 13),
+                (16, 17),
+                (17, 18),
+                (18, 16),
+                (19, 20),
+                (20, 21),
+                (21, 19),
+            ),
+        ),
+    )
+    directed_links = []
+    resources = []
+    for resource_id, domain_link, external_links in resource_specs:
+        members = (domain_link,) + external_links
+        directed_links.extend(
+            {
+                "src": src,
+                "dst": dst,
+                "alpha": 1,
+                "invbw": 2,
+                "resources": [resource_id],
+            }
+            for src, dst in members
+        )
+        directed_links.append(
+            {
+                "src": domain_link[1],
+                "dst": domain_link[0],
+                "alpha": 1,
+                "invbw": 2,
+            }
+        )
+        resources.append(
+            {
+                "id": resource_id,
+                "member_links": members,
+                "alpha": 1,
+                "invbw": 2,
+            }
+        )
+    topology = topology_from_mapping(
+        {
+            "ranks": 22,
+            "nodes": [
+                {"id": 10, "ranks": [0, 1], "gateways": [0]},
+                {"id": 20, "ranks": [2, 3], "gateways": [2]},
+            ]
+            + [
+                {"id": 100 + rank, "ranks": [rank], "gateways": []}
+                for rank in range(4, 22)
+            ],
+            "directed_links": directed_links,
+            "shared_resources": resources,
+        }
+    )
+
+    assert exact_domain_signature(topology, (0, 1)) != (
+        exact_domain_signature(topology, (2, 3))
+    )
