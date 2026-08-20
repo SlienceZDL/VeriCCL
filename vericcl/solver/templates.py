@@ -87,11 +87,6 @@ class RoutingUnit:
             "demands",
             tuple(sorted(demands, key=lambda demand: demand.demand_id)),
         )
-        object.__setattr__(
-            self,
-            "_semantic_rank_sources",
-            tuple(self.node.communication_group),
-        )
 
 
 def _unit_slice_ids(unit: RoutingUnit) -> Tuple[int, ...]:
@@ -110,16 +105,6 @@ def _unit_slice_ids(unit: RoutingUnit) -> Tuple[int, ...]:
 def _unit_logical_positions(unit: RoutingUnit) -> Tuple[int, ...]:
     return tuple(
         sorted({demand.logical_position for demand in unit.demands})
-    )
-
-
-def _unit_rank_sources(unit: RoutingUnit) -> Tuple[int, ...]:
-    return tuple(
-        getattr(
-            unit,
-            "_semantic_rank_sources",
-            unit.node.communication_group,
-        )
     )
 
 
@@ -183,7 +168,7 @@ class SolverTemplate:
         if self.representative.unit_id not in unit_ids:
             raise SemanticError("solver template must include its representative")
         expected_sources = {
-            "rank_map": set(_unit_rank_sources(self.representative)),
+            "rank_map": set(self.representative.node.communication_group),
             "contributor_map": set(_unit_slice_ids(self.representative)),
             "logical_position_map": set(
                 _unit_logical_positions(self.representative)
@@ -233,21 +218,11 @@ def _routing_unit(
     problem: SolverProblem,
     demands: Tuple[TransferDemand, ...],
 ) -> RoutingUnit:
-    unit = RoutingUnit(
+    return RoutingUnit(
         unit_id=_unit_id(problem.node, demands),
         node=problem.node,
         demands=demands,
     )
-    rank_sources = set(problem.node.communication_group)
-    rank_sources.update(
-        slice_id // problem.slice_count for slice_id in _unit_slice_ids(unit)
-    )
-    object.__setattr__(
-        unit,
-        "_semantic_rank_sources",
-        tuple(sorted(rank_sources)),
-    )
-    return unit
 
 
 def split_routing_units(problem: SolverProblem) -> tuple[RoutingUnit, ...]:
@@ -643,16 +618,84 @@ def _all_slice_ids(unit: RoutingUnit) -> Tuple[int, ...]:
     return _unit_slice_ids(unit)
 
 
-def _canonical_unit_signature(
+def _external_semantic_ranks(
     unit: RoutingUnit,
     problem: SolverProblem,
-    planning_mode: PlanningMode,
-    structural: dict,
-) -> tuple[str, dict[int, object]]:
+) -> Tuple[int, ...]:
     group = set(unit.node.communication_group)
-    external_ranks = tuple(
-        rank for rank in _unit_rank_sources(unit) if rank not in group
+    return tuple(
+        sorted(
+            {
+                slice_id // problem.slice_count
+                for slice_id in _unit_slice_ids(unit)
+                if slice_id // problem.slice_count not in group
+            }
+        )
     )
+
+
+def _external_role_shape(
+    unit: RoutingUnit,
+    problem: SolverProblem,
+) -> tuple:
+    slice_count = problem.slice_count
+    return tuple(
+        sorted(
+            (
+                demand.root_rank,
+                demand.required_leaf_rank,
+                tuple(
+                    sorted(
+                        {
+                            slice_id // slice_count
+                            for slice_id in demand.contributors
+                        }
+                    )
+                ),
+                tuple(
+                    sorted(
+                        {
+                            slice_id // slice_count
+                            for slice_id in demand.member_slice_ids
+                        }
+                    )
+                ),
+                tuple(
+                    sorted(
+                        (
+                            item.slice_id // slice_count,
+                            item.src_rank,
+                            item.dst_rank,
+                            item.stage_id,
+                        )
+                        for item in demand.forbidden_members
+                    )
+                ),
+                demand.reduction_dual,
+            )
+            for demand in unit.demands
+        )
+    )
+
+
+def _external_label_cache_key(
+    unit: RoutingUnit,
+    problem: SolverProblem,
+) -> tuple:
+    return (
+        id(problem.topology),
+        unit.node.communication_group,
+        _external_semantic_ranks(unit, problem),
+        _external_role_shape(unit, problem),
+    )
+
+
+def _external_labels(
+    unit: RoutingUnit,
+    problem: SolverProblem,
+    external_node_labels: Mapping[int, int],
+) -> dict[int, object]:
+    external_ranks = _external_semantic_ranks(unit, problem)
     node_ranks: Dict[int, List[int]] = {}
     for rank, node_id in problem.topology.node_membership.items():
         node_ranks.setdefault(node_id, []).append(rank)
@@ -661,6 +704,66 @@ def _canonical_unit_signature(
         for ranks in node_ranks.values()
         for position, rank in enumerate(sorted(ranks))
     }
+    domain_node_labels = {}
+    for rank in unit.node.communication_group:
+        node_id = problem.topology.node_membership[rank]
+        if node_id not in domain_node_labels:
+            domain_node_labels[node_id] = len(domain_node_labels)
+    labels = {}
+    for rank in external_ranks:
+        node_id = problem.topology.node_membership[rank]
+        if node_id in domain_node_labels:
+            node_token = (
+                "semantic_domain_node",
+                domain_node_labels[node_id],
+            )
+        else:
+            node_token = (
+                "semantic_external_node",
+                external_node_labels[node_id],
+            )
+        labels[rank] = (
+            node_token,
+            rank_positions[rank],
+            rank in problem.topology.gateways,
+        )
+    return labels
+
+
+def _signature_with_external_labels(
+    unit: RoutingUnit,
+    problem: SolverProblem,
+    planning_mode: PlanningMode,
+    structural: dict,
+    external_labels: Mapping[int, object],
+) -> str:
+    descriptor = dict(structural)
+    descriptor["rank_indices"] = dict(structural["rank_indices"])
+    descriptor["rank_indices"].update(external_labels)
+    return _exact_signature(unit, problem, planning_mode, descriptor)
+
+
+def _canonical_unit_signature(
+    unit: RoutingUnit,
+    problem: SolverProblem,
+    planning_mode: PlanningMode,
+    structural: dict,
+    external_label_cache: dict,
+) -> tuple[str, dict[int, object]]:
+    cache_key = _external_label_cache_key(unit, problem)
+    cached = external_label_cache.get(cache_key)
+    if cached is not None:
+        return (
+            _signature_with_external_labels(
+                unit,
+                problem,
+                planning_mode,
+                structural,
+                cached,
+            ),
+            cached,
+        )
+    external_ranks = _external_semantic_ranks(unit, problem)
     domain_node_labels = {}
     for rank in unit.node.communication_group:
         node_id = problem.topology.node_membership[rank]
@@ -677,50 +780,52 @@ def _canonical_unit_signature(
         )
     )
     if len(external_nodes) > _EXACT_SEMANTIC_EXTERNAL_NODE_LIMIT:
+        labels = {
+            rank: ("semantic_identity", rank) for rank in external_ranks
+        }
+        external_label_cache[cache_key] = labels
         return (
-            _exact_signature(unit, problem, planning_mode, structural),
-            {
-                rank: ("semantic_identity", rank)
-                for rank in external_ranks
-            },
+            _signature_with_external_labels(
+                unit,
+                problem,
+                planning_mode,
+                structural,
+                labels,
+            ),
+            labels,
+        )
+    if not external_nodes:
+        labels = _external_labels(unit, problem, {})
+        external_label_cache[cache_key] = labels
+        return (
+            _signature_with_external_labels(
+                unit,
+                problem,
+                planning_mode,
+                structural,
+                labels,
+            ),
+            labels,
         )
     best = None
     for node_order in permutations(external_nodes):
         external_node_labels = {
             node_id: label for label, node_id in enumerate(node_order)
         }
-        external_labels = {}
-        for rank in external_ranks:
-            node_id = problem.topology.node_membership[rank]
-            if node_id in domain_node_labels:
-                node_token = (
-                    "semantic_domain_node",
-                    domain_node_labels[node_id],
-                )
-            else:
-                node_token = (
-                    "semantic_external_node",
-                    external_node_labels[node_id],
-                )
-            external_labels[rank] = (
-                node_token,
-                rank_positions[rank],
-                rank in problem.topology.gateways,
-            )
-        descriptor = dict(structural)
-        descriptor["rank_indices"] = dict(structural["rank_indices"])
-        descriptor["rank_indices"].update(external_labels)
-        signature = _exact_signature(
+        labels = _external_labels(unit, problem, external_node_labels)
+        signature = _signature_with_external_labels(
             unit,
             problem,
             planning_mode,
-            descriptor,
+            structural,
+            labels,
         )
-        candidate = (signature, node_order, external_labels)
+        candidate = (signature, node_order, labels)
         if best is None or candidate[:2] < best[:2]:
             best = candidate
-    signature, _, external_labels = best
-    return signature, external_labels
+    signature, _, labels = best
+    external_label_cache[cache_key] = labels
+    return signature, labels
 
 
 def _mapping_dictionary(mapping: Tuple[Tuple[int, int], ...]) -> Dict[int, int]:
@@ -859,7 +964,7 @@ def _template_member(
         unit.node.communication_group
     ):
         return None
-    rank_pairs = list(
+    route_rank_pairs = list(
         zip(
             representative.node.communication_group,
             unit.node.communication_group,
@@ -873,12 +978,21 @@ def _template_member(
     }
     if set(representative_by_label) != set(member_by_label):
         return None
-    rank_pairs.extend(
+    extended_rank_pairs = list(route_rank_pairs)
+    extended_rank_pairs.extend(
         (representative_by_label[label], member_by_label[label])
         for label in sorted(representative_by_label, key=repr)
     )
-    rank_map = tuple(sorted(rank_pairs))
-    rank_mapping = _mapping_dictionary(rank_map)
+    if len({source for source, _ in extended_rank_pairs}) != len(
+        extended_rank_pairs
+    ) or len({target for _, target in extended_rank_pairs}) != len(
+        extended_rank_pairs
+    ):
+        return None
+    rank_map = tuple(sorted(route_rank_pairs))
+    extended_rank_mapping = _mapping_dictionary(
+        tuple(sorted(extended_rank_pairs))
+    )
     representative_positions = sorted(
         {demand.logical_position for demand in representative.demands}
     )
@@ -895,7 +1009,7 @@ def _template_member(
                 demand,
                 representative_problem,
                 problem,
-                rank_mapping,
+                extended_rank_mapping,
                 logical_mapping,
             )
             for demand in representative.demands
@@ -915,7 +1029,7 @@ def _template_member(
                 slice_id,
                 representative_problem,
                 problem,
-                rank_mapping,
+                extended_rank_mapping,
                 logical_mapping,
             ),
         )
@@ -953,6 +1067,7 @@ def build_solver_templates(
     classes = []
     class_indices_by_signature: Dict[str, List[int]] = {}
     structural_cache = {}
+    external_label_cache = {}
     for unit, problem in contexts:
         structural_key = _structural_cache_key(problem)
         structural = structural_cache.get(structural_key)
@@ -964,6 +1079,7 @@ def build_solver_templates(
             problem,
             planning_mode,
             structural,
+            external_label_cache,
         )
         selected = None
         member = None

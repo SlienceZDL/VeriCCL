@@ -367,6 +367,25 @@ def _real_gateway_allgather(slice_count):
     return plan, problems
 
 
+def _external_source_local_problem(slice_count):
+    _, problems = _real_gateway_allgather(slice_count)
+    problem = next(
+        item
+        for item in problems
+        if item.node.node_id == "local-allgather-node-0-rail-0"
+    )
+    demands = tuple(
+        demand
+        for demand in problem.demands
+        if {
+            contributor // slice_count
+            for contributor in demand.contributors
+        }
+        == {5}
+    )
+    return replace(problem, demands=demands)
+
+
 @pytest.mark.parametrize(
     ("rank_count", "slice_count"),
     ((2, 4), (8, 128)),
@@ -472,8 +491,90 @@ def test_real_local_dissemination_maps_external_contributor_sources():
         for member in cross_node.members
         if member.unit_id == node_1_unit.unit_id
     )
-    assert (5, 1) in translated.rank_map
-    assert len(translated.rank_map) == 5
+    representative_slice = next(
+        iter(cross_node.representative.demands[0].contributors)
+    )
+    member_slice = next(iter(node_1_unit.demands[0].contributors))
+    assert translated.rank_map == ((0, 4), (1, 5), (2, 6), (3, 7))
+    assert translated.contributor_map == (
+        (representative_slice, member_slice),
+    )
+
+
+def test_routing_unit_has_no_hidden_semantic_state_after_copy_or_replace():
+    problem = _external_source_local_problem(slice_count=4)
+    generated = split_routing_units(problem)[0]
+    direct = RoutingUnit(
+        unit_id=generated.unit_id,
+        node=generated.node,
+        demands=generated.demands,
+    )
+    cloned = replace(generated)
+
+    assert generated == direct == cloned
+    assert vars(generated) == vars(direct) == vars(cloned)
+    assert set(vars(generated)) == {"unit_id", "node", "demands"}
+
+    for unit in (generated, direct, cloned):
+        slices = tuple(
+            sorted(
+                {
+                    slice_id
+                    for demand in unit.demands
+                    for slice_id in demand.contributors
+                    | demand.member_slice_ids
+                }
+            )
+        )
+        positions = tuple(
+            sorted({demand.logical_position for demand in unit.demands})
+        )
+        member = TemplateMember(
+            unit_id=unit.unit_id,
+            node_id=unit.node.node_id,
+            rank_map=tuple(
+                (rank, rank) for rank in unit.node.communication_group
+            ),
+            contributor_map=tuple(
+                (slice_id, slice_id) for slice_id in slices
+            ),
+            logical_position_map=tuple(
+                (position, position) for position in positions
+            ),
+        )
+        SolverTemplate(
+            template_id="copy-safe-template",
+            representative=unit,
+            members=(member,),
+            exact_signature="copy-safe-signature",
+        )
+
+
+@pytest.mark.parametrize("slice_count", (4, 128))
+def test_external_semantic_node_canonicalization_is_cached_per_shape(
+    monkeypatch,
+    slice_count,
+):
+    problem = _external_source_local_problem(slice_count)
+    assert len(split_routing_units(problem)) == slice_count
+    original = templates_module.permutations
+    calls = 0
+
+    def counted_permutations(values):
+        nonlocal calls
+        calls += 1
+        return original(values)
+
+    monkeypatch.setattr(templates_module, "permutations", counted_permutations)
+
+    templates = build_solver_templates(
+        (problem,),
+        PlanningMode.GATEWAY_ALLGATHER,
+    )
+
+    assert calls == 1
+    assert len(templates) == 1
+    assert len(templates[0].members) == slice_count
 
 
 def test_direct_allgather_uses_one_template_per_source_root():
