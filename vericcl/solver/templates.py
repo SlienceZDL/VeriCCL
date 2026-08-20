@@ -262,6 +262,67 @@ def _slice_token(
     )
 
 
+def _offset_token(
+    offset: int,
+    contributors: frozenset[int],
+    problem: SolverProblem,
+    rank_indices: Mapping[int, int],
+    logical_indices: Mapping[int, int],
+) -> tuple:
+    slice_count = problem.slice_count
+    logical_positions = {
+        contributor % slice_count for contributor in contributors
+    }
+    if len(logical_positions) == 1:
+        logical_position = next(iter(logical_positions))
+        logical_token = _logical_token(logical_position, logical_indices)
+        if offset == logical_position:
+            return ("logical", logical_token)
+    if len(contributors) == 1:
+        contributor = next(iter(contributors))
+        if offset == contributor:
+            return (
+                "contributor",
+                _slice_token(
+                    contributor,
+                    problem,
+                    rank_indices,
+                    logical_indices,
+                ),
+            )
+        quotient, remainder = divmod(
+            slice_count,
+            problem.inputs.rank_count,
+        )
+        if quotient > 0 and remainder == 0:
+            source_rank, logical_position = divmod(
+                contributor,
+                slice_count,
+            )
+            if offset == source_rank * quotient + logical_position % quotient:
+                return (
+                    "source_compact",
+                    _rank_token(source_rank, problem, rank_indices),
+                    _logical_token(logical_position, logical_indices),
+                )
+    if len(logical_positions) == 1:
+        logical_position = next(iter(logical_positions))
+        quotient, remainder = divmod(
+            slice_count,
+            problem.inputs.rank_count,
+        )
+        if (
+            quotient > 0
+            and remainder == 0
+            and offset == logical_position % quotient
+        ):
+            return (
+                "compact",
+                _logical_token(logical_position, logical_indices),
+            )
+    return ("absolute", offset)
+
+
 def _link_token(key: LinkKey, rank_indices: Mapping[int, int]) -> tuple:
     return (rank_indices[key.src_rank], rank_indices[key.dst_rank])
 
@@ -326,7 +387,13 @@ def _interface_descriptor(
         values.append(
             (
                 _rank_token(slot.rank, problem, rank_indices),
-                _logical_token(slot.offset, logical_indices),
+                _offset_token(
+                    slot.offset,
+                    contributors,
+                    problem,
+                    rank_indices,
+                    logical_indices,
+                ),
                 tuple(
                     sorted(
                         _slice_token(
@@ -539,7 +606,7 @@ def _structural_descriptor(problem: SolverProblem) -> dict:
 
 def _structural_cache_key(problem: SolverProblem) -> tuple:
     return (
-        problem.topology.isomorphism_signature,
+        id(problem.topology),
         problem.node.communication_group,
         tuple(sorted(problem.node.allowed_links)),
         tuple(sorted(problem.node.shared_resource_ids)),

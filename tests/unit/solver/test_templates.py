@@ -6,6 +6,8 @@ import pytest
 from vericcl.errors import SemanticError
 from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import AtomConstraints, ForbiddenTransfer
+from vericcl.planner.build import build_plan
+from vericcl.planner.direct import build_direct_plan
 from vericcl.planner.model import PlanningMode, PlanNode, StageInterface
 from vericcl.semantics.collective import (
     CollectiveKind,
@@ -24,6 +26,7 @@ from vericcl.solver.templates import (
     build_solver_templates,
     split_routing_units,
 )
+from vericcl.topology.loader import load_topology
 from vericcl.topology.model import (
     DirectedLink,
     LinkKey,
@@ -326,6 +329,101 @@ def _chain_problem(kind):
     )
 
 
+def _real_direct_allgather(rank_count, slice_count):
+    inputs = _inputs(rank_count, slice_count)
+    topology = _topology((tuple(range(rank_count)),))
+    plan = build_direct_plan(inputs, topology)
+    problems = tuple(
+        build_solver_problem(node, inputs, topology) for node in plan.nodes
+    )
+    return plan, problems
+
+
+def _real_gateway_allgather(slice_count):
+    inputs = resolve_inputs(
+        EXAMPLES / "topo" / "two_node_gateway.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    inputs = replace(
+        inputs,
+        collective=CollectiveSpec(
+            kind=CollectiveKind.ALL_GATHER,
+            datatype="float32",
+        ),
+        hyperparameters=replace(
+            inputs.hyperparameters,
+            total_size_bytes=slice_count,
+            slice_size_bytes=1,
+        ),
+        strategies=replace(inputs.strategies, hierarchy=True, symmetry=False),
+    )
+    topology = load_topology(inputs)
+    plan = build_plan(inputs, topology)
+    problems = tuple(
+        build_solver_problem(node, inputs, topology) for node in plan.nodes
+    )
+    return plan, problems
+
+
+@pytest.mark.parametrize(
+    ("rank_count", "slice_count"),
+    ((2, 4), (8, 128)),
+)
+def test_real_direct_allgather_reuses_one_template_per_source(
+    rank_count,
+    slice_count,
+):
+    plan, problems = _real_direct_allgather(rank_count, slice_count)
+
+    units = tuple(
+        unit
+        for problem in problems
+        for unit in split_routing_units(problem)
+    )
+    templates = build_solver_templates(problems, plan.planning_mode)
+
+    assert len(units) == rank_count * slice_count
+    assert len(templates) == rank_count
+    assert sorted(len(template.members) for template in templates) == [
+        slice_count
+    ] * rank_count
+
+
+def test_real_gateway_batched_offsets_preserve_logical_translation():
+    plan, problems = _real_gateway_allgather(slice_count=4)
+    selected = {
+        problem.node.node_id: problem
+        for problem in problems
+        if problem.node.node_id
+        in {
+            "local-gather-node-0-rail-0",
+            "gateway-allgather-rail-0",
+            "local-allgather-node-0-rail-0",
+        }
+    }
+
+    local_gather = build_solver_templates(
+        (selected["local-gather-node-0-rail-0"],),
+        plan.planning_mode,
+    )
+    gateway = build_solver_templates(
+        (selected["gateway-allgather-rail-0"],),
+        plan.planning_mode,
+    )
+    local_allgather = build_solver_templates(
+        (selected["local-allgather-node-0-rail-0"],),
+        plan.planning_mode,
+    )
+
+    assert len(local_gather) == 3
+    assert {len(template.members) for template in local_gather} == {4}
+    assert len(gateway) == 8
+    assert {len(template.members) for template in gateway} == {4}
+    assert len(local_allgather) == 8
+    assert {len(template.members) for template in local_allgather} == {4}
+
+
 def test_direct_allgather_uses_one_template_per_source_root():
     rank_count = 8
     slice_count = 128
@@ -469,6 +567,39 @@ def test_overlapping_interface_contributors_prevent_unsafe_reuse():
 
     templates = build_solver_templates(
         (baseline, changed),
+        PlanningMode.DIRECT,
+    )
+
+    assert len(templates) == 2
+
+
+def test_absolute_interface_offsets_remain_route_relevant():
+    inputs = _inputs(3, 4)
+    topology = _topology(((0, 1, 2),))
+    problems = []
+    for node_id, offset in (("absolute-a", 97), ("absolute-b", 98)):
+        problem = _tree_problem(
+            inputs,
+            topology,
+            (0, 1, 2),
+            0,
+            0,
+            node_id=node_id,
+        )
+        problems.append(
+            replace(
+                problem,
+                node=replace(
+                    problem.node,
+                    logical_output=StageInterface(
+                        {OutputSlot(1, offset): frozenset({0})}
+                    ),
+                ),
+            )
+        )
+
+    templates = build_solver_templates(
+        tuple(problems),
         PlanningMode.DIRECT,
     )
 
@@ -645,6 +776,41 @@ def test_planning_mode_is_part_of_the_exact_template_signature():
     )
 
     assert direct[0].exact_signature != hierarchical[0].exact_signature
+
+
+def test_structural_cache_does_not_trust_supplied_topology_signature():
+    inputs = _inputs(3, 4)
+    first_topology = replace(
+        _topology(((0, 1, 2),), invbw=2.0),
+        isomorphism_signature="caller-supplied-signature",
+    )
+    second_topology = replace(
+        _topology(((0, 1, 2),), invbw=2.5),
+        isomorphism_signature="caller-supplied-signature",
+    )
+    first = _tree_problem(
+        inputs,
+        first_topology,
+        (0, 1, 2),
+        0,
+        0,
+        node_id="first-topology",
+    )
+    second = _tree_problem(
+        inputs,
+        second_topology,
+        (0, 1, 2),
+        0,
+        1,
+        node_id="second-topology",
+    )
+
+    templates = build_solver_templates(
+        (first, second),
+        PlanningMode.DIRECT,
+    )
+
+    assert len(templates) == 2
 
 
 def test_public_template_models_reject_noninvertible_mappings():
