@@ -1,7 +1,8 @@
 import heapq
 import math
+from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Tuple
+from typing import Dict, FrozenSet, Iterable, Tuple
 
 from vericcl.errors import SemanticError, SolverUnavailableError
 from vericcl.solver.demands import SolverProblem, TransferDemand
@@ -17,6 +18,27 @@ from vericcl.topology.performance import safe_per_channel_bandwidth
 
 
 TreeKey = Tuple[int, int, Tuple[int, ...], bool]
+
+
+def representative_edge_loads(
+    selected_flow_edges: Iterable[LinkKey],
+    channel_count: int,
+) -> tuple[tuple[LinkKey, float], ...]:
+    channels = _positive_integer(channel_count, "channel_count")
+    try:
+        edges = tuple(selected_flow_edges)
+    except TypeError as error:
+        raise SemanticError(
+            "selected_flow_edges must be an iterable of LinkKey values"
+        ) from error
+    if not all(isinstance(edge, LinkKey) for edge in edges):
+        raise SemanticError(
+            "selected_flow_edges must contain LinkKey values"
+        )
+    counts = Counter(edges)
+    return tuple(
+        (edge, count / channels) for edge, count in sorted(counts.items())
+    )
 
 
 def _number(value: object, field: str) -> float:
