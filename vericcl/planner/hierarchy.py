@@ -720,11 +720,19 @@ def build_gateway_allgather_plan(
         for group in local_groups:
             node_id = topology.node_membership[group[0]]
             gateway = gateways_by_node[node_id]
+            gateway_input_values = {
+                OutputSlot(gateway, slice_id): frozenset({slice_id})
+                for slice_id in rail_slice_ids
+            }
+            retained_input_values = {
+                OutputSlot(rank, slice_id % slice_count): frozenset({slice_id})
+                for rank in group
+                if rank != gateway
+                for slice_id in rail_slice_ids
+                if slice_id // slice_count == rank
+            }
             logical_input = StageInterface(
-                {
-                    OutputSlot(gateway, slice_id): frozenset({slice_id})
-                    for slice_id in rail_slice_ids
-                }
+                gateway_input_values | retained_input_values
             )
             logical_output = StageInterface(
                 {
@@ -753,7 +761,7 @@ def build_gateway_allgather_plan(
                 PlanEdge(
                     "gateway-allgather-rail-{}".format(rail_index),
                     local_node.node_id,
-                    logical_input,
+                    StageInterface(gateway_input_values),
                 )
             )
 

@@ -9,6 +9,7 @@ from vericcl.planner.model import PlanningMode
 from vericcl.semantics.collective import (
     CollectiveKind,
     CollectiveSpec,
+    OutputSlot,
     required_outputs,
 )
 from vericcl.solver.demands import build_solver_problem
@@ -149,6 +150,32 @@ def test_one_gateway_builds_three_phase_allgather_dag_on_real_links():
         inputs.collective,
         inputs.rank_count,
         inputs.hyperparameters.slice_count,
+    )
+    local = next(
+        node
+        for node in plan.nodes
+        if node.node_id == "local-allgather-node-0-rail-0"
+    )
+    retained = OutputSlot(1, 0)
+    assert local.logical_input.values[retained] == frozenset({2})
+    edge = next(
+        item
+        for item in plan.edges
+        if item.consumer_id == local.node_id
+    )
+    assert retained not in edge.interface.values
+    problem = build_solver_problem(local, inputs, topology)
+    source_one = [
+        demand
+        for demand in problem.demands
+        if demand.contributors == frozenset({2})
+    ]
+    assert {demand.root_rank for demand in source_one} == {0}
+    assert {demand.required_leaf_rank for demand in source_one} == {2, 3}
+    assert all(
+        1 not in path
+        for demand in source_one
+        for path in demand.candidate_paths
     )
 
 

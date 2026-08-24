@@ -249,6 +249,7 @@ def _candidate_paths(
     leaf: int,
     members: FrozenSet[int],
     reduction_dual: bool,
+    blocked_ranks: FrozenSet[int] = frozenset(),
 ) -> Tuple[FrozenSet[LinkKey], Tuple[Tuple[int, ...], ...]]:
     links = _virtual_links(node, reduction_dual)
     forbidden = _matching_forbidden(inputs, members, node.stage_id)
@@ -256,6 +257,9 @@ def _candidate_paths(
         members,
         forbidden,
         reduction_dual,
+    )
+    links = frozenset(
+        link for link in links if link.dst_rank not in blocked_ranks
     )
     links = viable_path_links(links, root, leaf)
 
@@ -284,6 +288,7 @@ def _demand(
     contributors: FrozenSet[int],
     members: FrozenSet[int],
     reduction_dual: bool,
+    blocked_ranks: FrozenSet[int] = frozenset(),
 ) -> TransferDemand:
     logical_position = _logical_position(
         contributors,
@@ -311,6 +316,7 @@ def _demand(
         leaf=leaf,
         members=members,
         reduction_dual=reduction_dual,
+        blocked_ranks=blocked_ranks,
     )
     return TransferDemand(
         demand_id=demand_id,
@@ -337,10 +343,9 @@ def _broadcast_demands(
     demands = []
     kind = node.local_collective.kind
     if kind is CollectiveKind.ALL_GATHER:
-        roots = {
-            contributors: slot.rank
-            for slot, contributors in node.logical_input.values.items()
-        }
+        inputs_by_contributors = {}
+        for slot, contributors in node.logical_input.values.items():
+            inputs_by_contributors.setdefault(contributors, []).append(slot)
     else:
         root = node.local_collective.root
         roots = {
@@ -348,11 +353,42 @@ def _broadcast_demands(
             for contributors in node.logical_input.values.values()
         }
     for output_slot, contributors in node.logical_output.values.items():
-        root = roots.get(contributors)
-        if root is None:
-            raise SemanticError("broadcast output has no matching logical input")
-        if output_slot.rank == root:
-            continue
+        if kind is CollectiveKind.ALL_GATHER:
+            input_slots = inputs_by_contributors.get(contributors, ())
+            input_ranks = {slot.rank for slot in input_slots}
+            if output_slot.rank in input_ranks:
+                continue
+            semantic_sources = {
+                slice_id // inputs.hyperparameters.slice_count
+                for slice_id in contributors
+            }
+            relay_inputs = input_ranks - semantic_sources
+            canonical = {
+                slot.rank
+                for slot in input_slots
+                if len(contributors) == 1
+                and slot.offset == next(iter(contributors))
+            }
+            if len(relay_inputs) == 1:
+                root = next(iter(relay_inputs))
+            elif len(canonical) == 1:
+                root = next(iter(canonical))
+            elif len(input_ranks) == 1:
+                root = next(iter(input_ranks))
+            else:
+                raise SemanticError(
+                    "AllGather output has no unique semantic source rank"
+                )
+            blocked_ranks = frozenset(input_ranks - {root})
+        else:
+            root = roots.get(contributors)
+            if root is None:
+                raise SemanticError(
+                    "broadcast output has no matching logical input"
+                )
+            if output_slot.rank == root:
+                continue
+            blocked_ranks = frozenset()
         demands.append(
             _demand(
                 node=node,
@@ -363,6 +399,7 @@ def _broadcast_demands(
                 contributors=contributors,
                 members=contributors,
                 reduction_dual=False,
+                blocked_ranks=blocked_ranks,
             )
         )
     return tuple(demands)

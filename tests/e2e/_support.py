@@ -36,12 +36,19 @@ def write_inputs(
     *,
     inplace: bool = False,
     topology_name: str = "two_rank.json",
+    topology_path: Path | None = None,
     total_size_bytes: int = 2048,
     slice_size_bytes: int = 1024,
     max_channels: int = 1,
     hierarchy: bool = False,
+    constructive_trees: bool = True,
+    milp: bool = False,
+    max_parallel_models: int = 1,
+    max_threads_per_model: int = 1,
+    total_solve_timeout_s: int = 300,
+    per_model_timeout_s: int = 60,
 ) -> tuple[Path, Path, Path]:
-    topology = EXAMPLES / "topo" / topology_name
+    topology = topology_path or EXAMPLES / "topo" / topology_name
     sketch_payload = json.loads(
         (EXAMPLES / "sketch" / "allreduce_8m_1m.json").read_text(
             encoding="utf-8"
@@ -69,8 +76,10 @@ def write_inputs(
         {
             "solver_seed": 0,
             "max_channels": max_channels,
-            "max_parallel_models": 1,
-            "max_threads_per_model": 1,
+            "max_parallel_models": max_parallel_models,
+            "max_threads_per_model": max_threads_per_model,
+            "total_solve_timeout_s": total_solve_timeout_s,
+            "per_model_timeout_s": per_model_timeout_s,
         }
     )
     atom_payload = json.loads(
@@ -79,8 +88,8 @@ def write_inputs(
     atom_payload["strategies"].update(
         {
             "hierarchy": hierarchy,
-            "constructive_trees": True,
-            "milp": False,
+            "constructive_trees": constructive_trees,
+            "milp": milp,
         }
     )
     sketch = directory / "sketch.json"
@@ -96,10 +105,18 @@ def solve_public_cli(
     *,
     inplace: bool = False,
     topology_name: str = "two_rank.json",
+    topology_path: Path | None = None,
     total_size_bytes: int = 2048,
     slice_size_bytes: int = 1024,
     max_channels: int = 1,
     hierarchy: bool = False,
+    constructive_trees: bool = True,
+    milp: bool = False,
+    max_parallel_models: int = 1,
+    max_threads_per_model: int = 1,
+    total_solve_timeout_s: int = 300,
+    per_model_timeout_s: int = 60,
+    command_timeout_s: int = 300,
     run_id: str = "acceptance",
 ) -> dict[str, object]:
     inputs_dir = directory / "inputs"
@@ -109,10 +126,17 @@ def solve_public_cli(
         operator,
         inplace=inplace,
         topology_name=topology_name,
+        topology_path=topology_path,
         total_size_bytes=total_size_bytes,
         slice_size_bytes=slice_size_bytes,
         max_channels=max_channels,
         hierarchy=hierarchy,
+        constructive_trees=constructive_trees,
+        milp=milp,
+        max_parallel_models=max_parallel_models,
+        max_threads_per_model=max_threads_per_model,
+        total_solve_timeout_s=total_solve_timeout_s,
+        per_model_timeout_s=per_model_timeout_s,
     )
     output_dir = directory / "runs"
     command = (
@@ -137,6 +161,7 @@ def solve_public_cli(
         capture_output=True,
         check=False,
         text=True,
+        timeout=command_timeout_s,
     )
     if completed.returncode != 0:
         raise AssertionError(
@@ -389,3 +414,105 @@ def transfer_pairs(transfers: Iterable[dict]) -> set[tuple[int, int]]:
         (transfer["src_rank"], transfer["dst_rank"])
         for transfer in transfers
     }
+
+
+def write_multi_rail_topology(path: Path) -> Path:
+    node_ranks = ((0, 1, 2, 3), (4, 5, 6, 7))
+    rail_pairs = ((0, 4), (1, 5), (2, 6), (3, 7))
+    links = []
+    for ranks in node_ranks:
+        for src_rank in ranks:
+            for dst_rank in ranks:
+                if src_rank == dst_rank:
+                    continue
+                links.append(
+                    {
+                        "src": src_rank,
+                        "dst": dst_rank,
+                        "max_channels": 4,
+                        "alpha": 1.0,
+                        "beta": 1.0,
+                        "invbw": 2.0,
+                        "resources": [],
+                    }
+                )
+    for left_rank, right_rank in rail_pairs:
+        for src_rank, dst_rank in (
+            (left_rank, right_rank),
+            (right_rank, left_rank),
+        ):
+            links.append(
+                {
+                    "src": src_rank,
+                    "dst": dst_rank,
+                    "max_channels": 4,
+                    "alpha": 2.0,
+                    "beta": 3.0,
+                    "invbw": 5.0,
+                    "resources": [],
+                }
+            )
+    payload = {
+        "name": "two-node-four-rail",
+        "ranks": 8,
+        "nodes": [
+            {"id": 0, "ranks": list(node_ranks[0]), "gateways": [0, 1, 2, 3]},
+            {"id": 1, "ranks": list(node_ranks[1]), "gateways": [4, 5, 6, 7]},
+        ],
+        "directed_links": links,
+        "shared_resources": [],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def assert_no_global_stage_barrier(result: dict[str, object]) -> None:
+    schedule = result["sidecar"]["schedule"]
+    assert schedule["metadata"].get("stage_barrier") is None
+    by_stage: dict[int, list[dict]] = defaultdict(list)
+    for transfer in schedule["transfers"]:
+        by_stage[transfer["stage_id"]].append(transfer)
+    ordered_stages = sorted(by_stage)
+    assert len(ordered_stages) > 1
+    for left_stage, right_stage in zip(ordered_stages, ordered_stages[1:]):
+        assert min(
+            transfer["st_time"] for transfer in by_stage[right_stage]
+        ) < max(transfer["ed_time"] for transfer in by_stage[left_stage])
+
+
+def assert_reduction_atoms(result: dict[str, object]) -> None:
+    transfers = result["sidecar"]["schedule"]["transfers"]
+    reduced = [transfer for transfer in transfers if transfer["kind"] == "REDUCE"]
+    assert reduced
+    for transfer in reduced:
+        assert set(transfer["member_slice_ids"]) == {
+            atom["slice_id"] for atom in transfer["atoms"]
+        }
+
+
+def assert_cross_stage_accumulator_dependencies(
+    result: dict[str, object],
+) -> None:
+    schedule = result["sidecar"]["schedule"]
+    by_id = {
+        transfer["transfer_id"]: transfer
+        for transfer in schedule["transfers"]
+    }
+    semantic = schedule["metadata"]["semantic_predecessors"]
+    cross_stage_reductions = []
+    for transfer in schedule["transfers"]:
+        if transfer["kind"] != "REDUCE":
+            continue
+        earlier = [
+            by_id[predecessor_id]
+            for predecessor_id in semantic[transfer["transfer_id"]]
+            if by_id[predecessor_id]["stage_id"] < transfer["stage_id"]
+        ]
+        if not earlier:
+            continue
+        cross_stage_reductions.append(transfer)
+        assert any(
+            predecessor["dst_rank"] == transfer["dst_rank"]
+            for predecessor in earlier
+        )
+    assert cross_stage_reductions

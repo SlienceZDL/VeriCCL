@@ -560,6 +560,11 @@ def test_online_runtime_warning_writes_failure_without_launch_crash(
     )
     assert selected.validation["online"] == "failed"
     assert selected.runtime_compatible is False
+    report = json.loads(selected.report_path.read_text(encoding="utf-8"))
+    assert report["runtime_compatible"] is False
+    assert report["validation"]["runtime"]["status"] == "warning"
+    assert report["search_diagnostics"]["route_model_count"] == 0
+    assert report["effective_solving"]["global_proven_optimal"] is False
 
 
 def test_online_verify_handles_missing_runtime_result_without_crash(

@@ -5,11 +5,14 @@ import pytest
 
 from vericcl.input.loader import resolve_inputs
 from vericcl.planner.build import build_plan
+from vericcl.planner.model import PlanningMode
 from vericcl.semantics.collective import (
     CollectiveKind,
     OutputSlot,
     required_outputs,
 )
+from vericcl.solver.demands import build_solver_problem
+from vericcl.solver.templates import build_solver_templates
 from vericcl.topology.loader import load_topology
 from vericcl.topology.model import LinkKey
 
@@ -70,6 +73,21 @@ def test_gateway_allreduce_has_exact_global_contributors():
     assert inter_reduce_scatter.logical_output.values[OutputSlot(0, 0)] == (
         frozenset({0, 8, 16, 24, 32, 40, 48, 56})
     )
+
+
+def test_gateway_allreduce_templates_canonicalize_domain_and_external_ranks():
+    inputs = hierarchical_gateway_inputs()
+    topology = load_topology(inputs)
+    plan = build_plan(inputs, topology)
+    problems = tuple(
+        build_solver_problem(node, inputs, topology) for node in plan.nodes
+    )
+
+    templates = build_solver_templates(problems, plan.planning_mode)
+
+    assert plan.planning_mode is PlanningMode.GATEWAY_ALLREDUCE
+    assert len(templates) == 12
+    assert sum(len(template.members) for template in templates) == 48
 
 
 def test_gateway_stages_encode_only_data_dependencies():

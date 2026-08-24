@@ -32,3 +32,8 @@ def test_public_cli_emits_semantic_valid_direct_collective(tmp_path, operator):
     assert_semantic_outputs(result, operator)
     assert_validation_report(result)
     assert_xml_contract(result)
+    report = result["report"]
+    assert report["hierarchy_plan"]["planning_mode"] == "direct"
+    assert report["effective_solving"]["solver_strategy"] == "constructive"
+    assert report["effective_solving"]["global_proven_optimal"] is False
+    assert report["search_diagnostics"]["route_model_count"] == 0

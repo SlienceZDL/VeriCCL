@@ -7,6 +7,7 @@ from vericcl.composer import compose
 from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import ObjectiveMode
 from vericcl.planner.build import build_plan
+from vericcl.planner.model import PlanningMode
 from vericcl.semantics.collective import (
     CollectiveKind,
     CollectiveSpec,
@@ -116,6 +117,10 @@ def test_constructive_solve_and_compose_preserve_collective_semantics(kind):
     }
 
     assert actual == expected
+    assert request.plan.planning_mode is PlanningMode.DIRECT
+    assert result.diagnostics.route_model_count == 0
+    assert candidate.metrics.solver_name == "constructive"
+    assert not candidate.proven_optimal
     lanes = {}
     for transfer in schedule.transfers:
         lane = LaneKey(

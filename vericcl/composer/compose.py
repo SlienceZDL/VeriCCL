@@ -339,8 +339,25 @@ def _compose_schedules(
                     duration,
                 )
                 atoms.append(placeholder)
-                cross_dependencies.update(input_dependencies[slot])
+                if sum(len(stage.symbols) for stage in atom.path) == 1:
+                    cross_dependencies.update(input_dependencies[slot])
                 global_atoms[(transfer.transfer_id, atom.slice_id)] = placeholder
+            if transfer.kind == "REDUCE":
+                complete_contributors = _tree_contributors(schedule, transfer)
+                accumulator_inputs = [
+                    slot
+                    for slot, contributors in node.logical_input.values.items()
+                    if slot.rank == transfer.dst_rank
+                    and contributors <= complete_contributors
+                    and contributors.isdisjoint(transfer.member_slice_ids)
+                ]
+                if len(accumulator_inputs) != 1:
+                    raise SemanticError(
+                        "reduction transfer has no unique accumulator input"
+                    )
+                cross_dependencies.update(
+                    input_dependencies[accumulator_inputs[0]]
+                )
             start = max(atom.st_time for atom in atoms)
             rebuilt_atoms = tuple(
                 Atom(

@@ -290,7 +290,7 @@ def _rank_token(
     if rank in rank_indices:
         token = rank_indices[rank]
         if isinstance(token, tuple):
-            return token
+            return ("semantic", token)
         return ("domain", token)
     return (
         "external",

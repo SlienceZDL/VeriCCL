@@ -330,7 +330,17 @@ b.生成树：参考ForestColl论文和代码，为每条链路搜索合适的ch
 
 c.MILP：参考原代码与TACCL代码，将硬约束、atom输入和选择的求解约束/策略都建模成MILP，然后使用Gurobi求解器求解，需要支持局部求解(参考SyCCL代码，即可以只求解某个小通信组的Broadcast或ReduceScatter等)。每个源到叶需求使用精确流守恒，属于同一payload的需求共享单父节点树；每个选中树边还必须满足严格递增的树层级约束，禁止依赖正传输时延间接排除有向环。每个选中传输仅展开实际经过该边的成员slice atom，目标AggregateState的完整contributors作为独立树标识保留，不得将目标Rank的本地贡献误计入入站物理传输。
 
-多种策略采用固定角色和固定流水线，用户只控制是否启用，不允许通过输入任意改变执行顺序。统一流程为：规范化CollectiveSpec、拓扑和atom输入；应用手动分层，或在未提供手动分层时执行自动分层；应用禁用atom、拓扑合法性、精确对称性和最短路径候选剪枝；通过批量构造和生成树产生可行候选及MILP warm start；使用MILP优化并保留生成树候选用于超时回退和最终比较；合成局部阶段并建立全局依赖；最后执行XML降低和完整验证。
+可扩展MILP路径将每个PlanNode的需求进一步拆为`RoutingUnit`。一个unit表示语义不可分割的一棵树或一条chain，包含完整通信域、允许与合法有向边、禁用传输、源/叶角色、logical position、真实contributors及member slice。`SolverTemplate`只在unit完全精确同构时合并；同构判定同时覆盖有向链路方向、性能曲线、channel上限、共享资源的完整成员关系与容量、通信与语义角色、需求、contributors/归约状态、slice大小、允许边和禁用项。公共Rank、外部contributor源Rank、logical position和共享资源映射必须在同一规范标号下双向完整。大型歧义图可以保守地不复用，但不得错误合并。
+
+当`require_proven_optimal=false`且启用MILP时，Orchestrator对每个合法的`(template, K, objective)`只建立一个代表路由MILP，其中`K=1..K_max`全部保留，除非已有硬输入约束排除。代表模型只包含路由/树选择变量、流守恒、单父节点、层级无环、连通性及允许/禁用边等结构约束；不包含真实slice的channel分配、共享资源slot、开始/结束时间、重叠决定或析取顺序变量。提取路径后在Python中重新验证根可达、每个选中非根节点恰有一个父节点、无环、连通、允许/合法/禁用边以及稳定顺序。固定拓扑与固定K下，该模型的变量数、线性约束数和一般约束数必须与真实slice数量无关。
+
+每个成功的`RoutePattern`通过模板的精确rank、logical position和contributor映射实例化到全部真实`RoutingUnit`。实例化保留`slice_id = source_rank * slice_count + logical_slice_index`、真实contributors、完整路径前缀和唯一稳定`transfer_id`，不得复制代表成员的channel、资源slot、开始/结束时间、重叠或顺序。路由阶段仅使用channel 0、空资源slot和零起点临时时间；归约对偶在真实成员上重新构造REDUCE/RRC、AggregateState和贡献依赖。若一个成员的映射或slice特定禁用项复核失败，只将该成员转为独立identity模板求解，不影响同模板其他成员或其他K。
+
+全部真实路由随后组成一个完整Transfer DAG，并由确定性的ready-only list scheduler一次性分配最终channel、`LaneKey`、共享资源slot、语义与资源前驱、atom ready time及开始/结束时间。调度器从当前语义就绪集合中按稳定键选择最早完成的资源组合，同一lane或同一共享资源slot不重叠，而相反方向、不同channel和独立资源可以并行；它不添加全局stage barrier，也不依赖临时transfer输入顺序。循环、缺失资源容量或无法分配的传输必须显式失败。PlanNode间归约依赖同时连接源状态和目标累加器；跨阶段依赖只挂在下一段路径入口，由段内路径依赖传递到下游，保证XML依赖始终能在通信端点的共同Rank上表达。
+
+可扩展模板组合和独立PlanNode组合都会限制搜索空间，因此所有这类候选必须记录`template_route_composition`/`independent_node_composition`、设置`search_space_restricted=true`和`proven_optimal=false`。`require_proven_optimal=true`时不进入代表路由路径，而是继续使用原有包含真实时间、channel、资源和顺序变量的完整timing MILP；只有该路径在没有其他限制且求解器返回严格证明时才能声明不受限全局最优。某个K缺少任一必要模板或独立成员回退结果时只拒绝该K，不能使其他K失效；构造式候选仍可作为非证明回退。`auto`继续先求latency，并仅在现有吞吐下界门限允许时搜索throughput。
+
+多种策略采用固定角色和固定流水线，用户只控制是否启用，不允许通过输入任意改变执行顺序。统一流程为：规范化CollectiveSpec、拓扑和atom输入；应用手动分层，或在未提供手动分层时执行自动分层；应用禁用atom、拓扑合法性、精确对称性和最短路径候选剪枝；构造真实RoutingUnit及精确模板；对全部合法K和目标求代表路由、逐成员实例化并执行成员局部回退；合成完整真实Transfer DAG并全局分配资源；保留生成树候选用于后端不可用或不可行回退和最终比较；最后执行XML降低和完整验证。只有证明请求改走完整timing MILP。
 
 Solve Orchestrator在启动后端前重新生成规范化PlanDAG，并拒绝与请求中PlanDAG不一致的过期或冲突计划。`TuningOverlay.temporary_forbidden`与用户禁用项取并集，`channel_count`作为本轮固定K；调优参数不得删除原始硬约束。每个全局候选的`node_schedules`必须覆盖全部PlanNode，局部MILP候选只有在channel数K一致时才能组合。当前多节点模型独立选择局部路径，再由Composer按全局资源重排，因此必须记录`independent_node_composition`限制并设置`search_space_restricted=true`，不得由局部最优状态推导全局最优证明。候选稳定标识包含规范化请求签名，避免不同输入或调优迭代产生相同candidate ID。
 
@@ -368,13 +378,13 @@ MILP达到求解时间上限时，若Gurobi已经得到可行incumbent，则提�
 
 `mip_gap`默认值为`1e-4`。该值与TACCL调度模型使用的Gurobi默认值及SyCCL参数类默认值一致；TACCL路由模型使用`1e-9`，SyCCL公开示例配置使用`1e-3`，均可由用户显式覆盖。非零`mip_gap`终止只设置`within_requested_gap = true`，不设置`proven_optimal = true`。当`require_proven_optimal = true`时，实际传给Gurobi的相对gap必须为0；若在时间预算内未获得严格最优状态，则本次求解失败，而不是返回近似最优结果。
 
-独立MILP模型可以并行求解，默认`max_parallel_models = 4`。独立模型是指其CollectiveSpec、通信域、拓扑、分层阶段接口、目标模式和channel候选均已固定，且构造当前模型不依赖其他模型的求解结果；依赖路由结果的调度模型、由latency下界筛选结果决定是否构造的throughput模型，以及同一候选的求解、验证和修复流程不得错误并行。同构通信组只求解一次并复用结果，不得将副本计为多个独立模型。
+独立MILP模型可以并行求解，默认`max_parallel_models = 4`。独立模型是指其CollectiveSpec、通信域、拓扑、分层阶段接口、目标模式和channel候选均已固定，且构造当前模型不依赖其他模型的求解结果；依赖路由结果的调度模型、由latency下界筛选结果决定是否构造的throughput模型，以及同一候选的求解、验证和修复流程不得错误并行。精确同构的RoutingUnit只求一个代表路由模型并复用路由结构，不得复用任何资源或时间决定，也不得将成员数量计为多个实际模型。
 
 并行调度器检测可用CPU核心数`C`，当前批次实际并行数为`J = min(ready_independent_models, max_parallel_models, C)`，每个模型设置`Threads = max(1, min(12, floor(C / J)))`，保证所有并行模型的Gurobi线程总数不超过`C`。默认`solver_seed = 0`，表示使用Gurobi默认随机种子以固定内部搜索扰动；用户可以在`sketch.json`中覆盖。固定seed有利于同一模型的实验复现，但模型生成顺序、Gurobi版本、线程数、硬件或墙钟超时变化时不保证结果完全一致。并行批次仍共享`total_solve_timeout_s`墙钟预算；某个模型完成后可以启动新的独立模型，但不得动态增加仍在运行模型的线程数。
 
 求解器使用精确签名的两级缓存。已验证缓存保存调度、目标值、best bound、MIP gap、最优性证明状态和验证报告；命中后可以跳过MILP求解，但在本次输出前仍必须重新执行集合通信语义检查、BDD机会分析、动态并发事件模拟和XML验证。warm-start缓存保存尚未验证的incumbent或中断模型的Gurobi初始解，只能作为后续求解的初始解，禁止直接输出。
 
-缓存签名至少包含CollectiveSpec、拓扑结构、共享资源及校准参数、`total_size_bytes`、`slice_size_bytes`、禁用项、分层模板、目标模式、channel配置、`solver_seed`、模型模式版本和求解器版本。超时但验证通过的incumbent可以作为候选复用，但不能继承`proven_optimal = true`；只有模型签名和证明元数据完全一致时才能复用最优性证明。输入参数`force_resolve = true`忽略求解结果缓存，但不删除缓存文件，也不隐式忽略拓扑校准缓存。
+缓存签名至少包含CollectiveSpec、拓扑结构、共享资源及校准参数、`total_size_bytes`、`slice_size_bytes`、禁用项、有效planning mode、精确模板签名、完整成员映射摘要、目标模式、channel配置、全局调度器/路由模型版本、`solver_seed`和求解器版本。超时但验证通过的incumbent可以作为候选复用，但不能继承`proven_optimal = true`；只有模型签名和证明元数据完全一致时才能复用最优性证明。旧缓存和sidecar缺少新增诊断时按零值读取。输入参数`force_resolve = true`忽略求解结果缓存，但不删除缓存文件，也不隐式忽略拓扑校准缓存。
 
 动态并发事件模拟属于在线/离线验证模块，不直接加入MILP。现有代码中基于`self.time`的目标保留为latency模式的基础实现，链路数量和负载均衡heuristic改为明确的次级目标，不再通过未归一化加权和混合不同目标。
 
@@ -501,6 +511,8 @@ XML golden测试在规范化稳定标识后比较输出，检查buffer、offset�
 
 最终验收要求全部纯软件测试通过；新增或实质修改模块的行覆盖率不低于90%；集合通信语义、AggregateState、BDD和XML依赖等关键不变量同时具有正向与负向测试；所有源代码、测试代码、生成XML和JSON诊断均不包含中文字符。每完成一个模块立即运行该模块测试，阶段结束后运行全量回归；未执行的Gurobi或硬件测试必须在最终报告中单独列出。
 
+2026-08-24在node2的Ubuntu 24.04、Linux 6.8、Python 3.13.5及Gurobi 13.0.2环境完成可扩展分层求解验收。固定`two_node_gateway`拓扑、`K=1`和latency目标下，8/16/64/128个真实slice均产生5个SolverProblem、21个精确模板和21个实际route model；模板成员数分别为240/480/1920/3840，实例化后的真实传输数分别为448/896/3584/7168。由此确认模型数量按拓扑模板保持常数，而成员和传输随真实工作线性增长。Task 9 focused验收得到52 passed，修改边界的额外回归得到547 passed；完整非硬件与独立Gurobi结果记录在同任务progress ledger中。层次AllGather与AllReduce的一网关、四轨、可扩展Gurobi、XML回读及全验证用例全部通过。所需GPU/NIC硬件环境没有明确提供，因此hardware测试记录为`not_run`。
+
 ## 3.工作流程
 
 ### (1)输入
@@ -514,6 +526,10 @@ XML golden测试在规范化稳定标识后比较输出，检查buffer、offset�
 每个调度使用确定性英文文件名`vericcl_<operator>_<scale>_iter-<NNN>_selected-best-<true|false>.xml`，未通过MSCCL执行兼容性检查时使用`.candidate.xml`。每个XML或candidate XML必须具有同名`.validation.json`报告；任务结束后，最终选择的调度另外输出`vericcl_<operator>_<scale>_final.xml`及对应报告。XML与报告通过SHA-256绑定。文件名使用`selected-best`而不是`optimal`，避免将当前验证候选中的最佳结果误写为已经证明的全局最优结果。
 
 逐XML报告至少包含规范化输入哈希、请求策略、实际策略、策略参数、`TuningOverlay`、分层计划、channel配置、缓冲区映射、solver状态、目标值、best bound、MIP gap、求解时间、各验证维度状态、在线性能统计、step trace状态、接受或拒绝原因，以及`selected_best`、`proven_optimal`和`search_space_restricted`。`run-summary.json`列出所有XML、对应报告、父候选、调优迭代关系和最终选择结果。
+
+每个候选报告使用`effective_solving`区分请求与事实：`requested_hierarchy`表示用户请求，`planning_mode`表示实际采用的`direct`、`gateway_allgather`或`gateway_allreduce`计划，`solver_strategy`区分`constructive`、`scalable_template_routing`、`full_timing_milp`和`tuning`，`restricted_template_composition`表示是否采用模板路由组合，`search_space_restricted`表示全部限制的合并结论，`selected_best`表示当前验证候选中的选择结果，`requested_gap_satisfied`只表示达到请求gap，`global_proven_optimal`只表示不受限全局证明。请求分层但网关域不完整时必须保留请求值并把有效计划记录为direct及稳定`planning_reason`，不得伪装为已执行分层。
+
+`search_diagnostics`使用向后兼容的零默认值并定义为：`requested_problem_count`是有效PlanDAG产生的局部SolverProblem数；`template_count`是精确SolverTemplate数；`template_member_count`是真实RoutingUnit成员总数；`route_model_count`是实际启动的代表及成员回退路由模型数，每个模型只计一次；`fallback_member_model_count`是成员局部identity回退模型数；`route_model_build_time_s`和`route_model_optimize_time_s`分别累计路由模型构建与优化墙钟阶段；`expansion_time_s`是逐真实成员实例化时间；`scheduling_time_s`是完整DAG全局资源分配时间；`maximum_variable_count`、`maximum_constraint_count`和`maximum_general_constraint_count`分别是任一实际路由模型的最大变量、线性约束和一般约束数。候选数量、真实slice数量或生成的全局调度数量不得重复放大模型统计。每个candidate报告、XML伴随报告、schedule sidecar和run summary必须保留对应求解轮次的完整诊断及精确`TuningOverlay`。
 
 验证状态不得压缩为单一布尔值。输入非法或无法形成语义合法问题时标记`fatal`且不输出XML；集合通信语义、依赖、缓冲区、死锁或XML格式验证失败时标记`invalid`且不得成为最终结果；BDD发现优化机会只写入分析结果，不改变正确性状态，必需BDD分析未完成时单独记录`analysis_error`并禁止该候选进入最终选择。MSCCL执行不兼容时标记`warning`、输出candidate XML并禁止执行；在线算子验证所需trace不可用或不完整时设置`online_operator_validation=failed`，禁止声明在线验证完成及执行在线调优，但不否定离线有效且满足MSCCL兼容性检查的XML；校准不稳定时禁止相应剪枝和在线调优决策，但不否定XML执行兼容性。全部必需检查通过时标记`valid`。各JSON字段、诊断文本和生成代码均不得包含中文字符，诊断使用简洁、专业的英文。
 
