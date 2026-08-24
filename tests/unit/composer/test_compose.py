@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from vericcl.composer.compose import compose
+from vericcl.composer.compose import compose, compose_routes
 from vericcl.errors import SemanticError
 from vericcl.input.models import ObjectiveMode
 from vericcl.planner.model import (
@@ -19,7 +19,12 @@ from vericcl.semantics.collective import (
     required_outputs,
 )
 from vericcl.solver.model import SolveCandidate, SolveStatus, SolverMetrics
-from vericcl.topology.model import LinkKey
+from vericcl.topology.model import (
+    DirectedLink,
+    LinkKey,
+    PerformanceCurve,
+    Topology,
+)
 
 
 pytestmark = pytest.mark.phase03
@@ -206,6 +211,21 @@ def _pipeline_candidates():
     }
 
 
+def _pipeline_topology():
+    curve = PerformanceCurve(1.0, 2.0, {})
+    links = (LinkKey(0, 1), LinkKey(1, 2))
+    return Topology(
+        rank_count=3,
+        links={
+            link: DirectedLink(link, 1, curve, ()) for link in links
+        },
+        shared_resources={},
+        node_membership={0: 0, 1: 0, 2: 0},
+        gateways=frozenset(),
+        warnings=(),
+    )
+
+
 def test_composer_pipelines_ready_slice_without_stage_barrier():
     schedule = compose(_pipeline_plan(), _pipeline_candidates())
     by_id = {transfer.transfer_id: transfer for transfer in schedule.transfers}
@@ -224,6 +244,31 @@ def test_composer_pipelines_ready_slice_without_stage_barrier():
         for symbol in stage.symbols
     ] == [0.0, 2.0]
     assert schedule.metadata["path_scope"] == "global"
+
+
+def test_route_composer_discards_provisional_allocations_without_stage_barrier():
+    node_schedules = {}
+    for node_id, candidate in _pipeline_candidates().items():
+        schedule = candidate.node_schedules[node_id]
+        metadata = dict(schedule.metadata)
+        metadata["routing_only"] = True
+        node_schedules[node_id] = replace(schedule, metadata=metadata)
+
+    schedule = compose_routes(
+        _pipeline_plan(),
+        node_schedules,
+        _pipeline_topology(),
+        1,
+    )
+    by_id = {transfer.transfer_id: transfer for transfer in schedule.transfers}
+
+    assert by_id["pipeline-second-t0"].st_time == 2.0
+    assert by_id["pipeline-second-t0"].st_time < by_id[
+        "pipeline-first-t1"
+    ].ed_time
+    assert schedule.metadata["routing_only"] is False
+    assert schedule.metadata["global_resources_assigned"] is True
+    assert all(transfer.channel == 0 for transfer in schedule.transfers)
 
 
 def test_composer_requires_one_complete_candidate_per_plan_node():

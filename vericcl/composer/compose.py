@@ -6,7 +6,9 @@ from vericcl.errors import SemanticError
 from vericcl.planner.model import PlanDAG, PlanNode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.semantics.collective import OutputSlot
+from vericcl.solver.global_scheduler import assign_global_resources
 from vericcl.solver.model import SolveCandidate
+from vericcl.topology.model import Topology
 
 
 def _topological_nodes(plan: PlanDAG) -> Tuple[PlanNode, ...]:
@@ -52,6 +54,38 @@ def _node_schedules(
             or schedule.slice_count != plan.slice_count
         ):
             raise SemanticError("node schedule dimensions do not match the plan")
+        if schedule.metadata.get("reduction_dual") is True:
+            node = by_id[node_id]
+            schedule = reverse_allgather_schedule(
+                schedule,
+                node.local_collective,
+                node.logical_output,
+            )
+        schedules[node_id] = schedule
+    return schedules
+
+
+def _route_node_schedules(
+    plan: PlanDAG,
+    node_schedules: Mapping[str, Schedule],
+) -> Mapping[str, Schedule]:
+    if not isinstance(node_schedules, Mapping):
+        raise SemanticError("node_schedules must be a mapping")
+    expected = {node.node_id for node in plan.nodes}
+    if set(node_schedules) != expected:
+        raise SemanticError("one routing schedule is required for every plan node")
+    schedules = {}
+    by_id = {node.node_id: node for node in plan.nodes}
+    for node_id, schedule in node_schedules.items():
+        if not isinstance(schedule, Schedule):
+            raise SemanticError("node_schedules must contain Schedule values")
+        if (
+            schedule.rank_count != plan.rank_count
+            or schedule.slice_count != plan.slice_count
+        ):
+            raise SemanticError("node schedule dimensions do not match the plan")
+        if schedule.metadata.get("routing_only") is not True:
+            raise SemanticError("compose_routes requires routing-only schedules")
         if schedule.metadata.get("reduction_dual") is True:
             node = by_id[node_id]
             schedule = reverse_allgather_schedule(
@@ -224,13 +258,12 @@ def _passthrough_input(
     return matches[0]
 
 
-def compose(
+def _compose_schedules(
     plan: PlanDAG,
-    candidates: Mapping[str, SolveCandidate],
+    schedules: Mapping[str, Schedule],
+    *,
+    routing_only: bool,
 ) -> Schedule:
-    if not isinstance(plan, PlanDAG):
-        raise SemanticError("plan must be a PlanDAG")
-    schedules = _node_schedules(plan, candidates)
     slice_sizes = {
         schedule.slice_size_bytes for schedule in schedules.values()
     }
@@ -262,7 +295,11 @@ def compose(
                 input_paths[slot] = value_paths[key]
         global_atoms = {}
         for transfer in schedule.transfers:
-            duration = transfer.ed_time - transfer.st_time
+            duration = (
+                0.0
+                if routing_only
+                else transfer.ed_time - transfer.st_time
+            )
             atoms = []
             cross_dependencies = set()
             for atom in transfer.atoms:
@@ -273,7 +310,34 @@ def compose(
                 )
                 slot = _input_slot(node, root, atom.slice_id)
                 prior_path = input_paths[slot][atom.slice_id]
-                placeholder = _placeholder_atom(atom, prior_path, duration)
+                suffix_atom = atom
+                if routing_only:
+                    suffix_atom = Atom(
+                        slice_id=atom.slice_id,
+                        slice_size_bytes=atom.slice_size_bytes,
+                        path=tuple(
+                            PathStage(
+                                stage.stage_id,
+                                stage.operator,
+                                tuple(
+                                    Symbol(
+                                        symbol.src_rank,
+                                        symbol.dst_rank,
+                                        0.0,
+                                    )
+                                    for symbol in stage.symbols
+                                ),
+                            )
+                            for stage in atom.path
+                        ),
+                        st_time=0.0,
+                        ed_time=0.0,
+                    )
+                placeholder = _placeholder_atom(
+                    suffix_atom,
+                    prior_path,
+                    duration,
+                )
                 atoms.append(placeholder)
                 cross_dependencies.update(input_dependencies[slot])
                 global_atoms[(transfer.transfer_id, atom.slice_id)] = placeholder
@@ -295,7 +359,7 @@ def compose(
                 kind=transfer.kind,
                 src_rank=transfer.src_rank,
                 dst_rank=transfer.dst_rank,
-                channel=transfer.channel,
+                channel=0 if routing_only else transfer.channel,
                 stage_id=transfer.stage_id,
                 member_slice_ids=transfer.member_slice_ids,
                 atoms=rebuilt_atoms,
@@ -303,7 +367,7 @@ def compose(
                 ed_time=start + duration,
                 predecessor_ids=predecessors,
             )
-            slots = _resource_slots(schedule, transfer)
+            slots = {} if routing_only else _resource_slots(schedule, transfer)
             if rebuilt.transfer_id in transfers_by_id:
                 if (
                     transfers_by_id[rebuilt.transfer_id] != rebuilt
@@ -392,4 +456,38 @@ def compose(
             "plan_nodes": tuple(node.node_id for node in plan.nodes),
         },
     )
+    return provisional
+
+
+def compose(
+    plan: PlanDAG,
+    candidates: Mapping[str, SolveCandidate],
+) -> Schedule:
+    if not isinstance(plan, PlanDAG):
+        raise SemanticError("plan must be a PlanDAG")
+    provisional = _compose_schedules(
+        plan,
+        _node_schedules(plan, candidates),
+        routing_only=False,
+    )
     return _retime(provisional, topology=None)
+
+
+def compose_routes(
+    plan: PlanDAG,
+    node_schedules: Mapping[str, Schedule],
+    topology: Topology,
+    channel_count: int,
+) -> Schedule:
+    if not isinstance(plan, PlanDAG):
+        raise SemanticError("plan must be a PlanDAG")
+    provisional = _compose_schedules(
+        plan,
+        _route_node_schedules(plan, node_schedules),
+        routing_only=True,
+    )
+    return assign_global_resources(
+        provisional,
+        topology,
+        channel_count,
+    )

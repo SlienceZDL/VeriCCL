@@ -217,3 +217,79 @@ def test_recompute_serializes_distinct_links_in_one_shared_resource_slot():
 
     assert by_id["branch-a"].ed_time <= by_id["branch-b"].st_time
     assert "branch-a" in by_id["branch-b"].predecessor_ids
+
+
+def test_recompute_preserves_existing_parallel_channel_and_slot_allocations():
+    curve = PerformanceCurve(1.0, 2.0, {})
+    key = LinkKey(0, 1)
+    topology = Topology(
+        rank_count=2,
+        links={
+            key: DirectedLink(key, 2, curve, ("nic",)),
+        },
+        shared_resources={
+            "nic": SharedResource("nic", (key,), 2, curve),
+        },
+        node_membership={0: 0, 1: 0},
+        gateways=frozenset(),
+        warnings=(),
+    )
+    transfers = tuple(
+        Transfer(
+            transfer_id="parallel-{}".format(channel),
+            kind="SEND",
+            src_rank=0,
+            dst_rank=1,
+            channel=channel,
+            stage_id=0,
+            member_slice_ids=frozenset({channel}),
+            atoms=(
+                Atom(
+                    slice_id=channel,
+                    slice_size_bytes=1024,
+                    path=(
+                        PathStage(
+                            0,
+                            "SEND",
+                            (Symbol(0, 1, 0.0),),
+                        ),
+                    ),
+                    st_time=0.0,
+                    ed_time=2.0,
+                ),
+            ),
+            st_time=0.0,
+            ed_time=2.0,
+            predecessor_ids=frozenset(),
+        )
+        for channel in range(2)
+    )
+    schedule = Schedule(
+        schedule_id="parallel-allocations",
+        transfers=transfers,
+        final_state_ids=(),
+        rank_count=2,
+        slice_count=2,
+        slice_size_bytes=1024,
+        metadata={
+            "path_scope": "global",
+            "semantic_predecessors": {
+                transfer.transfer_id: () for transfer in transfers
+            },
+            "resource_slots": {
+                transfer.transfer_id: {"nic": transfer.channel}
+                for transfer in transfers
+            },
+        },
+    )
+
+    recomputed = recompute_earliest_times(schedule, topology)
+
+    assert {
+        (transfer.channel, transfer.st_time)
+        for transfer in recomputed.transfers
+    } == {(0, 0.0), (1, 0.0)}
+    assert recomputed.metadata["resource_slots"] == {
+        "parallel-0": {"nic": 0},
+        "parallel-1": {"nic": 1},
+    }

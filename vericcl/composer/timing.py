@@ -1,7 +1,8 @@
 from typing import Mapping, Optional
 
 from vericcl.errors import SemanticError
-from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import Schedule, Transfer
+from vericcl.solver.scheduling import rebuild_scheduled_transfers
 from vericcl.topology.model import LaneKey, LinkKey, Topology
 
 
@@ -146,86 +147,16 @@ def _retime(
             key = (resource_id, slot)
             resource_ready[key] = end
             resource_last[key] = transfer_id
-    operation_ids = {}
-    for transfer in schedule.transfers:
-        for member in transfer.member_slice_ids:
-            key = (
-                transfer.stage_id,
-                transfer.src_rank,
-                transfer.dst_rank,
-                member,
-            )
-            if key in operation_ids and operation_ids[key] != transfer.transfer_id:
-                raise SemanticError("slice operation is duplicated in the schedule")
-            operation_ids[key] = transfer.transfer_id
-    rebuilt = []
-    for transfer in schedule.transfers:
-        start, end, _ = times[transfer.transfer_id]
-        atoms = []
-        for atom in transfer.atoms:
-            path = []
-            for stage in atom.path:
-                symbols = []
-                for symbol in stage.symbols:
-                    key = (
-                        stage.stage_id,
-                        symbol.src_rank,
-                        symbol.dst_rank,
-                        atom.slice_id,
-                    )
-                    operation_id = operation_ids.get(key)
-                    if operation_id is None:
-                        raise SemanticError(
-                            "atom path operation is missing from the schedule"
-                        )
-                    symbols.append(
-                        Symbol(
-                            symbol.src_rank,
-                            symbol.dst_rank,
-                            times[operation_id][2],
-                        )
-                    )
-                path.append(PathStage(stage.stage_id, stage.operator, tuple(symbols)))
-            atoms.append(
-                Atom(
-                    slice_id=atom.slice_id,
-                    slice_size_bytes=atom.slice_size_bytes,
-                    path=tuple(path),
-                    st_time=start,
-                    ed_time=end,
-                )
-            )
-        rebuilt.append(
-            Transfer(
-                transfer_id=transfer.transfer_id,
-                kind=transfer.kind,
-                src_rank=transfer.src_rank,
-                dst_rank=transfer.dst_rank,
-                channel=transfer.channel,
-                stage_id=transfer.stage_id,
-                member_slice_ids=transfer.member_slice_ids,
-                atoms=tuple(atoms),
-                st_time=start,
-                ed_time=end,
-                predecessor_ids=all_predecessors[transfer.transfer_id],
-            )
-        )
-    metadata = dict(schedule.metadata)
-    metadata["semantic_predecessors"] = {
-        key: tuple(sorted(values)) for key, values in semantic.items()
-    }
-    metadata["resource_slots"] = {
-        key: dict(values) for key, values in resource_slots.items()
-    }
-    metadata["timing_recomputed"] = True
-    return Schedule(
-        schedule_id=schedule.schedule_id,
-        transfers=tuple(sorted(rebuilt, key=lambda item: item.transfer_id)),
-        final_state_ids=schedule.final_state_ids,
-        rank_count=schedule.rank_count,
-        slice_count=schedule.slice_count,
-        slice_size_bytes=schedule.slice_size_bytes,
-        metadata=metadata,
+    return rebuild_scheduled_transfers(
+        schedule,
+        timings=times,
+        channels={
+            transfer.transfer_id: transfer.channel
+            for transfer in schedule.transfers
+        },
+        semantic_predecessors=semantic,
+        predecessor_ids=all_predecessors,
+        resource_slots=resource_slots,
     )
 
 
