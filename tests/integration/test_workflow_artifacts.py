@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 import vericcl.workflow as workflow_module
+from vericcl.artifacts.writer import read_schedule_sidecar
+from vericcl.solver.model import SearchDiagnostics
 from vericcl.workflow import RunContext, execute_solve, execute_verify
 from vericcl.errors import SemanticError
 from vericcl.verification.model import CheckResult, ValidationStatus
@@ -164,6 +166,110 @@ def test_hierarchy_fallback_reports_requested_and_effective_strategies(tmp_path)
     assert (
         report["hierarchy_plan"]["planning_reason"]
         == "no_eligible_gateway_domain"
+    )
+
+
+def test_scalable_workflow_uses_bound_schedule_and_reports_diagnostics(
+    tmp_path,
+    monkeypatch,
+):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+    original_solve = workflow_module.solve
+    original_compose = workflow_module.compose
+    diagnostics = SearchDiagnostics(
+        requested_problem_count=4,
+        template_count=2,
+        template_member_count=4,
+        route_model_count=2,
+        route_model_build_time_s=0.1,
+        route_model_optimize_time_s=0.2,
+        expansion_time_s=0.3,
+        scheduling_time_s=0.4,
+        maximum_variable_count=10,
+        maximum_constraint_count=20,
+    )
+    expected = {}
+
+    def scalable(request):
+        result = original_solve(request)
+        candidates = []
+        for candidate in result.candidates:
+            schedule = original_compose(
+                request.plan,
+                {
+                    node.node_id: candidate
+                    for node in request.plan.nodes
+                },
+            )
+            expected[candidate.candidate_id] = schedule
+            candidates.append(
+                replace(
+                    candidate,
+                    global_schedule=schedule,
+                    search_space_restricted=True,
+                    restrictions=tuple(
+                        sorted(
+                            set(candidate.restrictions)
+                            | {"template_route_composition"}
+                        )
+                    ),
+                )
+            )
+        return replace(
+            result,
+            candidates=tuple(candidates),
+            diagnostics=diagnostics,
+        )
+
+    monkeypatch.setattr(workflow_module, "solve", scalable)
+    monkeypatch.setattr(
+        workflow_module,
+        "compose",
+        lambda *args: pytest.fail("bound global schedule was recomposed"),
+    )
+
+    result = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="scalable-diagnostics",
+        )
+    )
+
+    selected = next(
+        item
+        for item in result.candidates
+        if item.candidate_id == result.final_candidate_id
+    )
+    sidecar = read_schedule_sidecar(selected.schedule_path)
+    report = json.loads(selected.report_path.read_text(encoding="utf-8"))
+    summary = json.loads(result.layout.summary.read_text(encoding="utf-8"))
+    assert sidecar.schedule == expected[selected.candidate_id]
+    assert sidecar.diagnostics == diagnostics
+    assert report["effective_solving"]["solver_strategy"] == (
+        "scalable_template_routing"
+    )
+    assert report["search_diagnostics"]["route_model_count"] == 2
+    assert summary["planning_mode"] == "direct"
+    assert summary["requested_hierarchy"] is False
+    assert summary["search_diagnostics"] == {
+        "expansion_time_s": 0.3,
+        "fallback_member_model_count": 0,
+        "maximum_constraint_count": 20,
+        "maximum_general_constraint_count": 0,
+        "maximum_variable_count": 10,
+        "requested_problem_count": 4,
+        "route_model_build_time_s": 0.1,
+        "route_model_count": 2,
+        "route_model_optimize_time_s": 0.2,
+        "scheduling_time_s": 0.4,
+        "template_count": 2,
+        "template_member_count": 4,
+    }
+    assert summary["candidates"][0]["search_diagnostics"] == (
+        summary["search_diagnostics"]
     )
 
 

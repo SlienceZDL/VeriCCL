@@ -17,7 +17,12 @@ from vericcl.artifacts.writer import (
 )
 from vericcl.errors import SemanticError
 from vericcl.input.models import ObjectiveMode
-from vericcl.solver.model import SolveCandidate, SolveStatus, SolverMetrics
+from vericcl.solver.model import (
+    SearchDiagnostics,
+    SolveCandidate,
+    SolveStatus,
+    SolverMetrics,
+)
 from vericcl.verification.model import CheckResult, ValidationStatus
 from vericcl.verification.pipeline import validate_and_lower_candidate
 from vericcl.verification.online.pipeline import (
@@ -252,6 +257,58 @@ def test_schedule_sidecar_preserves_tuning_overlay_identity(tmp_path):
 
     assert sidecar.overlay == value
     assert sidecar.candidate_signature == artifact.candidate_signature
+
+
+def test_writer_round_trips_diagnostics_and_old_sidecar_defaults(tmp_path):
+    input_value = inputs()
+    topology_value = topology()
+    schedule = two_rank_allreduce_schedule()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology_value,
+    )
+    layout = create_run_layout(tmp_path, input_value, run_id="diagnostics")
+    diagnostics = SearchDiagnostics(
+        requested_problem_count=8,
+        template_count=2,
+        template_member_count=8,
+        route_model_count=4,
+        fallback_member_model_count=1,
+        route_model_build_time_s=0.1,
+        route_model_optimize_time_s=0.2,
+        expansion_time_s=0.3,
+        scheduling_time_s=0.4,
+        maximum_variable_count=10,
+        maximum_constraint_count=20,
+        maximum_general_constraint_count=1,
+    )
+
+    artifact = write_candidate_artifact(
+        layout,
+        input_value,
+        topology_value,
+        _candidate(schedule),
+        schedule,
+        outcome,
+        iteration=0,
+        selected_best=True,
+        accepted=True,
+        rejection_reason=None,
+        search_diagnostics=diagnostics,
+    )
+
+    report = json.loads(artifact.report_path.read_text(encoding="utf-8"))
+    assert report["search_diagnostics"]["route_model_count"] == 4
+    assert artifact.search_diagnostics == diagnostics
+    assert read_schedule_sidecar(artifact.schedule_path).diagnostics == diagnostics
+
+    payload = json.loads(artifact.schedule_path.read_text(encoding="utf-8"))
+    del payload["search_diagnostics"]
+    artifact.schedule_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert read_schedule_sidecar(artifact.schedule_path).diagnostics == (
+        SearchDiagnostics()
+    )
 
 
 def test_atomic_writer_rejects_invalid_values_and_existing_target(tmp_path):

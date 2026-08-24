@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping, Optional
 
@@ -12,7 +12,7 @@ from vericcl.errors import SemanticError
 from vericcl.input.json_codec import canonical_json
 from vericcl.input.models import ResolvedInput
 from vericcl.semantics.atom import Schedule
-from vericcl.solver.model import SolveCandidate
+from vericcl.solver.model import SearchDiagnostics, SolveCandidate
 from vericcl.topology.model import Topology
 from vericcl.tuning.model import TuningOverlay
 from vericcl.verification.model import ValidationReport
@@ -126,6 +126,45 @@ def _reproducibility(candidate: SolveCandidate) -> Mapping[str, object]:
     )
 
 
+def _solver_strategy(candidate: SolveCandidate) -> str:
+    if candidate.metrics.solver_name == "vericcl-tuner":
+        return "tuning"
+    if "template_route_composition" in candidate.restrictions:
+        return "scalable_template_routing"
+    if candidate.metrics.solver_name == "constructive":
+        return "constructive"
+    if candidate.metrics.solver_name == "gurobi":
+        return "full_timing_milp"
+    return candidate.metrics.solver_name
+
+
+def _effective_solving(
+    candidate: SolveCandidate,
+    inputs: ResolvedInput,
+    hierarchy_plan: Mapping[str, object],
+    selected_best: bool,
+) -> Mapping[str, object]:
+    planning_mode = hierarchy_plan.get("planning_mode", "unknown")
+    if not isinstance(planning_mode, str) or not planning_mode:
+        raise SemanticError("hierarchy planning_mode must be a non-empty string")
+    return MappingProxyType(
+        {
+            "requested_hierarchy": inputs.strategies.hierarchy,
+            "planning_mode": planning_mode,
+            "solver_strategy": _solver_strategy(candidate),
+            "restricted_template_composition": (
+                "template_route_composition" in candidate.restrictions
+            ),
+            "search_space_restricted": candidate.search_space_restricted,
+            "selected_best": selected_best,
+            "requested_gap_satisfied": (
+                candidate.metrics.within_requested_gap
+            ),
+            "global_proven_optimal": candidate.proven_optimal,
+        }
+    )
+
+
 def _buffer_plan(outcome: VerificationOutcome) -> Mapping[str, object]:
     if outcome.artifact is None:
         return MappingProxyType({})
@@ -175,6 +214,10 @@ class CandidateReport:
     tuning_strategy: Mapping[str, object]
     runtime_recommendations: tuple
     reproducibility: Mapping[str, object]
+    effective_solving: Mapping[str, object] = field(default_factory=dict)
+    search_diagnostics: SearchDiagnostics = field(
+        default_factory=SearchDiagnostics
+    )
 
     def __post_init__(self) -> None:
         for field in (
@@ -188,6 +231,7 @@ class CandidateReport:
             "simulation_evidence",
             "tuning_strategy",
             "reproducibility",
+            "effective_solving",
         ):
             object.__setattr__(
                 self,
@@ -196,6 +240,8 @@ class CandidateReport:
             )
         if not isinstance(self.validation, ValidationReport):
             raise SemanticError("candidate report validation is invalid")
+        if not isinstance(self.search_diagnostics, SearchDiagnostics):
+            raise SemanticError("candidate report diagnostics are invalid")
 
 
 def build_candidate_report(
@@ -211,6 +257,7 @@ def build_candidate_report(
     rejection_reason: Optional[str],
     selected_best: bool,
     tuning_strategy: Mapping[str, object],
+    search_diagnostics: Optional[SearchDiagnostics] = None,
 ) -> CandidateReport:
     if not isinstance(candidate, SolveCandidate):
         raise SemanticError("candidate must be a SolveCandidate")
@@ -222,6 +269,10 @@ def build_candidate_report(
         raise SemanticError("outcome must be a VerificationOutcome")
     if outcome.artifact is None:
         raise SemanticError("candidate report requires an XML artifact")
+    if search_diagnostics is None:
+        search_diagnostics = SearchDiagnostics()
+    if not isinstance(search_diagnostics, SearchDiagnostics):
+        raise SemanticError("search_diagnostics must be SearchDiagnostics")
     if global_schedule is not None and not isinstance(
         global_schedule,
         Schedule,
@@ -292,6 +343,13 @@ def build_candidate_report(
             outcome.artifact,
         ),
         reproducibility=_reproducibility(candidate),
+        effective_solving=_effective_solving(
+            candidate,
+            inputs,
+            hierarchy_plan,
+            selected_best,
+        ),
+        search_diagnostics=search_diagnostics,
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
@@ -12,6 +12,10 @@ import uuid
 from vericcl.artifacts.hashing import candidate_signature
 from vericcl.artifacts.layout import RunLayout
 from vericcl.artifacts.reports import (
+    _effective_solving,
+    _overlay,
+    _strategies,
+    _strategy_parameters,
     build_candidate_report,
     build_validation_json,
 )
@@ -20,6 +24,7 @@ from vericcl.input.json_codec import canonical_json
 from vericcl.input.models import ForbiddenTransfer, ObjectiveMode, ResolvedInput
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.solver.model import (
+    SearchDiagnostics,
     SolveCandidate,
     SolveStatus,
     SolverMetrics,
@@ -128,6 +133,12 @@ class CandidateArtifact:
     selected_best: bool
     proven_optimal: bool
     restrictions: Tuple[str, ...]
+    search_space_restricted: bool = False
+    within_requested_gap: bool = False
+    solver_strategy: str = "unknown"
+    search_diagnostics: SearchDiagnostics = field(
+        default_factory=SearchDiagnostics
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.candidate_id, str) or not self.candidate_id:
@@ -151,6 +162,18 @@ class CandidateArtifact:
             MappingProxyType(dict(self.validation)),
         )
         object.__setattr__(self, "restrictions", tuple(self.restrictions))
+        for name in (
+            "search_space_restricted",
+            "within_requested_gap",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise SemanticError(
+                    "candidate artifact {} must be a boolean".format(name)
+                )
+        if not isinstance(self.solver_strategy, str) or not self.solver_strategy:
+            raise SemanticError("candidate artifact solver strategy is invalid")
+        if not isinstance(self.search_diagnostics, SearchDiagnostics):
+            raise SemanticError("candidate artifact diagnostics are invalid")
 
 
 @dataclass(frozen=True)
@@ -161,6 +184,7 @@ class ScheduleSidecar:
     candidate: SolveCandidate
     schedule: Schedule
     overlay: Optional[TuningOverlay]
+    diagnostics: SearchDiagnostics = field(default_factory=SearchDiagnostics)
 
 
 def _resolved_payload(inputs: ResolvedInput) -> Mapping[str, object]:
@@ -218,6 +242,7 @@ def _sidecar_payload(
     signature: str,
     xml_sha256: Optional[str],
     overlay: Optional[TuningOverlay],
+    diagnostics: SearchDiagnostics,
 ) -> Mapping[str, object]:
     return {
         "schema_version": _SIDECAR_SCHEMA_VERSION,
@@ -227,6 +252,7 @@ def _sidecar_payload(
         "candidate": _candidate_payload(candidate),
         "overlay": overlay,
         "schedule": _schedule_payload(schedule),
+        "search_diagnostics": diagnostics,
     }
 
 
@@ -349,6 +375,42 @@ def _parse_candidate(payload: object, schedule: Schedule) -> SolveCandidate:
     )
 
 
+def _parse_diagnostics(payload: object) -> SearchDiagnostics:
+    if payload is None:
+        return SearchDiagnostics()
+    if not isinstance(payload, Mapping):
+        raise SemanticError("schedule sidecar diagnostics are invalid")
+    return SearchDiagnostics(
+        requested_problem_count=payload.get("requested_problem_count", 0),
+        template_count=payload.get("template_count", 0),
+        template_member_count=payload.get("template_member_count", 0),
+        route_model_count=payload.get("route_model_count", 0),
+        fallback_member_model_count=payload.get(
+            "fallback_member_model_count",
+            0,
+        ),
+        route_model_build_time_s=payload.get(
+            "route_model_build_time_s",
+            0.0,
+        ),
+        route_model_optimize_time_s=payload.get(
+            "route_model_optimize_time_s",
+            0.0,
+        ),
+        expansion_time_s=payload.get("expansion_time_s", 0.0),
+        scheduling_time_s=payload.get("scheduling_time_s", 0.0),
+        maximum_variable_count=payload.get("maximum_variable_count", 0),
+        maximum_constraint_count=payload.get(
+            "maximum_constraint_count",
+            0,
+        ),
+        maximum_general_constraint_count=payload.get(
+            "maximum_general_constraint_count",
+            0,
+        ),
+    )
+
+
 def _parse_overlay(payload: object) -> Optional[TuningOverlay]:
     if payload is None:
         return None
@@ -399,6 +461,7 @@ def read_schedule_sidecar(path: Path) -> ScheduleSidecar:
     schedule = _parse_schedule(payload.get("schedule"))
     candidate = _parse_candidate(payload.get("candidate"), schedule)
     overlay = _parse_overlay(payload.get("overlay"))
+    diagnostics = _parse_diagnostics(payload.get("search_diagnostics"))
     return ScheduleSidecar(
         normalized_input_sha256=payload.get("normalized_input_sha256"),
         candidate_signature=payload.get("candidate_signature"),
@@ -406,6 +469,7 @@ def read_schedule_sidecar(path: Path) -> ScheduleSidecar:
         candidate=candidate,
         schedule=schedule,
         overlay=overlay,
+        diagnostics=diagnostics,
     )
 
 
@@ -434,6 +498,13 @@ def _generic_report(
     inputs: ResolvedInput,
     outcome: VerificationOutcome,
     signature: str,
+    *,
+    overlay: Optional[TuningOverlay],
+    applied_strategies: Mapping[str, object],
+    hierarchy_plan: Mapping[str, object],
+    selected_best: bool,
+    tuning_strategy: Mapping[str, object],
+    search_diagnostics: SearchDiagnostics,
 ) -> Mapping[str, object]:
     return {
         "schema_version": "1",
@@ -441,7 +512,19 @@ def _generic_report(
         "normalized_input_sha256": inputs.input_sha256,
         "candidate_signature": signature,
         "artifact_binding_sha256": None,
+        "requested_strategies": _strategies(inputs),
+        "applied_strategies": applied_strategies,
+        "strategy_parameters": _strategy_parameters(inputs),
+        "overlay": _overlay(overlay),
+        "hierarchy_plan": hierarchy_plan,
         "solver_metrics": candidate.metrics,
+        "search_diagnostics": search_diagnostics,
+        "effective_solving": _effective_solving(
+            candidate,
+            inputs,
+            hierarchy_plan,
+            selected_best,
+        ),
         "validation": outcome.report,
         "lineage": {
             "candidate_id": candidate.candidate_id,
@@ -450,6 +533,8 @@ def _generic_report(
         "proven_optimal": candidate.proven_optimal,
         "search_space_restricted": candidate.search_space_restricted,
         "restrictions": candidate.restrictions,
+        "selected_best": selected_best,
+        "tuning_strategy": tuning_strategy,
         "runtime_compatible": False,
         "xml_sha256": None,
     }
@@ -471,6 +556,7 @@ def write_candidate_artifact(
     hierarchy_plan: Optional[Mapping[str, object]] = None,
     tuning_strategy: Optional[Mapping[str, object]] = None,
     overlay: Optional[TuningOverlay] = None,
+    search_diagnostics: Optional[SearchDiagnostics] = None,
 ) -> CandidateArtifact:
     if not isinstance(layout, RunLayout):
         raise SemanticError("layout must be a RunLayout")
@@ -488,6 +574,13 @@ def write_candidate_artifact(
         raise SemanticError("overlay must be a TuningOverlay or None")
     if not isinstance(accepted, bool):
         raise SemanticError("accepted must be a boolean")
+    if search_diagnostics is None:
+        search_diagnostics = SearchDiagnostics()
+    if not isinstance(search_diagnostics, SearchDiagnostics):
+        raise SemanticError("search_diagnostics must be SearchDiagnostics")
+    applied = {} if applied_strategies is None else applied_strategies
+    hierarchy = {} if hierarchy_plan is None else hierarchy_plan
+    tuning = {} if tuning_strategy is None else tuning_strategy
     base = _candidate_base(layout, iteration, selected_best)
     report_path = layout.reports / "{}.validation.json".format(base)
     schedule_path = layout.schedules / "{}.schedule.json".format(base)
@@ -517,17 +610,12 @@ def write_candidate_artifact(
             outcome,
             global_schedule=schedule,
             overlay=overlay,
-            applied_strategies=(
-                {} if applied_strategies is None else applied_strategies
-            ),
-            hierarchy_plan=(
-                {} if hierarchy_plan is None else hierarchy_plan
-            ),
+            applied_strategies=applied,
+            hierarchy_plan=hierarchy,
             rejection_reason=rejection_reason,
             selected_best=selected_best,
-            tuning_strategy=(
-                {} if tuning_strategy is None else tuning_strategy
-            ),
+            tuning_strategy=tuning,
+            search_diagnostics=search_diagnostics,
         )
         report_payload = json.loads(build_validation_json(report_object))
         binding = (
@@ -535,7 +623,18 @@ def write_candidate_artifact(
         )
     else:
         report_payload = dict(
-            _generic_report(candidate, inputs, outcome, signature)
+            _generic_report(
+                candidate,
+                inputs,
+                outcome,
+                signature,
+                overlay=overlay,
+                applied_strategies=applied,
+                hierarchy_plan=hierarchy,
+                selected_best=selected_best,
+                tuning_strategy=tuning,
+                search_diagnostics=search_diagnostics,
+            )
         )
         binding = None
     report_payload.update(
@@ -562,6 +661,7 @@ def write_candidate_artifact(
             signature,
             xml_digest,
             overlay,
+            search_diagnostics,
         )
     ) + "\n"
     report_text = canonical_json(report_payload) + "\n"
@@ -587,6 +687,15 @@ def write_candidate_artifact(
         selected_best=selected_best,
         proven_optimal=candidate.proven_optimal,
         restrictions=candidate.restrictions,
+        search_space_restricted=candidate.search_space_restricted,
+        within_requested_gap=candidate.metrics.within_requested_gap,
+        solver_strategy=_effective_solving(
+            candidate,
+            inputs,
+            hierarchy,
+            selected_best,
+        )["solver_strategy"],
+        search_diagnostics=search_diagnostics,
     )
 
 

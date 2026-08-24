@@ -16,6 +16,7 @@ from vericcl.errors import SemanticError
 from vericcl.verification.pipeline import VerificationOutcome
 from vericcl.input.models import ObjectiveMode
 from vericcl.solver.model import (
+    SearchDiagnostics,
     SolveCandidate,
     SolveStatus,
     SolverMetrics,
@@ -176,6 +177,109 @@ def test_report_preserves_effective_hierarchy_over_requested_hierarchy():
 
     assert decoded["requested_strategies"]["hierarchy"] is True
     assert decoded["applied_strategies"]["hierarchy"] is False
+
+
+def test_report_exposes_complete_search_and_effective_solving_diagnostics():
+    schedule = two_rank_allreduce_schedule()
+    input_value = replace(
+        inputs(),
+        strategies=replace(inputs().strategies, hierarchy=True),
+    )
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology(),
+    )
+    candidate = replace(
+        _candidate(schedule),
+        restrictions=(
+            "independent_node_composition",
+            "template_route_composition",
+        ),
+    )
+    diagnostics = SearchDiagnostics(
+        requested_problem_count=11,
+        template_count=3,
+        template_member_count=10,
+        route_model_count=6,
+        fallback_member_model_count=1,
+        route_model_build_time_s=1.25,
+        route_model_optimize_time_s=2.5,
+        expansion_time_s=0.125,
+        scheduling_time_s=0.25,
+        maximum_variable_count=101,
+        maximum_constraint_count=202,
+        maximum_general_constraint_count=3,
+    )
+
+    report = build_candidate_report(
+        candidate,
+        input_value,
+        topology(),
+        outcome,
+        overlay=overlay(),
+        applied_strategies={"hierarchy": True},
+        hierarchy_plan={"planning_mode": "gateway_allgather"},
+        rejection_reason=None,
+        selected_best=True,
+        tuning_strategy={"kind": "initial_solve"},
+        search_diagnostics=diagnostics,
+    )
+    decoded = json.loads(build_validation_json(report))
+
+    assert decoded["search_diagnostics"] == {
+        "expansion_time_s": 0.125,
+        "fallback_member_model_count": 1,
+        "maximum_constraint_count": 202,
+        "maximum_general_constraint_count": 3,
+        "maximum_variable_count": 101,
+        "requested_problem_count": 11,
+        "route_model_build_time_s": 1.25,
+        "route_model_count": 6,
+        "route_model_optimize_time_s": 2.5,
+        "scheduling_time_s": 0.25,
+        "template_count": 3,
+        "template_member_count": 10,
+    }
+    assert decoded["effective_solving"] == {
+        "global_proven_optimal": False,
+        "planning_mode": "gateway_allgather",
+        "requested_gap_satisfied": False,
+        "requested_hierarchy": True,
+        "restricted_template_composition": True,
+        "search_space_restricted": True,
+        "selected_best": True,
+        "solver_strategy": "scalable_template_routing",
+    }
+    assert decoded["overlay"]["overlay_id"] == "repair-overlay"
+
+
+def test_report_defaults_missing_search_diagnostics_to_zero():
+    schedule = two_rank_allreduce_schedule()
+    input_value = inputs()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology(),
+    )
+
+    report = build_candidate_report(
+        _candidate(schedule),
+        input_value,
+        topology(),
+        outcome,
+        overlay=None,
+        applied_strategies={},
+        hierarchy_plan={},
+        rejection_reason=None,
+        selected_best=False,
+        tuning_strategy={},
+    )
+    decoded = json.loads(build_validation_json(report))
+
+    assert all(
+        value == 0 for value in decoded["search_diagnostics"].values()
+    )
 
 
 def test_candidate_signature_and_binding_are_exact_and_deterministic():

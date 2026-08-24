@@ -7,6 +7,7 @@ from vericcl.artifacts.layout import RunLayout
 from vericcl.artifacts.writer import CandidateArtifact
 from vericcl.errors import SemanticError
 from vericcl.input.models import ResolvedInput
+from vericcl.solver.model import SearchDiagnostics
 
 
 def _relative(layout: RunLayout, path: Optional[Path]) -> Optional[str]:
@@ -44,6 +45,10 @@ def candidate_summary(
         "selected_best": artifact.selected_best,
         "proven_optimal": artifact.proven_optimal,
         "restrictions": artifact.restrictions,
+        "search_space_restricted": artifact.search_space_restricted,
+        "requested_gap_satisfied": artifact.within_requested_gap,
+        "solver_strategy": artifact.solver_strategy,
+        "search_diagnostics": artifact.search_diagnostics,
     }
 
 
@@ -59,6 +64,8 @@ def build_run_summary(
     status: str,
     message: str,
     elapsed_s: float,
+    search_diagnostics: Optional[SearchDiagnostics] = None,
+    planning_mode: Optional[str] = None,
 ) -> Mapping[str, object]:
     if mode not in {"solve", "verify"}:
         raise SemanticError("run summary mode must be solve or verify")
@@ -71,6 +78,14 @@ def build_run_summary(
         raise SemanticError("run summary elapsed_s must be numeric")
     if elapsed_s < 0.0:
         raise SemanticError("run summary elapsed_s must be non-negative")
+    if search_diagnostics is None:
+        search_diagnostics = SearchDiagnostics()
+    if not isinstance(search_diagnostics, SearchDiagnostics):
+        raise SemanticError("run summary diagnostics are invalid")
+    if planning_mode is None:
+        planning_mode = "unknown"
+    if not isinstance(planning_mode, str) or not planning_mode:
+        raise SemanticError("run summary planning_mode is invalid")
     final_selection = None
     if final_candidate_id is not None:
         selected = tuple(
@@ -86,6 +101,9 @@ def build_run_summary(
             "report_sha256": selected[0].report_sha256,
             "selected_best": selected[0].selected_best,
             "proven_optimal": selected[0].proven_optimal,
+            "requested_gap_satisfied": selected[0].within_requested_gap,
+            "search_space_restricted": selected[0].search_space_restricted,
+            "solver_strategy": selected[0].solver_strategy,
         }
     return {
         "schema_version": "1",
@@ -94,6 +112,9 @@ def build_run_summary(
         "status": status,
         "message": message,
         "elapsed_s": float(elapsed_s),
+        "requested_hierarchy": inputs.strategies.hierarchy,
+        "planning_mode": planning_mode,
+        "search_diagnostics": search_diagnostics,
         "candidates": tuple(candidate_summary(layout, item) for item in values),
         "final_selection": final_selection,
     }

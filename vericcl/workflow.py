@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 from pathlib import Path
 import time
@@ -25,7 +25,11 @@ from vericcl.input.models import ResolvedInput
 from vericcl.planner.build import build_plan
 from vericcl.planner.model import PlanDAG, PlanningMode
 from vericcl.semantics.atom import Schedule
-from vericcl.solver.model import SolveCandidate, SolveRequest
+from vericcl.solver.model import (
+    SearchDiagnostics,
+    SolveCandidate,
+    SolveRequest,
+)
 from vericcl.solver.orchestrator import solve
 from vericcl.topology.loader import load_topology
 from vericcl.tuning.engine import (
@@ -185,6 +189,9 @@ class _CandidateRecord:
     tuning_strategy: dict
     accepted: bool
     rejection_reason: Optional[str]
+    search_diagnostics: SearchDiagnostics = field(
+        default_factory=SearchDiagnostics
+    )
 
 
 def _timeout(context: RunContext, configured: int) -> float:
@@ -599,6 +606,8 @@ def _merge_applied_calibration(
 
 
 def _global_schedule(plan, candidate: SolveCandidate) -> Schedule:
+    if candidate.global_schedule is not None:
+        return candidate.global_schedule
     return compose(
         plan,
         {node.node_id: candidate for node in plan.nodes},
@@ -683,7 +692,12 @@ def _tuning_records(
     online_result: Optional[OnlineValidationResult] = None,
     online_factory: Optional[OnlineContextFactory] = None,
     layout: Optional[RunLayout] = None,
+    search_diagnostics: Optional[SearchDiagnostics] = None,
 ) -> tuple:
+    if search_diagnostics is None:
+        search_diagnostics = SearchDiagnostics()
+    if not isinstance(search_diagnostics, SearchDiagnostics):
+        raise SemanticError("tuning search diagnostics are invalid")
     remaining = deadline.remaining()
     if remaining <= 0.0:
         raise TimeoutError("workflow wall-clock budget expired before tuning")
@@ -770,6 +784,7 @@ def _tuning_records(
                 rejection_reason=(
                     entry.rejection_reason or _rejection_reason(outcome)
                 ),
+                search_diagnostics=search_diagnostics,
             )
         )
     return result, tuple(records)
@@ -785,6 +800,8 @@ def _finalize(
     status: str,
     message: str,
     started: float,
+    search_diagnostics: SearchDiagnostics,
+    planning_mode: PlanningMode,
 ) -> RunArtifacts:
     final_xml = None
     final_report = None
@@ -805,6 +822,8 @@ def _finalize(
         status=status,
         message=message,
         elapsed_s=elapsed,
+        search_diagnostics=search_diagnostics,
+        planning_mode=planning_mode.value,
     )
     write_run_summary(layout, summary)
     return RunArtifacts(
@@ -902,6 +921,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
                     tuning_strategy={"kind": "initial_solve"},
                     accepted=_offline_valid(outcome),
                     rejection_reason=_rejection_reason(outcome),
+                    search_diagnostics=result.diagnostics,
                 )
                 for candidate, schedule, outcome in zip(
                     result.candidates,
@@ -1001,6 +1021,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             },
             accepted=_offline_valid(outcome),
             rejection_reason=_rejection_reason(outcome),
+            search_diagnostics=result.diagnostics,
         )
         for candidate, schedule, outcome in zip(
             result.candidates,
@@ -1031,6 +1052,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             online_result=online_result,
             online_factory=context.online_context_factory,
             layout=layout,
+            search_diagnostics=result.diagnostics,
         )
         records.extend(tuned)
         if tuning_result.selected_candidate_id is not None:
@@ -1054,6 +1076,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             hierarchy_plan=hierarchy,
             tuning_strategy=record.tuning_strategy,
             overlay=record.overlay,
+            search_diagnostics=record.search_diagnostics,
         )
         for index, record in enumerate(records)
     )
@@ -1088,6 +1111,8 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             )
         ),
         started=started,
+        search_diagnostics=result.diagnostics,
+        planning_mode=plan.planning_mode,
     )
 
 
@@ -1217,6 +1242,7 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             tuning_strategy={"kind": "verify_existing"},
             accepted=accepted,
             rejection_reason=_rejection_reason(outcome),
+            search_diagnostics=sidecar.diagnostics,
         )
     ]
     final_candidate_id = sidecar.candidate.candidate_id if accepted else None
@@ -1238,6 +1264,7 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             online_result=online_result,
             online_factory=context.online_context_factory,
             layout=layout,
+            search_diagnostics=sidecar.diagnostics,
         )
         records.extend(tuned)
         if tuning_result.selected_candidate_id is not None:
@@ -1265,6 +1292,7 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             },
             tuning_strategy=record.tuning_strategy,
             overlay=record.overlay,
+            search_diagnostics=record.search_diagnostics,
         )
         for index, record in enumerate(records)
     )
@@ -1288,4 +1316,6 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             else "verification produced no semantic-valid candidate"
         ),
         started=started,
+        search_diagnostics=sidecar.diagnostics,
+        planning_mode=plan.planning_mode,
     )
