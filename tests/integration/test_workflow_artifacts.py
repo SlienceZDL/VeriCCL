@@ -50,6 +50,7 @@ def _write_constructive_inputs(tmp_path):
     atom_payload = json.loads(
         (EXAMPLES / "atom" / "default.json").read_text(encoding="utf-8")
     )
+    atom_payload["strategies"]["hierarchy"] = False
     atom_payload["strategies"]["milp"] = False
     atom = tmp_path / "atom.json"
     atom.write_text(json.dumps(atom_payload), encoding="utf-8")

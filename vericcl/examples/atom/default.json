@@ -2,7 +2,7 @@
   "stage_num": null,
   "forbidden_transfers": [],
   "strategies": {
-    "hierarchy": false,
+    "hierarchy": true,
     "symmetry": false,
     "shortest_paths": false,
     "batching": false,

@@ -39,6 +39,14 @@ def waiting_case():
     schedule = crossing_flows_with_ready_wait()
     topology = crossing_topology()
     inputs = crossing_inputs()
+    inputs = replace(
+        inputs,
+        strategies=replace(
+            inputs.strategies,
+            hierarchy=False,
+            manual_hierarchy=False,
+        ),
+    )
     analysis = analyze_flow_congestion(schedule, topology, inputs)
     hint = next(
         item
