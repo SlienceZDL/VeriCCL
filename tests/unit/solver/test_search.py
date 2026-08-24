@@ -1,8 +1,14 @@
 from dataclasses import replace
+from threading import Lock
+import time
 
 import pytest
 
-from vericcl.errors import SemanticError, SolverUnavailableError
+from vericcl.errors import (
+    ConstructionInfeasibleError,
+    SemanticError,
+    SolverUnavailableError,
+)
 from vericcl.input.models import ObjectiveMode
 from vericcl.solver.constructive import construct_candidate
 from vericcl.solver.model import (
@@ -10,9 +16,16 @@ from vericcl.solver.model import (
     SolveStatus,
     SolverMetrics,
 )
-from vericcl.solver.search import allocate_model_threads, search_models
+from vericcl.solver.search import (
+    allocate_model_threads,
+    search_models,
+    search_route_models,
+)
+from vericcl.solver.templates import build_solver_templates
 
 from tests.gurobi.helpers import broadcast_problem
+from tests.unit.solver.test_instantiate import _route_patterns
+from tests.unit.solver.test_templates import _real_direct_allgather
 
 
 pytestmark = pytest.mark.phase03
@@ -193,6 +206,168 @@ def test_search_rejects_invalid_api_arguments(field, value):
 
     with pytest.raises(SemanticError):
         search_models(**arguments)
+
+
+def test_route_search_runs_every_template_k_and_sizes_actual_batches(
+    monkeypatch,
+):
+    plan, problems = _real_direct_allgather(3, 1)
+    templates = build_solver_templates(problems, plan.planning_mode)
+    assert len(templates) == 3
+    config = replace(
+        problems[0].inputs.solver,
+        max_channels=1,
+        max_parallel_models=2,
+        max_threads_per_model=12,
+    )
+    active = 0
+    maximum_active = 0
+    calls = []
+    lock = Lock()
+
+    def fake_route(template, channel_count, objective, budget, thread_count=1):
+        nonlocal active, maximum_active
+        with lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+            calls.append(
+                (
+                    template.template_id,
+                    channel_count,
+                    objective,
+                    thread_count,
+                )
+            )
+        time.sleep(0.01)
+        pattern = _route_patterns((template,), channel_count)[template.template_id]
+        with lock:
+            active -= 1
+        return replace(pattern, objective_mode=objective)
+
+    monkeypatch.setattr(
+        "vericcl.solver.search.solve_route_milp",
+        fake_route,
+    )
+    monkeypatch.setattr("vericcl.solver.search.os.cpu_count", lambda: 4)
+
+    result = search_route_models(
+        templates,
+        config,
+        ObjectiveMode.LATENCY,
+        deadline=time.monotonic() + 10.0,
+        channel_counts=(1,),
+    )
+
+    assert set(result.patterns_by_channel[1]) == {
+        template.template_id for template in templates
+    }
+    assert result.launched_model_count == 3
+    assert maximum_active == 2
+    assert sorted(call[3] for call in calls) == [2, 2, 4]
+    assert all(call[2] is ObjectiveMode.LATENCY for call in calls)
+
+
+def test_route_search_missing_result_isolated_to_one_k(monkeypatch):
+    plan, problems = _real_direct_allgather(3, 1)
+    templates = build_solver_templates(problems, plan.planning_mode)
+    config = replace(
+        problems[0].inputs.solver,
+        max_channels=2,
+        max_parallel_models=2,
+    )
+    failed_template_id = templates[0].template_id
+
+    def fake_route(template, channel_count, objective, budget, thread_count=1):
+        if template.template_id == failed_template_id and channel_count == 1:
+            raise ConstructionInfeasibleError("missing route")
+        pattern = _route_patterns((template,), channel_count)[template.template_id]
+        return replace(pattern, objective_mode=objective)
+
+    monkeypatch.setattr(
+        "vericcl.solver.search.solve_route_milp",
+        fake_route,
+    )
+
+    result = search_route_models(
+        templates,
+        config,
+        ObjectiveMode.THROUGHPUT,
+        deadline=time.monotonic() + 10.0,
+    )
+
+    assert set(result.patterns_by_channel) == {1, 2}
+    assert failed_template_id not in result.patterns_by_channel[1]
+    assert set(result.patterns_by_channel[2]) == {
+        template.template_id for template in templates
+    }
+    assert result.launched_model_count == 2 * len(templates)
+
+
+def test_route_search_stops_launching_after_global_deadline(monkeypatch):
+    plan, problems = _real_direct_allgather(3, 1)
+    templates = build_solver_templates(problems, plan.planning_mode)
+    config = replace(
+        problems[0].inputs.solver,
+        max_channels=2,
+        max_parallel_models=1,
+        per_model_timeout_s=20,
+    )
+    times = iter((0.0, 0.0, 11.0))
+    calls = []
+
+    def fake_route(template, channel_count, objective, budget, thread_count=1):
+        calls.append((template.template_id, channel_count, budget.seconds))
+        pattern = _route_patterns((template,), channel_count)[template.template_id]
+        return replace(pattern, objective_mode=objective)
+
+    monkeypatch.setattr(
+        "vericcl.solver.search.solve_route_milp",
+        fake_route,
+    )
+    monkeypatch.setattr("vericcl.solver.search._monotonic", lambda: next(times))
+    monkeypatch.setattr("vericcl.solver.search.os.cpu_count", lambda: 1)
+
+    result = search_route_models(
+        templates,
+        config,
+        ObjectiveMode.LATENCY,
+        deadline=10.0,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][2] == 10.0
+    assert result.launched_model_count == 1
+
+
+def test_unavailable_route_backend_stops_additional_jobs(monkeypatch):
+    plan, problems = _real_direct_allgather(3, 1)
+    templates = build_solver_templates(problems, plan.planning_mode)
+    config = replace(
+        problems[0].inputs.solver,
+        max_channels=2,
+        max_parallel_models=1,
+    )
+    calls = []
+
+    def unavailable(template, channel_count, *args):
+        calls.append((template.template_id, channel_count))
+        raise SolverUnavailableError("missing route backend")
+
+    monkeypatch.setattr(
+        "vericcl.solver.search.solve_route_milp",
+        unavailable,
+    )
+
+    result = search_route_models(
+        templates,
+        config,
+        ObjectiveMode.LATENCY,
+        deadline=time.monotonic() + 10.0,
+    )
+
+    assert len(calls) == 1
+    assert result.launched_model_count == 1
+    assert all(not patterns for patterns in result.patterns_by_channel.values())
 
 
 def _candidate_for_test(channel_count):

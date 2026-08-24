@@ -1,5 +1,5 @@
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import Mapping, Optional, Tuple
@@ -20,6 +20,49 @@ class SolveStatus(str, Enum):
     TIME_LIMIT = "time_limit"
     UNAVAILABLE = "unavailable"
     ERROR = "error"
+
+
+@dataclass(frozen=True)
+class SearchDiagnostics:
+    requested_problem_count: int = 0
+    template_count: int = 0
+    template_member_count: int = 0
+    route_model_count: int = 0
+    fallback_member_model_count: int = 0
+    route_model_build_time_s: float = 0.0
+    route_model_optimize_time_s: float = 0.0
+    expansion_time_s: float = 0.0
+    scheduling_time_s: float = 0.0
+    maximum_variable_count: int = 0
+    maximum_constraint_count: int = 0
+    maximum_general_constraint_count: int = 0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "requested_problem_count",
+            "template_count",
+            "template_member_count",
+            "route_model_count",
+            "fallback_member_model_count",
+            "maximum_variable_count",
+            "maximum_constraint_count",
+            "maximum_general_constraint_count",
+        ):
+            _integer(getattr(self, name), "search_diagnostics.{}".format(name))
+        for name in (
+            "route_model_build_time_s",
+            "route_model_optimize_time_s",
+            "expansion_time_s",
+            "scheduling_time_s",
+        ):
+            object.__setattr__(
+                self,
+                name,
+                _number(
+                    getattr(self, name),
+                    "search_diagnostics.{}".format(name),
+                ),
+            )
 
 
 def _identifier(value: object, field: str) -> str:
@@ -190,6 +233,7 @@ class SolveCandidate:
     search_space_restricted: bool
     restrictions: Tuple[str, ...]
     parent_candidate_id: Optional[str]
+    global_schedule: Optional[Schedule] = None
 
     def __post_init__(self) -> None:
         _identifier(self.candidate_id, "solve_candidate.candidate_id")
@@ -252,6 +296,21 @@ class SolveCandidate:
                 self.parent_candidate_id,
                 "solve_candidate.parent_candidate_id",
             )
+        if self.global_schedule is not None:
+            if not isinstance(self.global_schedule, Schedule):
+                raise SemanticError(
+                    "solve_candidate.global_schedule must be a Schedule or None"
+                )
+            if schedules and any(
+                schedule.rank_count != self.global_schedule.rank_count
+                or schedule.slice_count != self.global_schedule.slice_count
+                or schedule.slice_size_bytes
+                != self.global_schedule.slice_size_bytes
+                for schedule in schedules.values()
+            ):
+                raise SemanticError(
+                    "solve candidate global and node schedule dimensions differ"
+                )
 
 
 @dataclass(frozen=True)
@@ -261,6 +320,7 @@ class SolveResult:
     selected_candidate_id: Optional[str]
     cache_hit: bool
     message: str
+    diagnostics: SearchDiagnostics = field(default_factory=SearchDiagnostics)
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, SolveStatus):
@@ -287,6 +347,10 @@ class SolveResult:
             raise SemanticError("solve_result.cache_hit must be a boolean")
         if not isinstance(self.message, str):
             raise SemanticError("solve_result.message must be a string")
+        if not isinstance(self.diagnostics, SearchDiagnostics):
+            raise SemanticError(
+                "solve_result.diagnostics must be SearchDiagnostics"
+            )
 
     @property
     def selected_candidate(self) -> Optional[SolveCandidate]:

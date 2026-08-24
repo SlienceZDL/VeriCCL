@@ -4,7 +4,6 @@ from collections import defaultdict
 from dataclasses import replace
 from typing import Dict, Mapping, Optional, Tuple
 
-from vericcl.composer import compose
 from vericcl.errors import (
     ConstructionInfeasibleError,
     SemanticError,
@@ -12,14 +11,20 @@ from vericcl.errors import (
     VeriCCLError,
 )
 from vericcl.input.models import ObjectiveMode, ResolvedInput
+from vericcl.input.json_codec import sha256_json
 from vericcl.planner.build import build_plan
 from vericcl.semantics.atom import Schedule
-from vericcl.solver.cache import CandidateCache, candidate_cache_key
+from vericcl.solver.cache import (
+    CandidateCache,
+    candidate_cache_key,
+    route_model_cache_key,
+)
 from vericcl.solver.constructive import construct_candidate
 from vericcl.solver.demands import SolverProblem, build_solver_problem
 from vericcl.solver.gurobi_api import GurobiAdapter
 from vericcl.solver.lower_bounds import throughput_time_lower_bound
 from vericcl.solver.model import (
+    SearchDiagnostics,
     SolveCandidate,
     SolveRequest,
     SolveResult,
@@ -27,12 +32,26 @@ from vericcl.solver.model import (
     SolverMetrics,
 )
 from vericcl.solver.objectives import rank_candidates
-from vericcl.solver.search import search_models
+from vericcl.solver.instantiate import instantiate_route_patterns
+from vericcl.solver.routing import RoutePattern
+from vericcl.solver.search import (
+    RouteSearchResult,
+    search_models,
+    search_route_models,
+)
+from vericcl.solver.templates import (
+    RoutingUnit,
+    SolverTemplate,
+    TemplateMember,
+    build_solver_templates,
+    split_routing_units,
+)
 
 
 _CACHE_TTL_SECONDS = 3600.0
 _DEFAULT_CACHE = CandidateCache()
 _monotonic = time.monotonic
+_diagnostic_clock = time.perf_counter
 
 
 def _makespan(schedule: Schedule) -> float:
@@ -146,6 +165,8 @@ def _combine_node_candidates(
     objective: ObjectiveMode,
     channel_count: int,
 ) -> SolveCandidate:
+    from vericcl.composer import compose
+
     expected = {node.node_id for node in request.plan.nodes}
     if set(candidates) != expected:
         raise SemanticError("one local candidate is required for every plan node")
@@ -297,12 +318,16 @@ def _effective_inputs(request: SolveRequest) -> ResolvedInput:
     )
 
 
-def _solve_objective(
+def _constructive_search(
     request: SolveRequest,
     problems: Tuple[SolverProblem, ...],
     objective: ObjectiveMode,
     deadline: float,
-) -> Tuple[SolveCandidate, ...]:
+) -> tuple[
+    list[SolveCandidate],
+    Dict[str, SolveCandidate],
+    Dict[str, Schedule],
+]:
     local_constructive: Dict[str, SolveCandidate] = {}
     warm_starts: Dict[str, Schedule] = {}
     channel_count = _constructive_channel_count(request)
@@ -338,6 +363,21 @@ def _solve_objective(
                 channel_count,
             )
         )
+    return global_candidates, local_constructive, warm_starts
+
+
+def _solve_full_objective(
+    request: SolveRequest,
+    problems: Tuple[SolverProblem, ...],
+    objective: ObjectiveMode,
+    deadline: float,
+) -> Tuple[SolveCandidate, ...]:
+    global_candidates, _, warm_starts = _constructive_search(
+        request,
+        problems,
+        objective,
+        deadline,
+    )
     if request.inputs.strategies.milp:
         base_config = request.inputs.solver
         if request.overlay is not None and request.overlay.channel_count is not None:
@@ -401,6 +441,508 @@ def _solve_objective(
                 )
             )
     return rank_candidates(global_candidates)
+
+
+def _standalone_template(unit: RoutingUnit) -> SolverTemplate:
+    slice_ids = tuple(
+        sorted(
+            {
+                slice_id
+                for demand in unit.demands
+                for values in (demand.contributors, demand.member_slice_ids)
+                for slice_id in values
+            }
+        )
+    )
+    logical_positions = tuple(
+        sorted({demand.logical_position for demand in unit.demands})
+    )
+    member = TemplateMember(
+        unit_id=unit.unit_id,
+        node_id=unit.node.node_id,
+        rank_map=tuple((rank, rank) for rank in unit.node.communication_group),
+        contributor_map=tuple((slice_id, slice_id) for slice_id in slice_ids),
+        logical_position_map=tuple(
+            (position, position) for position in logical_positions
+        ),
+    )
+    return SolverTemplate(
+        template_id="standalone-{}".format(unit.unit_id),
+        representative=unit,
+        members=(member,),
+        exact_signature=sha256_json(
+            {
+                "standalone_unit_id": unit.unit_id,
+                "demand_ids": tuple(
+                    demand.demand_id for demand in unit.demands
+                ),
+            }
+        ),
+    )
+
+
+def _merge_routing_schedules(
+    base: Schedule,
+    addition: Schedule,
+) -> Schedule:
+    if (
+        base.rank_count != addition.rank_count
+        or base.slice_count != addition.slice_count
+        or base.slice_size_bytes != addition.slice_size_bytes
+    ):
+        raise SemanticError("fallback routing schedule dimensions differ")
+    if (
+        base.metadata.get("routing_only") is not True
+        or addition.metadata.get("routing_only") is not True
+    ):
+        raise SemanticError("fallback merge requires routing-only schedules")
+    base_ids = {transfer.transfer_id for transfer in base.transfers}
+    addition_ids = {transfer.transfer_id for transfer in addition.transfers}
+    if base_ids & addition_ids:
+        raise SemanticError("fallback routing transfer IDs overlap")
+    metadata = dict(base.metadata)
+    mapping_fields = (
+        "path_roots",
+        "semantic_contributors",
+        "semantic_predecessors",
+        "tree_contributors",
+        "resource_slots",
+        "route_template_ids",
+        "route_unit_ids",
+    )
+    for field in mapping_fields:
+        left = metadata.get(field, {})
+        right = addition.metadata.get(field, {})
+        if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+            raise SemanticError("routing schedule metadata is not mergeable")
+        if set(left) & set(right):
+            raise SemanticError("fallback routing metadata overlaps")
+        metadata[field] = {**dict(left), **dict(right)}
+    metadata["restrictions"] = tuple(
+        sorted(
+            set(metadata.get("restrictions", ()))
+            | set(addition.metadata.get("restrictions", ()))
+        )
+    )
+    return Schedule(
+        schedule_id=base.schedule_id,
+        transfers=tuple(
+            sorted(
+                base.transfers + addition.transfers,
+                key=lambda transfer: transfer.transfer_id,
+            )
+        ),
+        final_state_ids=base.final_state_ids,
+        rank_count=base.rank_count,
+        slice_count=base.slice_count,
+        slice_size_bytes=base.slice_size_bytes,
+        metadata=metadata,
+    )
+
+
+def _with_route_search(
+    diagnostics: SearchDiagnostics,
+    result: RouteSearchResult,
+    *,
+    fallback: bool,
+) -> SearchDiagnostics:
+    return replace(
+        diagnostics,
+        route_model_count=(
+            diagnostics.route_model_count + result.launched_model_count
+        ),
+        fallback_member_model_count=(
+            diagnostics.fallback_member_model_count
+            + (result.launched_model_count if fallback else 0)
+        ),
+        route_model_build_time_s=(
+            diagnostics.route_model_build_time_s
+            + result.route_model_build_time_s
+        ),
+        route_model_optimize_time_s=(
+            diagnostics.route_model_optimize_time_s
+            + result.route_model_optimize_time_s
+        ),
+        maximum_variable_count=max(
+            diagnostics.maximum_variable_count,
+            result.maximum_variable_count,
+        ),
+        maximum_constraint_count=max(
+            diagnostics.maximum_constraint_count,
+            result.maximum_constraint_count,
+        ),
+        maximum_general_constraint_count=max(
+            diagnostics.maximum_general_constraint_count,
+            result.maximum_general_constraint_count,
+        ),
+    )
+
+
+def _merge_objective_diagnostics(
+    left: SearchDiagnostics,
+    right: SearchDiagnostics,
+) -> SearchDiagnostics:
+    return SearchDiagnostics(
+        requested_problem_count=max(
+            left.requested_problem_count,
+            right.requested_problem_count,
+        ),
+        template_count=max(left.template_count, right.template_count),
+        template_member_count=max(
+            left.template_member_count,
+            right.template_member_count,
+        ),
+        route_model_count=left.route_model_count + right.route_model_count,
+        fallback_member_model_count=(
+            left.fallback_member_model_count
+            + right.fallback_member_model_count
+        ),
+        route_model_build_time_s=(
+            left.route_model_build_time_s
+            + right.route_model_build_time_s
+        ),
+        route_model_optimize_time_s=(
+            left.route_model_optimize_time_s
+            + right.route_model_optimize_time_s
+        ),
+        expansion_time_s=left.expansion_time_s + right.expansion_time_s,
+        scheduling_time_s=left.scheduling_time_s + right.scheduling_time_s,
+        maximum_variable_count=max(
+            left.maximum_variable_count,
+            right.maximum_variable_count,
+        ),
+        maximum_constraint_count=max(
+            left.maximum_constraint_count,
+            right.maximum_constraint_count,
+        ),
+        maximum_general_constraint_count=max(
+            left.maximum_general_constraint_count,
+            right.maximum_general_constraint_count,
+        ),
+    )
+
+
+def _pattern_metrics(patterns: Mapping[str, RoutePattern]) -> tuple:
+    stats = [pattern.model_stats for pattern in patterns.values()]
+    return (
+        len(stats),
+        sum(item.build_time_s for item in stats),
+        sum(item.optimize_time_s for item in stats),
+    )
+
+
+def _scalable_candidate(
+    request: SolveRequest,
+    objective: ObjectiveMode,
+    channel_count: int,
+    node_schedules: Mapping[str, Schedule],
+    global_schedule: Schedule,
+    patterns: Mapping[str, RoutePattern],
+    maximum_thread_count: int,
+    route_cache_keys: Tuple[str, ...],
+) -> SolveCandidate:
+    makespan_us = _makespan(global_schedule)
+    resource_load_us = _maximum_resource_load(global_schedule)
+    operation_count = len(global_schedule.transfers)
+    model_count, build_time, optimize_time = _pattern_metrics(patterns)
+    restrictions = {
+        restriction
+        for schedule in node_schedules.values()
+        for restriction in schedule.metadata.get("restrictions", ())
+    }
+    restrictions.add("template_route_composition")
+    if len(request.plan.nodes) > 1:
+        restrictions.add("independent_node_composition")
+    identity = sha256_json(
+        {
+            "candidate_cache_key": candidate_cache_key(request),
+            "objective": objective.value,
+            "channel_count": channel_count,
+            "route_keys": tuple(sorted(route_cache_keys)),
+            "pattern_ids": tuple(sorted(patterns)),
+        }
+    )[:12]
+    return SolveCandidate(
+        candidate_id="vericcl-{}-template-route-k{:02d}-{}".format(
+            objective.value,
+            channel_count,
+            identity,
+        ),
+        node_schedules=node_schedules,
+        objective_mode=objective,
+        channel_count=channel_count,
+        metrics=SolverMetrics(
+            status=SolveStatus.FEASIBLE,
+            objective_values=_objective_values(
+                objective,
+                makespan_us,
+                resource_load_us,
+                operation_count,
+                operation_count,
+            ),
+            best_bound=0.0,
+            mip_gap=0.0,
+            within_requested_gap=False,
+            solve_time_s=build_time + optimize_time,
+            model_count=model_count,
+            operation_count=operation_count,
+            hop_count=operation_count,
+            makespan_us=makespan_us,
+            maximum_normalized_resource_load=resource_load_us,
+            solver_name="gurobi_route",
+            solver_version=request.solver_version,
+            solver_seed=request.inputs.solver.solver_seed,
+            thread_count=maximum_thread_count,
+            termination_reason="restricted_template_route_complete",
+        ),
+        selected_best=False,
+        proven_optimal=False,
+        search_space_restricted=True,
+        restrictions=tuple(sorted(restrictions)),
+        parent_candidate_id=(
+            request.overlay.parent_candidate_id
+            if request.overlay is not None
+            else None
+        ),
+        global_schedule=global_schedule,
+    )
+
+
+def _solve_scalable_objective(
+    request: SolveRequest,
+    problems: Tuple[SolverProblem, ...],
+    objective: ObjectiveMode,
+    deadline: float,
+) -> tuple[Tuple[SolveCandidate, ...], SearchDiagnostics]:
+    from vericcl.composer import compose_routes
+
+    global_candidates, _, _ = _constructive_search(
+        request,
+        problems,
+        objective,
+        deadline,
+    )
+    diagnostics = SearchDiagnostics(
+        requested_problem_count=len(problems),
+    )
+    if not request.inputs.strategies.milp:
+        return rank_candidates(global_candidates), diagnostics
+    templates = build_solver_templates(
+        problems,
+        request.plan.planning_mode,
+    )
+    diagnostics = replace(
+        diagnostics,
+        template_count=len(templates),
+        template_member_count=sum(
+            len(template.members) for template in templates
+        ),
+    )
+    base_config = request.inputs.solver
+    channel_counts = None
+    if request.overlay is not None and request.overlay.channel_count is not None:
+        base_config = replace(
+            base_config,
+            max_channels=request.overlay.channel_count,
+        )
+        channel_counts = (request.overlay.channel_count,)
+    try:
+        route_search = search_route_models(
+            templates,
+            base_config,
+            objective,
+            deadline,
+            channel_counts=channel_counts,
+        )
+    except SolverUnavailableError:
+        return rank_candidates(global_candidates), diagnostics
+    diagnostics = _with_route_search(
+        diagnostics,
+        route_search,
+        fallback=False,
+    )
+    expected_template_ids = {
+        template.template_id for template in templates
+    }
+    template_by_id = {
+        template.template_id: template for template in templates
+    }
+    unit_context = {}
+    for problem in problems:
+        for unit in split_routing_units(problem):
+            unit_context[unit.unit_id] = (unit, problem)
+    for channel_count, patterns in route_search.patterns_by_channel.items():
+        if set(patterns) != expected_template_ids:
+            continue
+        expansion_started = _diagnostic_clock()
+        instantiated = instantiate_route_patterns(
+            templates,
+            patterns,
+            problems,
+        )
+        expansion_elapsed = _diagnostic_clock() - expansion_started
+        node_schedules = dict(instantiated.node_schedules)
+        used_patterns = dict(patterns)
+        route_keys = [
+            route_model_cache_key(
+                request.plan.planning_mode,
+                template_by_id[template_id],
+                objective,
+                channel_count,
+            )
+            for template_id in sorted(patterns)
+        ]
+        maximum_threads = route_search.maximum_thread_count
+        failures = instantiated.failures
+        if failures:
+            standalone_by_unit = {}
+            for failure in failures:
+                context = unit_context.get(failure.unit_id)
+                if context is None:
+                    standalone_by_unit = {}
+                    break
+                standalone_by_unit[failure.unit_id] = _standalone_template(
+                    context[0]
+                )
+            if len(standalone_by_unit) != len(failures):
+                continue
+            standalone_templates = tuple(
+                standalone_by_unit[unit_id]
+                for unit_id in sorted(standalone_by_unit)
+            )
+            try:
+                fallback_search = search_route_models(
+                    standalone_templates,
+                    base_config,
+                    objective,
+                    deadline,
+                    channel_counts=(channel_count,),
+                )
+            except SolverUnavailableError:
+                continue
+            diagnostics = _with_route_search(
+                diagnostics,
+                fallback_search,
+                fallback=True,
+            )
+            fallback_patterns = fallback_search.patterns_by_channel.get(
+                channel_count,
+                {},
+            )
+            expected_fallback_ids = {
+                template.template_id for template in standalone_templates
+            }
+            if set(fallback_patterns) != expected_fallback_ids:
+                continue
+            maximum_threads = max(
+                maximum_threads,
+                fallback_search.maximum_thread_count,
+            )
+            fallback_failed = False
+            fallback_expansion_started = _diagnostic_clock()
+            for failure in failures:
+                unit, problem = unit_context[failure.unit_id]
+                standalone = standalone_by_unit[failure.unit_id]
+                isolated = replace(
+                    problem,
+                    demands=unit.demands,
+                    infeasible_demand_ids=tuple(
+                        demand_id
+                        for demand_id in problem.infeasible_demand_ids
+                        if demand_id
+                        in {demand.demand_id for demand in unit.demands}
+                    ),
+                )
+                fallback_instantiation = instantiate_route_patterns(
+                    (standalone,),
+                    {
+                        standalone.template_id: fallback_patterns[
+                            standalone.template_id
+                        ]
+                    },
+                    (isolated,),
+                )
+                if fallback_instantiation.failures:
+                    fallback_failed = True
+                    break
+                node_id = problem.node.node_id
+                node_schedules[node_id] = _merge_routing_schedules(
+                    node_schedules[node_id],
+                    fallback_instantiation.node_schedules[node_id],
+                )
+                used_patterns[standalone.template_id] = fallback_patterns[
+                    standalone.template_id
+                ]
+                route_keys.append(
+                    route_model_cache_key(
+                        request.plan.planning_mode,
+                        standalone,
+                        objective,
+                        channel_count,
+                    )
+                )
+            expansion_elapsed += (
+                _diagnostic_clock() - fallback_expansion_started
+            )
+            if fallback_failed:
+                continue
+        diagnostics = replace(
+            diagnostics,
+            expansion_time_s=(
+                diagnostics.expansion_time_s + expansion_elapsed
+            ),
+        )
+        scheduling_started = _diagnostic_clock()
+        global_schedule = compose_routes(
+            request.plan,
+            node_schedules,
+            request.topology,
+            channel_count,
+        )
+        scheduling_elapsed = _diagnostic_clock() - scheduling_started
+        diagnostics = replace(
+            diagnostics,
+            scheduling_time_s=(
+                diagnostics.scheduling_time_s + scheduling_elapsed
+            ),
+        )
+        global_candidates.append(
+            _scalable_candidate(
+                request,
+                objective,
+                channel_count,
+                node_schedules,
+                global_schedule,
+                used_patterns,
+                maximum_threads,
+                tuple(route_keys),
+            )
+        )
+    return rank_candidates(global_candidates), diagnostics
+
+
+def _solve_objective(
+    request: SolveRequest,
+    problems: Tuple[SolverProblem, ...],
+    objective: ObjectiveMode,
+    deadline: float,
+) -> tuple[Tuple[SolveCandidate, ...], SearchDiagnostics]:
+    if request.inputs.solver.require_proven_optimal:
+        return (
+            _solve_full_objective(
+                request,
+                problems,
+                objective,
+                deadline,
+            ),
+            SearchDiagnostics(requested_problem_count=len(problems)),
+        )
+    return _solve_scalable_objective(
+        request,
+        problems,
+        objective,
+        deadline,
+    )
 
 
 def _relevant_calibration(
@@ -502,7 +1044,9 @@ def solve(
         )
     cache_key = candidate_cache_key(request)
     if not request.inputs.solver.force_resolve:
-        cached = selected_cache.get(cache_key)
+        cached, cached_diagnostics = selected_cache.get_with_diagnostics(
+            cache_key
+        )
         if cached is not None and (
             not request.inputs.solver.require_proven_optimal
             or cached.proven_optimal
@@ -514,6 +1058,7 @@ def solve(
                 selected_candidate_id=cached.candidate_id,
                 cache_hit=True,
                 message="cache_hit",
+                diagnostics=cached_diagnostics,
             )
     if (
         not request.inputs.strategies.constructive_trees
@@ -538,6 +1083,7 @@ def solve(
             cache_hit=False,
             message="MILP backend is unavailable",
         )
+    diagnostics = SearchDiagnostics()
     try:
         solve_budget = float(request.inputs.solver.total_solve_timeout_s)
         if request.wall_clock_budget_s is not None:
@@ -550,7 +1096,7 @@ def solve(
         )
         mode = request.inputs.hyperparameters.objective_mode
         if mode is not ObjectiveMode.AUTO:
-            candidates = _solve_objective(
+            candidates, diagnostics = _solve_objective(
                 request,
                 problems,
                 mode,
@@ -558,7 +1104,7 @@ def solve(
             )
             message = "complete; comparison=objective_ranking"
         else:
-            latency = _solve_objective(
+            latency, diagnostics = _solve_objective(
                 request,
                 problems,
                 ObjectiveMode.LATENCY,
@@ -608,13 +1154,17 @@ def solve(
                         "threshold={:g}"
                     ).format(gain_upper, threshold)
                 else:
-                    throughput = _solve_objective(
+                    throughput, throughput_diagnostics = _solve_objective(
                         request,
                         problems,
                         ObjectiveMode.THROUGHPUT,
                         deadline,
                     )
                     candidates = latency + throughput
+                    diagnostics = _merge_objective_diagnostics(
+                        diagnostics,
+                        throughput_diagnostics,
+                    )
                     reason = (
                         "unstable_calibration"
                         if not calibration_stable
@@ -632,6 +1182,7 @@ def solve(
             selected_candidate_id=None,
             cache_hit=False,
             message="solve failed: {}".format(error),
+            diagnostics=diagnostics,
         )
     if not candidates:
         return SolveResult(
@@ -640,6 +1191,7 @@ def solve(
             selected_candidate_id=None,
             cache_hit=False,
             message=message,
+            diagnostics=diagnostics,
         )
     if request.inputs.solver.require_proven_optimal:
         eligible = tuple(
@@ -652,6 +1204,7 @@ def solve(
                 selected_candidate_id=None,
                 cache_hit=False,
                 message="optimality proof was required but not obtained",
+                diagnostics=diagnostics,
             )
     else:
         eligible = candidates
@@ -670,6 +1223,7 @@ def solve(
         selected,
         ttl_seconds=_CACHE_TTL_SECONDS,
         complete=True,
+        diagnostics=diagnostics,
     )
     return SolveResult(
         status=selected.metrics.status,
@@ -677,4 +1231,5 @@ def solve(
         selected_candidate_id=selected.candidate_id,
         cache_hit=False,
         message=message,
+        diagnostics=diagnostics,
     )

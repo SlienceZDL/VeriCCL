@@ -31,7 +31,8 @@ def _validate_arguments(
     channel_count: object,
     objective_mode: object,
     budget: object,
-) -> tuple[SolverTemplate, int, ObjectiveMode, ModelBudget]:
+    thread_count: object,
+) -> tuple[SolverTemplate, int, ObjectiveMode, ModelBudget, int]:
     if not isinstance(template, SolverTemplate):
         raise SemanticError("template must be a SolverTemplate")
     channels = _positive_integer(channel_count, "channel_count")
@@ -43,7 +44,8 @@ def _validate_arguments(
         raise SemanticError("budget must be a ModelBudget")
     if budget.seconds <= 0.0:
         raise SemanticError("route-only solving requires a positive budget")
-    return template, channels, objective_mode, budget
+    threads = _positive_integer(thread_count, "thread_count")
+    return template, channels, objective_mode, budget, threads
 
 
 def _route_domain(
@@ -73,6 +75,7 @@ def _build_route_model(
     channel_count: int,
     objective_mode: ObjectiveMode,
     budget: ModelBudget,
+    thread_count: int = 1,
 ):
     ranks, root, edges = _route_domain(unit)
     _, model = GurobiAdapter.create_model(
@@ -84,7 +87,7 @@ def _build_route_model(
     )
     model.Params.OutputFlag = 0
     model.Params.Seed = 0
-    model.Params.Threads = 1
+    model.Params.Threads = thread_count
     model.Params.TimeLimit = budget.seconds
     model.Params.MIPGap = 0.0
 
@@ -315,12 +318,14 @@ def solve_route_milp(
     channel_count: int,
     objective_mode: ObjectiveMode,
     budget: ModelBudget,
+    thread_count: int = 1,
 ) -> RoutePattern:
-    template, channels, objective, budget = _validate_arguments(
+    template, channels, objective, budget, threads = _validate_arguments(
         template,
         channel_count,
         objective_mode,
         budget,
+        thread_count,
     )
     gp = GurobiAdapter.require()
     build_started = time.monotonic()
@@ -330,6 +335,7 @@ def solve_route_milp(
         channels,
         objective,
         budget,
+        threads,
     )
     build_time = time.monotonic() - build_started
     try:

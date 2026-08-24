@@ -1,5 +1,10 @@
 from vericcl.solver.budget import ModelBudget, SolveBudget
-from vericcl.solver.cache import candidate_cache_key
+from vericcl.solver.cache import (
+    GLOBAL_SCHEDULER_VERSION,
+    ROUTE_MODEL_VERSION,
+    candidate_cache_key,
+    route_model_cache_key,
+)
 from vericcl.solver.constructive import construct_candidate
 from vericcl.solver.demands import build_solver_problem
 from vericcl.solver.gurobi_api import GurobiAdapter
@@ -9,6 +14,7 @@ from vericcl.solver.lower_bounds import (
 )
 from vericcl.solver.milp import solve_milp
 from vericcl.solver.model import (
+    SearchDiagnostics,
     SolveCandidate,
     SolveRequest,
     SolveResult,
@@ -19,7 +25,12 @@ from vericcl.solver.objectives import rank_candidates
 from vericcl.solver.orchestrator import solve
 from vericcl.solver.routing import RoutePattern, RoutingModelStats
 from vericcl.solver.routing_milp import solve_route_milp
-from vericcl.solver.search import allocate_model_threads, search_models
+from vericcl.solver.search import (
+    RouteSearchResult,
+    allocate_model_threads,
+    search_models,
+    search_route_models,
+)
 from vericcl.solver.templates import (
     RoutingUnit,
     SolverTemplate,
@@ -31,6 +42,7 @@ from vericcl.solver.templates import (
 __all__ = [
     "ModelBudget",
     "GurobiAdapter",
+    "GLOBAL_SCHEDULER_VERSION",
     "LowerBound",
     "SolveBudget",
     "SolveCandidate",
@@ -41,7 +53,10 @@ __all__ = [
     "SolverMetrics",
     "RoutingUnit",
     "RoutePattern",
+    "RouteSearchResult",
+    "ROUTE_MODEL_VERSION",
     "RoutingModelStats",
+    "SearchDiagnostics",
     "TemplateMember",
     "allocate_model_threads",
     "build_solver_problem",
@@ -49,7 +64,9 @@ __all__ = [
     "candidate_cache_key",
     "construct_candidate",
     "rank_candidates",
+    "route_model_cache_key",
     "search_models",
+    "search_route_models",
     "solve",
     "solve_milp",
     "solve_route_milp",

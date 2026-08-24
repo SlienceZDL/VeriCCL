@@ -2,12 +2,22 @@ import math
 import time
 from dataclasses import dataclass, replace
 from threading import RLock
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from vericcl.errors import SemanticError
 from vericcl.input.json_codec import sha256_json
-from vericcl.planner.model import StageInterface
-from vericcl.solver.model import SolveCandidate, SolveRequest
+from vericcl.input.models import ObjectiveMode
+from vericcl.planner.model import PlanningMode, StageInterface
+from vericcl.solver.model import (
+    SearchDiagnostics,
+    SolveCandidate,
+    SolveRequest,
+)
+from vericcl.solver.templates import SolverTemplate
+
+
+ROUTE_MODEL_VERSION = "route-model-v1"
+GLOBAL_SCHEDULER_VERSION = "global-scheduler-v1"
 
 
 def _collective(spec):
@@ -211,6 +221,8 @@ def _structural_payload(request: SolveRequest):
         "overlay": _overlay(request.overlay),
         "solver_version": request.solver_version,
         "model_version": request.model_version,
+        "route_model_version": ROUTE_MODEL_VERSION,
+        "global_scheduler_version": GLOBAL_SCHEDULER_VERSION,
     }
 
 
@@ -237,11 +249,64 @@ def candidate_cache_key(request: SolveRequest) -> str:
     return performance_cache_key(request)
 
 
+def route_model_cache_key(
+    planning_mode: PlanningMode,
+    template: SolverTemplate,
+    objective: ObjectiveMode,
+    channel_count: int,
+    *,
+    route_model_version: str = ROUTE_MODEL_VERSION,
+    global_scheduler_version: str = GLOBAL_SCHEDULER_VERSION,
+) -> str:
+    if not isinstance(planning_mode, PlanningMode):
+        raise SemanticError("planning_mode must be a PlanningMode")
+    if not isinstance(template, SolverTemplate):
+        raise SemanticError("template must be a SolverTemplate")
+    if not isinstance(objective, ObjectiveMode) or objective is ObjectiveMode.AUTO:
+        raise SemanticError("route cache objective must be resolved")
+    if (
+        isinstance(channel_count, bool)
+        or not isinstance(channel_count, int)
+        or channel_count < 1
+    ):
+        raise SemanticError("route cache channel_count must be positive")
+    for value, field in (
+        (route_model_version, "route_model_version"),
+        (global_scheduler_version, "global_scheduler_version"),
+    ):
+        if not isinstance(value, str) or not value:
+            raise SemanticError("{} must be a non-empty string".format(field))
+    member_map_digest = sha256_json(
+        [
+            {
+                "unit_id": member.unit_id,
+                "node_id": member.node_id,
+                "rank_map": member.rank_map,
+                "contributor_map": member.contributor_map,
+                "logical_position_map": member.logical_position_map,
+            }
+            for member in template.members
+        ]
+    )
+    return sha256_json(
+        {
+            "planning_mode": planning_mode.value,
+            "template_signature": template.exact_signature,
+            "member_map_digest": member_map_digest,
+            "route_model_version": route_model_version,
+            "global_scheduler_version": global_scheduler_version,
+            "objective": objective.value,
+            "channel_count": channel_count,
+        }
+    )
+
+
 @dataclass(frozen=True)
 class _CacheEntry:
     candidate: SolveCandidate
     expires_at: float
     complete: bool
+    diagnostics: SearchDiagnostics = SearchDiagnostics()
 
 
 class CandidateCache:
@@ -256,6 +321,7 @@ class CandidateCache:
         ttl_seconds: float,
         complete: bool,
         now: Optional[float] = None,
+        diagnostics: Optional[SearchDiagnostics] = None,
     ) -> None:
         if not isinstance(key, str) or not key:
             raise SemanticError("cache key must be a non-empty string")
@@ -270,6 +336,10 @@ class CandidateCache:
             raise SemanticError("cache ttl_seconds must be finite and positive")
         if not isinstance(complete, bool):
             raise SemanticError("cache complete must be a boolean")
+        if diagnostics is None:
+            diagnostics = SearchDiagnostics()
+        if not isinstance(diagnostics, SearchDiagnostics):
+            raise SemanticError("cache diagnostics must be SearchDiagnostics")
         current = time.monotonic() if now is None else float(now)
         if not math.isfinite(current):
             raise SemanticError("cache current time must be finite")
@@ -277,6 +347,7 @@ class CandidateCache:
             candidate=candidate,
             expires_at=current + float(ttl_seconds),
             complete=complete,
+            diagnostics=diagnostics,
         )
         with self._lock:
             self._entries[key] = entry
@@ -286,16 +357,27 @@ class CandidateCache:
         key: str,
         now: Optional[float] = None,
     ) -> Optional[SolveCandidate]:
+        candidate, _ = self.get_with_diagnostics(key, now=now)
+        return candidate
+
+    def get_with_diagnostics(
+        self,
+        key: str,
+        now: Optional[float] = None,
+    ) -> Tuple[Optional[SolveCandidate], SearchDiagnostics]:
         current = time.monotonic() if now is None else float(now)
         if not math.isfinite(current):
             raise SemanticError("cache current time must be finite")
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
-                return None
+                return None, SearchDiagnostics()
             if current >= entry.expires_at:
                 del self._entries[key]
-                return None
+                return None, SearchDiagnostics()
             if entry.complete:
-                return entry.candidate
-            return replace(entry.candidate, proven_optimal=False)
+                return entry.candidate, entry.diagnostics
+            return (
+                replace(entry.candidate, proven_optimal=False),
+                entry.diagnostics,
+            )

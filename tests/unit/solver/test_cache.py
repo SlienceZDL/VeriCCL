@@ -5,20 +5,29 @@ import pytest
 
 from vericcl.errors import SemanticError
 from vericcl.input.loader import resolve_inputs
+from vericcl.input.models import ObjectiveMode
 from vericcl.planner.build import build_plan
 from vericcl.planner.model import PlanningMode
 from vericcl.solver.cache import (
     CandidateCache,
     candidate_cache_key,
     performance_cache_key,
+    route_model_cache_key,
     structural_cache_key,
 )
-from vericcl.solver.model import SolveRequest, SolveStatus
+from vericcl.solver.model import (
+    SearchDiagnostics,
+    SolveRequest,
+    SolveResult,
+    SolveStatus,
+)
+from vericcl.solver.templates import build_solver_templates
 from vericcl.topology.loader import load_topology
 from vericcl.topology.model import DirectedLink
 from vericcl.tuning.model import TuningOverlay
 
 from tests.unit.solver.test_model import candidate
+from tests.unit.solver.test_templates import _real_direct_allgather
 
 
 pytestmark = pytest.mark.phase03
@@ -152,6 +161,99 @@ def test_complete_cache_entry_is_returned_unchanged():
 
     assert cache.get("key", now=1) is value
     assert cache.get("missing", now=1) is None
+
+
+def test_cache_entry_preserves_optional_search_diagnostics():
+    cache = CandidateCache()
+    diagnostics = SearchDiagnostics(
+        requested_problem_count=2,
+        template_count=1,
+        route_model_count=4,
+    )
+    cache.put(
+        "key",
+        candidate(),
+        ttl_seconds=10,
+        complete=True,
+        now=0,
+        diagnostics=diagnostics,
+    )
+
+    cached, cached_diagnostics = cache.get_with_diagnostics("key", now=1)
+
+    assert cached is not None
+    assert cached_diagnostics == diagnostics
+
+
+def test_old_solve_result_construction_defaults_search_diagnostics():
+    result = SolveResult(
+        status=SolveStatus.NOT_RUN,
+        candidates=(),
+        selected_candidate_id=None,
+        cache_hit=False,
+        message="old-payload",
+    )
+
+    assert result.diagnostics == SearchDiagnostics()
+
+
+def test_route_model_cache_key_binds_exact_search_identity():
+    plan, problems = _real_direct_allgather(3, 2)
+    templates = build_solver_templates(problems, plan.planning_mode)
+    template = next(item for item in templates if len(item.members) > 1)
+    base = route_model_cache_key(
+        plan.planning_mode,
+        template,
+        ObjectiveMode.LATENCY,
+        1,
+    )
+    changed_member = replace(template.members[1], node_id="changed-member")
+    changed_template = replace(
+        template,
+        members=tuple(
+            changed_member if member == template.members[1] else member
+            for member in template.members
+        ),
+    )
+
+    assert base != route_model_cache_key(
+        PlanningMode.MANUAL,
+        template,
+        ObjectiveMode.LATENCY,
+        1,
+    )
+    assert base != route_model_cache_key(
+        plan.planning_mode,
+        changed_template,
+        ObjectiveMode.LATENCY,
+        1,
+    )
+    assert base != route_model_cache_key(
+        plan.planning_mode,
+        template,
+        ObjectiveMode.THROUGHPUT,
+        1,
+    )
+    assert base != route_model_cache_key(
+        plan.planning_mode,
+        template,
+        ObjectiveMode.LATENCY,
+        2,
+    )
+    assert base != route_model_cache_key(
+        plan.planning_mode,
+        template,
+        ObjectiveMode.LATENCY,
+        1,
+        route_model_version="changed-route-model",
+    )
+    assert base != route_model_cache_key(
+        plan.planning_mode,
+        template,
+        ObjectiveMode.LATENCY,
+        1,
+        global_scheduler_version="changed-global-scheduler",
+    )
 
 
 @pytest.mark.parametrize("key_function", [structural_cache_key, performance_cache_key])

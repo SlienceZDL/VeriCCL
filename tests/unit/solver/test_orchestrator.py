@@ -7,21 +7,63 @@ from vericcl.input.loader import resolve_inputs
 from vericcl.errors import SemanticError, SolverUnavailableError
 from vericcl.input.models import ForbiddenTransfer, ObjectiveMode
 from vericcl.planner.build import build_plan
+from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 from vericcl.solver.cache import CandidateCache
 from vericcl.solver.lower_bounds import LowerBound
 from vericcl.solver.model import SolveRequest, SolveStatus
 from vericcl.solver.orchestrator import solve
+from vericcl.solver.search import RouteSearchResult
 import vericcl.solver.orchestrator as orchestrator_module
 from vericcl.topology.loader import load_topology
 from vericcl.tuning.model import TuningOverlay
+from vericcl.verification import (
+    ValidationStatus,
+    verify_schedule_constraints,
+    verify_schedule_semantics,
+)
 
 from tests.unit.planner.test_hierarchy import manual_allreduce
+from tests.unit.solver.test_instantiate import _route_patterns
 
 
 pytestmark = pytest.mark.phase03
 
 
 EXAMPLES = Path(__file__).parents[3] / "vericcl" / "examples"
+
+
+def _route_result(templates, objective, channel_counts=(1,)):
+    patterns_by_channel = {}
+    for channel_count in channel_counts:
+        patterns = _route_patterns(templates, channel_count)
+        patterns_by_channel[channel_count] = {
+            template_id: replace(pattern, objective_mode=objective)
+            for template_id, pattern in patterns.items()
+        }
+    model_count = len(templates) * len(channel_counts)
+    return RouteSearchResult(
+        patterns_by_channel=patterns_by_channel,
+        launched_model_count=model_count,
+        route_model_build_time_s=float(model_count),
+        route_model_optimize_time_s=float(model_count * 2),
+        maximum_variable_count=11,
+        maximum_constraint_count=13,
+        maximum_general_constraint_count=0,
+        maximum_thread_count=1,
+    )
+
+
+def _empty_route_result(channel_counts=(1,)):
+    return RouteSearchResult(
+        patterns_by_channel={value: {} for value in channel_counts},
+        launched_model_count=0,
+        route_model_build_time_s=0.0,
+        route_model_optimize_time_s=0.0,
+        maximum_variable_count=0,
+        maximum_constraint_count=0,
+        maximum_general_constraint_count=0,
+        maximum_thread_count=0,
+    )
 
 
 def _request(
@@ -69,6 +111,25 @@ def _request(
     )
 
 
+def _allgather_request(**kwargs):
+    request = _request(**kwargs)
+    inputs = replace(
+        request.inputs,
+        collective=CollectiveSpec(
+            kind=CollectiveKind.ALL_GATHER,
+            datatype="float32",
+            reduction_op=None,
+            root=None,
+            inplace=False,
+        ),
+    )
+    return replace(
+        request,
+        inputs=inputs,
+        plan=build_plan(inputs, request.topology),
+    )
+
+
 def test_constructive_only_returns_complete_global_candidate():
     request = _request()
 
@@ -95,7 +156,7 @@ def test_explicit_workflow_budget_bounds_solver_deadline(monkeypatch):
 
     def no_candidates(request_value, problems, objective, deadline):
         captured.append(deadline)
-        return ()
+        return (), orchestrator_module.SearchDiagnostics()
 
     monkeypatch.setattr(orchestrator_module, "_monotonic", lambda: 100.0)
     monkeypatch.setattr(
@@ -109,37 +170,41 @@ def test_explicit_workflow_budget_bounds_solver_deadline(monkeypatch):
     assert captured == [pytest.approx(102.5)]
 
 
-def test_milp_without_incumbent_falls_back_to_constructive(
+def test_scalable_route_search_without_incumbent_falls_back_to_constructive(
     monkeypatch,
 ):
     request = _request(constructive=True, milp=True)
     calls = []
 
-    def no_incumbent(problem, config, objective, warm_start):
-        calls.append((problem.node.node_id, objective, warm_start))
-        return ()
+    def no_incumbent(templates, config, objective, deadline, channel_counts=None):
+        calls.append((tuple(templates), objective, channel_counts))
+        return _empty_route_result(channel_counts or (1,))
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.search_models",
+        "vericcl.solver.orchestrator.search_route_models",
         no_incumbent,
+    )
+    monkeypatch.setattr(
+        "vericcl.solver.orchestrator.search_models",
+        lambda *args: pytest.fail("non-proof solve used the full timing MILP"),
     )
 
     result = solve(request, cache=CandidateCache())
 
-    assert len(calls) == len(request.plan.nodes)
-    assert all(call[2] is not None for call in calls)
+    assert len(calls) == 1
+    assert calls[0][1] is ObjectiveMode.LATENCY
     assert result.selected_candidate is not None
     assert result.selected_candidate.metrics.solver_name == "constructive"
 
 
-def test_unavailable_milp_search_falls_back_to_constructive(monkeypatch):
+def test_unavailable_route_search_falls_back_to_constructive(monkeypatch):
     request = _request(constructive=True, milp=True)
 
-    def unavailable(problem, config, objective, warm_start):
+    def unavailable(*args, **kwargs):
         raise SolverUnavailableError("unavailable")
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.search_models",
+        "vericcl.solver.orchestrator.search_route_models",
         unavailable,
     )
 
@@ -149,52 +214,146 @@ def test_unavailable_milp_search_falls_back_to_constructive(monkeypatch):
     assert result.selected_candidate.metrics.solver_name == "constructive"
 
 
-def test_complete_milp_incumbents_are_combined_by_channel(monkeypatch):
-    request = _request(constructive=True, milp=True)
-
-    from vericcl.solver import orchestrator
-
-    def time_limited(problem, config, objective, warm_start):
-        local = orchestrator._constructive_candidate(
-            problem,
-            warm_start,
-            objective,
-            1,
-            None,
-        )
-        return (
-            replace(
-                local,
-                candidate_id="{}-milp".format(problem.node.node_id),
-                metrics=replace(
-                    local.metrics,
-                    status=SolveStatus.TIME_LIMIT,
-                    solver_name="gurobi",
-                    model_count=1,
-                    termination_reason="time_limit",
-                ),
-            ),
-        )
+def test_complete_route_patterns_create_restricted_non_proven_candidate(
+    monkeypatch,
+):
+    request = _request(constructive=False, milp=True)
 
     monkeypatch.setattr(
+        "vericcl.solver.orchestrator.GurobiAdapter.available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "vericcl.solver.orchestrator.search_route_models",
+        lambda templates, config, objective, deadline, channel_counts=None: (
+            _route_result(templates, objective, channel_counts or (1,))
+        ),
+    )
+    monkeypatch.setattr(
         "vericcl.solver.orchestrator.search_models",
-        time_limited,
+        lambda *args: pytest.fail("non-proof solve used the full timing MILP"),
     )
 
     result = solve(request, cache=CandidateCache())
 
-    milp = next(
-        candidate
-        for candidate in result.candidates
-        if "-milp-" in candidate.candidate_id
-    )
-    assert milp.channel_count == 1
-    assert milp.metrics.status is SolveStatus.TIME_LIMIT
-    assert milp.metrics.solver_name == "gurobi"
+    candidate = result.selected_candidate
+    assert candidate is not None
+    assert candidate.global_schedule is not None
+    assert candidate.metrics.solver_name == "gurobi_route"
+    assert candidate.metrics.model_count == result.diagnostics.template_count
+    assert candidate.search_space_restricted
+    assert not candidate.proven_optimal
+    assert "template_route_composition" in candidate.restrictions
+    assert result.diagnostics.route_model_count == result.diagnostics.template_count
 
 
-def test_total_budget_is_shared_across_plan_nodes(monkeypatch):
+def test_missing_template_invalidates_only_its_channel_count(monkeypatch):
     request = _request(constructive=False, milp=True)
+    request = replace(
+        request,
+        inputs=replace(
+            request.inputs,
+            solver=replace(request.inputs.solver, max_channels=2),
+        ),
+    )
+
+    def incomplete(templates, config, objective, deadline, channel_counts=None):
+        result = _route_result(templates, objective, channel_counts or (1, 2))
+        patterns = {
+            channel_count: dict(values)
+            for channel_count, values in result.patterns_by_channel.items()
+        }
+        patterns[1].pop(sorted(patterns[1])[0])
+        return replace(result, patterns_by_channel=patterns)
+
+    monkeypatch.setattr(
+        "vericcl.solver.orchestrator.GurobiAdapter.available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "vericcl.solver.orchestrator.search_route_models",
+        incomplete,
+    )
+
+    result = solve(request, cache=CandidateCache())
+
+    assert [candidate.channel_count for candidate in result.candidates] == [2]
+    assert result.diagnostics.route_model_count == (
+        2 * result.diagnostics.template_count
+    )
+
+
+def test_failed_member_mapping_uses_only_one_standalone_fallback(monkeypatch):
+    request = _allgather_request(constructive=False, milp=True)
+    original_build = orchestrator_module.build_solver_templates
+
+    def stale_member_templates(problems, planning_mode):
+        templates = original_build(problems, planning_mode)
+        target = next(template for template in templates if len(template.members) > 1)
+        member = target.members[1]
+        rank_map = list(member.rank_map)
+        rank_map[0] = (rank_map[0][0], request.inputs.rank_count + 1)
+        changed_member = replace(member, rank_map=tuple(rank_map))
+        changed_template = replace(
+            target,
+            members=tuple(
+                changed_member if value == member else value
+                for value in target.members
+            ),
+        )
+        return tuple(
+            changed_template if value == target else value
+            for value in templates
+        )
+
+    route_calls = []
+
+    def complete(templates, config, objective, deadline, channel_counts=None):
+        route_calls.append(tuple(template.template_id for template in templates))
+        return _route_result(templates, objective, channel_counts or (1,))
+
+    monkeypatch.setattr(
+        "vericcl.solver.orchestrator.GurobiAdapter.available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "vericcl.solver.orchestrator.build_solver_templates",
+        stale_member_templates,
+    )
+    monkeypatch.setattr(
+        "vericcl.solver.orchestrator.search_route_models",
+        complete,
+    )
+
+    result = solve(request, cache=CandidateCache())
+
+    assert result.status is SolveStatus.FEASIBLE
+    assert len(route_calls) == 2
+    assert len(route_calls[1]) == 1
+    assert route_calls[1][0].startswith("standalone-")
+    assert result.diagnostics.fallback_member_model_count == 1
+    assert result.diagnostics.route_model_count == (
+        result.diagnostics.template_count + 1
+    )
+    schedule = result.selected_candidate.global_schedule
+    assert schedule is not None
+    assert verify_schedule_semantics(
+        schedule,
+        request.inputs,
+    ).status is ValidationStatus.VALID
+    assert verify_schedule_constraints(
+        schedule,
+        request.inputs,
+        request.topology,
+    ).status is ValidationStatus.VALID
+
+
+def test_full_milp_total_budget_is_shared_across_plan_nodes(monkeypatch):
+    request = _request(
+        constructive=False,
+        milp=True,
+        require_proven_optimal=True,
+    )
     request = replace(
         request,
         inputs=replace(
@@ -237,6 +396,34 @@ def test_total_budget_is_shared_across_plan_nodes(monkeypatch):
     assert len(calls) == 1
     assert calls[0][1:] == (2, 2)
     assert result.selected_candidate is None
+
+
+def test_proof_request_uses_full_timing_milp(monkeypatch):
+    request = _request(
+        constructive=True,
+        milp=True,
+        require_proven_optimal=True,
+    )
+    calls = []
+
+    def no_incumbent(problem, config, objective, warm_start):
+        calls.append(problem.node.node_id)
+        return ()
+
+    monkeypatch.setattr(
+        "vericcl.solver.orchestrator.search_models",
+        no_incumbent,
+    )
+    monkeypatch.setattr(
+        "vericcl.solver.orchestrator.search_route_models",
+        lambda *args, **kwargs: pytest.fail("proof solve used route-only MILP"),
+    )
+
+    result = solve(request, cache=CandidateCache())
+
+    assert calls == [node.node_id for node in request.plan.nodes]
+    assert result.status is SolveStatus.ERROR
+    assert "proof" in result.message
 
 
 def test_both_disabled_returns_not_run():
@@ -416,12 +603,12 @@ def test_auto_skips_throughput_when_cv_adjusted_gain_is_too_small(
     )
     objectives = []
 
-    def no_incumbent(problem, config, objective, warm_start):
+    def no_incumbent(templates, config, objective, deadline, channel_counts=None):
         objectives.append(objective)
-        return ()
+        return _empty_route_result(channel_counts or (1,))
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.search_models",
+        "vericcl.solver.orchestrator.search_route_models",
         no_incumbent,
     )
     monkeypatch.setattr(
@@ -449,12 +636,12 @@ def test_auto_does_not_prune_with_unstable_calibration(monkeypatch):
     )
     objectives = []
 
-    def no_incumbent(problem, config, objective, warm_start):
+    def no_incumbent(templates, config, objective, deadline, channel_counts=None):
         objectives.append(objective)
-        return ()
+        return _empty_route_result(channel_counts or (1,))
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.search_models",
+        "vericcl.solver.orchestrator.search_route_models",
         no_incumbent,
     )
     monkeypatch.setattr(
