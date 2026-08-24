@@ -172,6 +172,42 @@ def _output_matches(
     return tuple(sorted(matches, key=lambda item: item.transfer_id))
 
 
+def _output_path_transfer(
+    schedule: Schedule,
+    matches: Tuple[Transfer, ...],
+    slot: OutputSlot,
+    member: int,
+) -> Transfer | None:
+    transfers = {
+        transfer.transfer_id: transfer for transfer in schedule.transfers
+    }
+    pending = [transfer.transfer_id for transfer in matches]
+    reachable = set()
+    while pending:
+        transfer_id = pending.pop()
+        if transfer_id in reachable:
+            continue
+        reachable.add(transfer_id)
+        pending.extend(
+            predecessor_id
+            for predecessor_id in _semantic_predecessors(
+                schedule,
+                transfers[transfer_id],
+            )
+            if predecessor_id in transfers
+        )
+    candidates = tuple(
+        transfer
+        for transfer in schedule.transfers
+        if transfer.transfer_id in reachable
+        and transfer.dst_rank == slot.rank
+        and member in transfer.member_slice_ids
+    )
+    if len(candidates) > 1:
+        raise SemanticError("node output member has ambiguous accumulator paths")
+    return candidates[0] if candidates else None
+
+
 def _passthrough_input(
     node: PlanNode,
     slot: OutputSlot,
@@ -292,18 +328,14 @@ def compose(
             paths = {}
             for member in contributors:
                 path = None
-                for transfer in matches:
-                    atom = next(
-                        (
-                            value
-                            for value in transfer.atoms
-                            if value.slice_id == member
-                        ),
-                        None,
-                    )
-                    if atom is not None:
-                        path = global_atoms[(transfer.transfer_id, member)].path
-                        break
+                transfer = _output_path_transfer(
+                    schedule,
+                    matches,
+                    slot,
+                    member,
+                )
+                if transfer is not None:
+                    path = global_atoms[(transfer.transfer_id, member)].path
                 if path is None:
                     input_matches = [
                         input_slot

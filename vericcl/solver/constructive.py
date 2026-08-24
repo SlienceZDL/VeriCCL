@@ -2,13 +2,14 @@ from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Tuple
 
 from vericcl.errors import ConstructionInfeasibleError, SemanticError
-from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import Schedule, Transfer
 from vericcl.solver.demands import SolverProblem, TransferDemand
 from vericcl.solver.scheduling import (
     available_channel_count,
     demand_batch_assignments,
     fixed_transfer_duration_us,
     physical_link_key,
+    reconstruct_send_transfer,
 )
 from vericcl.topology.model import LaneKey, LinkKey
 
@@ -267,21 +268,6 @@ def _materialize_path(
             resource_last[resource_key] = transfer_id
 
 
-def _tree_path_drafts(
-    draft: _DraftTransfer,
-    drafts_by_edge: Dict[Tuple[TreeKey, int, int], _DraftTransfer],
-    parents: Dict[Tuple[TreeKey, int], int],
-) -> Tuple[_DraftTransfer, ...]:
-    path = []
-    destination = draft.dst_rank
-    root = draft.tree_key[0]
-    while destination != root:
-        source = parents[(draft.tree_key, destination)]
-        path.append(drafts_by_edge[(draft.tree_key, source, destination)])
-        destination = source
-    return tuple(reversed(path))
-
-
 def _transfer(
     draft: _DraftTransfer,
     drafts_by_edge: Dict[Tuple[TreeKey, int, int], _DraftTransfer],
@@ -289,40 +275,27 @@ def _transfer(
     slice_size_bytes: int,
     member_slice_ids: FrozenSet[int],
 ) -> Transfer:
-    path = _tree_path_drafts(draft, drafts_by_edge, parents)
-    symbols = tuple(
-        Symbol(
-            src_rank=item.src_rank,
-            dst_rank=item.dst_rank,
-            ready_time=item.semantic_ready_time,
-        )
-        for item in path
-    )
-    atoms = tuple(
-        Atom(
-            slice_id=slice_id,
-            slice_size_bytes=slice_size_bytes,
-            path=(
-                PathStage(
-                    stage_id=draft.stage_id,
-                    operator="SEND",
-                    symbols=symbols,
-                ),
-            ),
-            st_time=draft.st_time,
-            ed_time=draft.ed_time,
-        )
-        for slice_id in sorted(member_slice_ids)
-    )
-    return Transfer(
+    tree_parents = {
+        rank: parent
+        for (tree_key, rank), parent in parents.items()
+        if tree_key == draft.tree_key
+    }
+    ready_times = {
+        LinkKey(item.src_rank, item.dst_rank): item.semantic_ready_time
+        for (tree_key, _, _), item in drafts_by_edge.items()
+        if tree_key == draft.tree_key
+    }
+    return reconstruct_send_transfer(
         transfer_id=draft.transfer_id,
-        kind="SEND",
+        root_rank=draft.tree_key[0],
         src_rank=draft.src_rank,
         dst_rank=draft.dst_rank,
+        parent_by_rank=tree_parents,
+        ready_time_by_edge=ready_times,
         channel=draft.channel,
         stage_id=draft.stage_id,
         member_slice_ids=member_slice_ids,
-        atoms=atoms,
+        slice_size_bytes=slice_size_bytes,
         st_time=draft.st_time,
         ed_time=draft.ed_time,
         predecessor_ids=draft.predecessor_ids,

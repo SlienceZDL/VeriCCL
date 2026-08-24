@@ -19,9 +19,14 @@ def spec(kind):
         reduction_op=(
             "sum"
             if kind
-            in {CollectiveKind.ALL_REDUCE, CollectiveKind.REDUCE_SCATTER}
+            in {
+                CollectiveKind.REDUCE,
+                CollectiveKind.ALL_REDUCE,
+                CollectiveKind.REDUCE_SCATTER,
+            }
             else None
         ),
+        root=0 if kind is CollectiveKind.REDUCE else None,
     )
 
 
@@ -46,6 +51,28 @@ def test_allreduce_outputs_contain_every_source_once(rank_count, quotient):
             assert {item % slice_count for item in contributors} == {
                 logical_address
             }
+
+
+@given(rank_count=st.integers(2, 4), slice_count=st.integers(1, 8))
+def test_reduce_outputs_preserve_each_logical_contributor_set(
+    rank_count,
+    slice_count,
+):
+    outputs = required_outputs(
+        spec(CollectiveKind.REDUCE),
+        rank_count,
+        slice_count,
+    )
+
+    assert set(outputs) == {
+        OutputSlot(0, logical_position)
+        for logical_position in range(slice_count)
+    }
+    for logical_position in range(slice_count):
+        assert outputs[OutputSlot(0, logical_position)] == frozenset(
+            source * slice_count + logical_position
+            for source in range(rank_count)
+        )
 
 
 @given(rank_count=st.integers(2, 4), quotient=st.integers(1, 4))

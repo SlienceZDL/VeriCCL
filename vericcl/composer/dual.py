@@ -35,7 +35,13 @@ class _TimedDraft:
     st_time: float
     ed_time: float
     semantic_ready_time: float
+    semantic_predecessors: FrozenSet[str]
     predecessor_ids: FrozenSet[str]
+    contributors: FrozenSet[int]
+
+
+def _tree_key(tree: DualTree) -> tuple[int, FrozenSet[int], int]:
+    return tree.root_rank, tree.contributors, tree.target_offset
 
 
 def _resource_slots(schedule: Schedule, transfer_id: str) -> Mapping[str, int]:
@@ -92,6 +98,17 @@ def _schedule_drafts(drafts: Tuple[_Draft, ...]) -> Tuple[_TimedDraft, ...]:
     lane_last = {}
     resource_ready = {}
     resource_last = {}
+    accumulator_contributors = {}
+    accumulator_last = {}
+    for draft in drafts:
+        tree_key = _tree_key(draft.tree)
+        for rank, contributors in draft.tree.local_members:
+            key = (tree_key, rank)
+            if key in accumulator_contributors:
+                if accumulator_contributors[key] != contributors:
+                    raise SemanticError("REDUCE accumulator initialization conflicts")
+            else:
+                accumulator_contributors[key] = contributors
     while pending:
         ready = [
             draft
@@ -102,10 +119,14 @@ def _schedule_drafts(drafts: Tuple[_Draft, ...]) -> Tuple[_TimedDraft, ...]:
             raise SemanticError("reversed REDUCE dependencies contain a cycle")
         choices = []
         for draft in ready:
+            semantic_predecessors = set(draft.semantic_predecessors)
+            accumulator_key = (_tree_key(draft.tree), draft.dst_rank)
+            if accumulator_key in accumulator_last:
+                semantic_predecessors.add(accumulator_last[accumulator_key])
             semantic_ready = max(
                 (
                     timed[predecessor].ed_time
-                    for predecessor in draft.semantic_predecessors
+                    for predecessor in semantic_predecessors
                 ),
                 default=0.0,
             )
@@ -117,9 +138,28 @@ def _schedule_drafts(drafts: Tuple[_Draft, ...]) -> Tuple[_TimedDraft, ...]:
                     for resource_id, slot in draft.resource_slots.items()
                 ]
             )
-            choices.append((start, draft.transfer_id, semantic_ready, lane, draft))
-        start, _, semantic_ready, lane, draft = min(choices)
-        predecessors = set(draft.semantic_predecessors)
+            choices.append(
+                (
+                    start,
+                    draft.transfer_id,
+                    semantic_ready,
+                    lane,
+                    frozenset(semantic_predecessors),
+                    draft,
+                )
+            )
+        start, _, semantic_ready, lane, semantic_predecessors, draft = min(choices)
+        tree_key = _tree_key(draft.tree)
+        source_key = (tree_key, draft.src_rank)
+        destination_key = (tree_key, draft.dst_rank)
+        incoming = draft.member_slice_ids
+        if accumulator_contributors.get(source_key, frozenset()) != incoming:
+            raise SemanticError("REDUCE source state is incomplete or repeated")
+        current = accumulator_contributors.get(destination_key, frozenset())
+        if current & incoming:
+            raise SemanticError("REDUCE reuses contributor state")
+        contributors = current | incoming
+        predecessors = set(semantic_predecessors)
         if lane in lane_last:
             predecessors.add(lane_last[lane])
         for resource_id, slot in draft.resource_slots.items():
@@ -131,10 +171,14 @@ def _schedule_drafts(drafts: Tuple[_Draft, ...]) -> Tuple[_TimedDraft, ...]:
             st_time=start,
             ed_time=start + draft.duration,
             semantic_ready_time=semantic_ready,
+            semantic_predecessors=semantic_predecessors,
             predecessor_ids=frozenset(predecessors),
+            contributors=contributors,
         )
         timed[draft.transfer_id] = result
         del pending[draft.transfer_id]
+        accumulator_contributors[destination_key] = contributors
+        accumulator_last[destination_key] = draft.transfer_id
         lane_ready[lane] = result.ed_time
         lane_last[lane] = draft.transfer_id
         for resource_id, slot in draft.resource_slots.items():
@@ -257,14 +301,12 @@ def reverse_allgather_schedule(
             for member in sorted(draft.member_slice_ids)
         }
         semantic_predecessors[draft.transfer_id] = tuple(
-            sorted(draft.semantic_predecessors)
+            sorted(item.semantic_predecessors)
         )
         semantic_contributors[draft.transfer_id] = tuple(
             sorted(draft.member_slice_ids)
         )
-        tree_contributors[draft.transfer_id] = tuple(
-            sorted(draft.tree.contributors)
-        )
+        tree_contributors[draft.transfer_id] = tuple(sorted(item.contributors))
         resource_slots[draft.transfer_id] = dict(draft.resource_slots)
     final_outputs = {
         _final_output_key(slot.rank, slot.offset): tuple(sorted(contributors))
@@ -272,15 +314,16 @@ def reverse_allgather_schedule(
     }
     final_ready_times = {}
     for tree in trees:
-        ready = max(
-            (
-                item.ed_time
-                for item in timed
-                if item.draft.tree == tree
-                and item.draft.dst_rank == tree.root_rank
-            ),
-            default=0.0,
+        completed = tuple(
+            item
+            for item in timed
+            if item.draft.tree == tree
+            and item.draft.dst_rank == tree.root_rank
+            and item.contributors == tree.contributors
         )
+        if tree.transfers and len(completed) != 1:
+            raise SemanticError("REDUCE tree does not produce one final accumulator")
+        ready = completed[0].ed_time if completed else 0.0
         final_ready_times[
             _final_output_key(tree.root_rank, tree.target_offset)
         ] = ready

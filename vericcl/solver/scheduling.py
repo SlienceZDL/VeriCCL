@@ -1,5 +1,7 @@
-from typing import Dict, List, Tuple
+from typing import Dict, FrozenSet, List, Mapping, Tuple
 
+from vericcl.errors import SemanticError
+from vericcl.semantics.atom import Atom, PathStage, Symbol, Transfer
 from vericcl.solver.demands import CandidateEdge, SolverProblem, TransferDemand
 from vericcl.topology.model import LinkKey, PerformanceCurve
 from vericcl.topology.performance import (
@@ -15,6 +17,76 @@ BatchShape = Tuple[
     bool,
     Tuple[Tuple[int, Tuple[Tuple[int, ...], ...], Tuple[LinkKey, ...]], ...],
 ]
+
+
+def reconstruct_send_transfer(
+    *,
+    transfer_id: str,
+    root_rank: int,
+    src_rank: int,
+    dst_rank: int,
+    parent_by_rank: Mapping[int, int],
+    ready_time_by_edge: Mapping[LinkKey, float],
+    channel: int,
+    stage_id: int,
+    member_slice_ids: FrozenSet[int],
+    slice_size_bytes: int,
+    st_time: float,
+    ed_time: float,
+    predecessor_ids: FrozenSet[str],
+) -> Transfer:
+    parents = dict(parent_by_rank)
+    ready_times = dict(ready_time_by_edge)
+    path = []
+    destination = dst_rank
+    visited = set()
+    while destination != root_rank:
+        if destination in visited:
+            raise SemanticError("semantic tree path contains a cycle")
+        visited.add(destination)
+        if destination not in parents:
+            raise SemanticError("semantic tree path does not reach its root")
+        source = parents[destination]
+        edge = LinkKey(source, destination)
+        if edge not in ready_times:
+            raise SemanticError("semantic tree edge has no ready time")
+        path.append(
+            Symbol(
+                src_rank=source,
+                dst_rank=destination,
+                ready_time=ready_times[edge],
+            )
+        )
+        destination = source
+    symbols = tuple(reversed(path))
+    if not symbols or (
+        symbols[-1].src_rank,
+        symbols[-1].dst_rank,
+    ) != (src_rank, dst_rank):
+        raise SemanticError("semantic tree path does not end with its transfer")
+    atoms = tuple(
+        Atom(
+            slice_id=slice_id,
+            slice_size_bytes=slice_size_bytes,
+            path=(PathStage(stage_id, "SEND", symbols),),
+            st_time=st_time,
+            ed_time=ed_time,
+        )
+        for slice_id in sorted(member_slice_ids)
+    )
+    return Transfer(
+        transfer_id=transfer_id,
+        kind="SEND",
+        src_rank=src_rank,
+        dst_rank=dst_rank,
+        channel=channel,
+        stage_id=stage_id,
+        member_slice_ids=member_slice_ids,
+        atoms=atoms,
+        st_time=st_time,
+        ed_time=ed_time,
+        predecessor_ids=predecessor_ids,
+    )
 
 
 def _tree_key(demand: TransferDemand) -> TreeKey:
