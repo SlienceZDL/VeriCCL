@@ -332,11 +332,11 @@ def solve_route_milp(
         budget,
     )
     build_time = time.monotonic() - build_started
-    counts = GurobiAdapter.model_counts(model)
-    optimize_started = time.monotonic()
-    model.optimize()
-    optimize_time = time.monotonic() - optimize_started
     try:
+        counts = GurobiAdapter.model_counts(model)
+        optimize_started = time.monotonic()
+        model.optimize()
+        optimize_time = time.monotonic() - optimize_started
         if model.SolCount <= 0:
             raise ConstructionInfeasibleError(
                 "representative route MILP has no incumbent (status {})".format(
