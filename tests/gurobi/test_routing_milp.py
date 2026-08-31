@@ -79,18 +79,27 @@ def _inputs(collective, rank_count):
     )
 
 
-def _branching_broadcast_problem():
+def _broadcast_problem(
+    node_id,
+    rank_count,
+    link_specs,
+    candidate_paths_by_leaf,
+):
     collective = CollectiveSpec(
         kind=CollectiveKind.BROADCAST,
         datatype="float32",
         root=0,
     )
-    inputs = _inputs(collective, rank_count=5)
+    inputs = _inputs(collective, rank_count=rank_count)
     topology = topology_from_mapping(
         {
-            "ranks": 5,
+            "ranks": rank_count,
             "nodes": [
-                {"id": 0, "ranks": [0, 1, 2, 3, 4], "gateways": []}
+                {
+                    "id": 0,
+                    "ranks": list(range(rank_count)),
+                    "gateways": [],
+                }
             ],
             "directed_links": [
                 {
@@ -100,36 +109,131 @@ def _branching_broadcast_problem():
                     "invbw": invbw,
                     "max_channels": 2,
                 }
-                for src, dst, invbw in (
-                    (0, 1, 1),
-                    (1, 3, 1),
-                    (1, 4, 1),
-                    (0, 2, 2),
-                    (2, 3, 2),
-                    (2, 4, 2),
-                )
+                for src, dst, invbw in link_specs
             ],
             "shared_resources": [],
         }
     )
     contributors = frozenset({0})
     node = PlanNode(
-        node_id="route-branching-broadcast",
+        node_id=node_id,
         stage_id=0,
         local_collective=collective,
-        communication_group=(0, 1, 2, 3, 4),
+        communication_group=tuple(range(rank_count)),
         logical_input=StageInterface({OutputSlot(0, 0): contributors}),
         logical_output=StageInterface(
-            {
-                OutputSlot(0, 0): contributors,
-                OutputSlot(3, 0): contributors,
-                OutputSlot(4, 0): contributors,
+            {OutputSlot(0, 0): contributors}
+            | {
+                OutputSlot(leaf, 0): contributors
+                for leaf in candidate_paths_by_leaf
             }
         ),
         allowed_links=frozenset(topology.links),
         shared_resource_ids=frozenset(),
     )
-    return build_solver_problem(node, inputs, topology)
+    problem = build_solver_problem(node, inputs, topology)
+    return replace(
+        problem,
+        demands=tuple(
+            replace(
+                demand,
+                candidate_paths=candidate_paths_by_leaf[
+                    demand.required_leaf_rank
+                ],
+            )
+            for demand in problem.demands
+        ),
+    )
+
+
+def _single_parent_conflict_problem():
+    return _broadcast_problem(
+        node_id="route-single-parent-conflict",
+        rank_count=7,
+        link_specs=(
+            (0, 1, 1),
+            (0, 2, 0.5),
+            (0, 6, 2),
+            (1, 3, 1),
+            (2, 3, 0.5),
+            (3, 4, 0.5),
+            (3, 5, 1),
+            (6, 4, 2),
+        ),
+        candidate_paths_by_leaf={
+            4: ((0, 1, 3, 4), (0, 6, 4)),
+            5: ((0, 1, 3, 5), (0, 2, 3, 5)),
+        },
+    )
+
+
+def _equal_latency_operation_problem():
+    return _broadcast_problem(
+        node_id="route-equal-latency-operation",
+        rank_count=6,
+        link_specs=(
+            (0, 1, 1),
+            (0, 2, 1),
+            (0, 3, 1),
+            (1, 4, 1),
+            (1, 5, 1),
+            (2, 4, 1),
+            (3, 5, 1),
+        ),
+        candidate_paths_by_leaf={
+            4: ((0, 1, 4), (0, 2, 4)),
+            5: ((0, 1, 5), (0, 3, 5)),
+        },
+    )
+
+
+def _build_test_route_model(problem):
+    return routing_milp._build_route_model(
+        _template(problem),
+        problem.inputs,
+        problem.topology,
+        channel_count=1,
+        objective=ObjectiveMode.LATENCY,
+        budget=ModelBudget(seconds=30, started_at=0, deadline=30),
+        warm_start=None,
+    )
+
+
+def _selected_candidate_paths(variables, context):
+    return {
+        demand_id: context.candidate_paths[demand_id][path_index]
+        for (demand_id, path_index), variable
+        in variables.path_selected.items()
+        if variable.X > 0.5
+    }
+
+
+def _fixed_objective_values(problem, paths_by_leaf):
+    model, variables, context = _build_test_route_model(problem)
+    try:
+        demand_by_id = {
+            demand.demand_id: demand for demand in context.demands
+        }
+        for (demand_id, path_index), variable in (
+            variables.path_selected.items()
+        ):
+            selected = (
+                context.candidate_paths[demand_id][path_index]
+                == paths_by_leaf[
+                    demand_by_id[demand_id].required_leaf_rank
+                ]
+            )
+            variable.LB = float(selected)
+            variable.UB = float(selected)
+        model.optimize()
+        assert model.Status == context.gp.GRB.OPTIMAL
+        values = []
+        for objective_index in range(model.NumObj):
+            model.Params.ObjNumber = objective_index
+            values.append(float(model.ObjNVal))
+        return tuple(values)
+    finally:
+        model.dispose()
 
 
 def _branching_reduction_dual_problem():
@@ -232,9 +336,9 @@ def test_broadcast_route_reaches_each_leaf_with_one_parent_and_legal_flows():
     assert pattern.model_stats.optimize_time_s >= 0.0
 
 
-def test_branching_broadcast_selects_one_parent_and_continuous_shared_paths():
+def test_single_parent_constraint_selects_the_shared_feasible_tree():
     require_gurobi_license()
-    problem = _branching_broadcast_problem()
+    problem = _single_parent_conflict_problem()
 
     pattern = _solve(
         problem,
@@ -243,21 +347,23 @@ def test_branching_broadcast_selects_one_parent_and_continuous_shared_paths():
     )
 
     representative = _template(problem).representative
-    assert all(
-        len(demand.candidate_paths) == 2
-        for demand in representative.demands
-    )
-    assert all(
-        {path[-2] for path in demand.candidate_paths} == {1, 2}
-        for demand in representative.demands
-    )
-    assert pattern.selected_edges == ((0, 1), (1, 3), (1, 4))
-    assert {path[0] for _, path in pattern.member_paths} == {(0, 1)}
+    demand_by_id = {
+        demand.demand_id: demand for demand in representative.demands
+    }
+    paths_by_leaf = {
+        demand_by_id[demand_id].required_leaf_rank: _path_nodes(path)
+        for demand_id, path in pattern.member_paths
+    }
+    assert paths_by_leaf == {
+        4: (0, 1, 3, 4),
+        5: (0, 1, 3, 5),
+    }
+    assert pattern.selected_edges == ((0, 1), (1, 3), (3, 4), (3, 5))
     parents = {}
     for src, dst in pattern.selected_edges:
         assert dst not in parents
         parents[dst] = src
-    assert parents == {1: 0, 3: 1, 4: 1}
+    assert parents == {1: 0, 3: 1, 4: 3, 5: 3}
     for _, path in pattern.member_paths:
         nodes = _path_nodes(path)
         assert len(nodes) == len(set(nodes))
@@ -265,6 +371,132 @@ def test_branching_broadcast_selects_one_parent_and_continuous_shared_paths():
             first[1] == second[0]
             for first, second in zip(path, path[1:])
         )
+    assert pattern.metrics.objective_values == (3.0, 4.0, 6.0)
+    assert pattern.metrics.status is SolveStatus.OPTIMAL
+    assert pattern.metrics.best_bound == 3.0
+    assert pattern.metrics.mip_gap == 0.0
+    assert pattern.metrics.within_requested_gap
+    assert pattern.metrics.makespan_us == 3.0
+    assert pattern.metrics.operation_count == len(pattern.selected_edges) == 4
+    assert pattern.metrics.hop_count == 6
+    assert pattern.metrics.maximum_normalized_resource_load == 1.0
+
+
+def test_single_parent_fixture_exposes_conflict_when_constraint_is_removed():
+    require_gurobi_license()
+    problem = _single_parent_conflict_problem()
+    model, variables, context = _build_test_route_model(problem)
+    try:
+        constraint = model.getConstrByName(
+            "tree-parent-at-most-one-r0003"
+        )
+        assert constraint is not None
+        model.remove(constraint)
+        model.update()
+        model.optimize()
+
+        assert model.Status == context.gp.GRB.OPTIMAL
+        selected = _selected_candidate_paths(variables, context)
+        demand_by_id = {
+            demand.demand_id: demand for demand in context.demands
+        }
+        assert {
+            demand_by_id[demand_id].required_leaf_rank: path
+            for demand_id, path in selected.items()
+        } == {
+            4: (0, 1, 3, 4),
+            5: (0, 2, 3, 5),
+        }
+        selected_edges = {
+            (link.src_rank, link.dst_rank)
+            for link, variable in variables.edge_selected.items()
+            if variable.X > 0.5
+        }
+        assert {
+            src for src, dst in selected_edges if dst == 3
+        } == {1, 2}
+        assert variables.route_completion.X == pytest.approx(2.5, abs=1e-3)
+    finally:
+        model.dispose()
+
+
+def test_operation_count_breaks_an_equal_latency_tie_with_a_shared_tree():
+    require_gurobi_license()
+    problem = _equal_latency_operation_problem()
+
+    pattern = _solve(
+        problem,
+        ObjectiveMode.LATENCY,
+        channel_count=1,
+    )
+
+    assert pattern.selected_edges == ((0, 1), (1, 4), (1, 5))
+    assert pattern.metrics.objective_values == (2.0, 3.0, 4.0)
+    assert pattern.metrics.status is SolveStatus.OPTIMAL
+    assert pattern.metrics.makespan_us == 2.0
+    assert pattern.metrics.operation_count == len(pattern.selected_edges) == 3
+    assert pattern.metrics.hop_count == 4
+
+
+def test_operation_objective_is_the_exact_unique_tree_edge_sum():
+    require_gurobi_license()
+    problem = _equal_latency_operation_problem()
+
+    assert _fixed_objective_values(
+        problem,
+        {
+            4: (0, 1, 4),
+            5: (0, 1, 5),
+        },
+    ) == (2.0, 3.0, 4.0)
+    assert _fixed_objective_values(
+        problem,
+        {
+            4: (0, 2, 4),
+            5: (0, 3, 5),
+        },
+    ) == (2.0, 4.0, 4.0)
+
+    model, variables, _ = _build_test_route_model(problem)
+    try:
+        model.Params.ObjNumber = 1
+        assert model.ObjNName == "operation-count"
+        assert model.ObjNPriority == 2
+        coefficients = {
+            variable.VarName: float(variable.ObjN)
+            for variable in model.getVars()
+            if abs(variable.ObjN) > 1e-9
+        }
+        assert coefficients == {
+            variable.VarName: 1.0
+            for variable in variables.edge_selected.values()
+        }
+    finally:
+        model.dispose()
+
+
+def test_every_candidate_tree_edge_has_one_named_strict_level_constraint():
+    require_gurobi_license()
+    problem = _single_parent_conflict_problem()
+    model, _, _ = _build_test_route_model(problem)
+    try:
+        level_names = {
+            constraint.ConstrName
+            for constraint in model.getConstrs()
+            if constraint.ConstrName.startswith("tree-level-increase-")
+        }
+        assert level_names == {
+            "tree-level-increase-r0000-r0001",
+            "tree-level-increase-r0000-r0002",
+            "tree-level-increase-r0000-r0006",
+            "tree-level-increase-r0001-r0003",
+            "tree-level-increase-r0002-r0003",
+            "tree-level-increase-r0003-r0004",
+            "tree-level-increase-r0003-r0005",
+            "tree-level-increase-r0006-r0004",
+        }
+    finally:
+        model.dispose()
 
 
 def test_branching_reduction_dual_shares_virtual_tree_over_physical_reverse_links():

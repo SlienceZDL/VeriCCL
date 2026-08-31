@@ -500,7 +500,10 @@ def _build_route_model(
             if rank == root:
                 model.addConstr(incoming == 0)
             else:
-                model.addConstr(incoming <= 1)
+                model.addConstr(
+                    incoming <= 1,
+                    name="tree-parent-at-most-one-r{:04d}".format(rank),
+                )
                 model.addConstr(outgoing <= len(edges) * incoming)
                 model.addConstr(level[rank] <= (len(group) - 1) * incoming)
                 if rank in required_leaves:
@@ -510,7 +513,13 @@ def _build_route_model(
                 level[link.dst_rank]
                 >= level[link.src_rank]
                 + 1.0
-                - big_m * (1.0 - edge_selected[link])
+                - big_m * (1.0 - edge_selected[link]),
+                name=(
+                    "tree-level-increase-r{:04d}-r{:04d}".format(
+                        link.src_rank,
+                        link.dst_rank,
+                    )
+                ),
             )
         route_completion = model.addVar(
             lb=0.0,
