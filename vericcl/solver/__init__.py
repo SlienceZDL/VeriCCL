@@ -17,6 +17,8 @@ from vericcl.solver.model import (
 )
 from vericcl.solver.objectives import rank_candidates
 from vericcl.solver.orchestrator import solve
+from vericcl.solver.routing import RoutePattern, RoutingModelStats
+from vericcl.solver.routing_milp import solve_route_milp
 from vericcl.solver.search import allocate_model_threads, search_models
 from vericcl.solver.templates import (
     RoutingUnit,
@@ -38,6 +40,8 @@ __all__ = [
     "SolverTemplate",
     "SolverMetrics",
     "RoutingUnit",
+    "RoutePattern",
+    "RoutingModelStats",
     "TemplateMember",
     "allocate_model_threads",
     "build_solver_problem",
@@ -48,6 +52,7 @@ __all__ = [
     "search_models",
     "solve",
     "solve_milp",
+    "solve_route_milp",
     "split_routing_units",
     "throughput_time_lower_bound",
 ]

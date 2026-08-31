@@ -21,3 +21,17 @@ class GurobiAdapter:
             raise SolverUnavailableError(
                 "gurobipy could not be imported"
             ) from error
+
+    @classmethod
+    def create_model(cls, name):
+        gp = cls.require()
+        try:
+            return gp, gp.Model(name)
+        except gp.GurobiError as error:
+            raise SolverUnavailableError(
+                "Gurobi model creation failed: {}".format(error)
+            ) from error
+
+    @staticmethod
+    def version(gp) -> str:
+        return ".".join(str(value) for value in gp.gurobi.version())

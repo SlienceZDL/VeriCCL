@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, FrozenSet, Tuple
 
 from vericcl.errors import SemanticError, SolverUnavailableError
+from vericcl.input.models import ResolvedInput
 from vericcl.solver.demands import SolverProblem, TransferDemand
 from vericcl.solver.gurobi_api import GurobiAdapter
 from vericcl.solver.scheduling import (
@@ -12,7 +13,7 @@ from vericcl.solver.scheduling import (
     fixed_transfer_duration_us,
     physical_link_key,
 )
-from vericcl.topology.model import LinkKey, PerformanceCurve
+from vericcl.topology.model import LinkKey, PerformanceCurve, Topology
 from vericcl.topology.performance import safe_per_channel_bandwidth
 
 
@@ -32,6 +33,48 @@ def _positive_integer(value: object, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise SemanticError("{} must be a positive integer".format(field))
     return value
+
+
+def route_edge_duration_us(
+    inputs: ResolvedInput,
+    topology: Topology,
+    demand: TransferDemand,
+    link: LinkKey,
+    channel_count: int,
+) -> float:
+    if not isinstance(inputs, ResolvedInput):
+        raise SemanticError("inputs must be a ResolvedInput")
+    if not isinstance(topology, Topology):
+        raise SemanticError("topology must be a Topology")
+    if not isinstance(demand, TransferDemand):
+        raise SemanticError("demand must be a TransferDemand")
+    if not isinstance(link, LinkKey):
+        raise SemanticError("link must be a LinkKey")
+    channels = _positive_integer(channel_count, "channel_count")
+    physical = LinkKey(*demand.physical_link(link.src_rank, link.dst_rank))
+    edge = topology.link(physical)
+    limits = [channels, edge.max_channels]
+    limits.extend(
+        topology.shared_resources[resource_id].max_channels
+        for resource_id in edge.resource_ids
+    )
+    concurrency = min(limits)
+    durations = [
+        curve_duration_us(
+            edge.performance,
+            inputs.hyperparameters.slice_size_bytes,
+            concurrency,
+        )
+    ]
+    durations.extend(
+        curve_duration_us(
+            topology.shared_resources[resource_id].performance,
+            inputs.hyperparameters.slice_size_bytes,
+            concurrency,
+        )
+        for resource_id in edge.resource_ids
+    )
+    return max(durations)
 
 
 @dataclass(frozen=True)
