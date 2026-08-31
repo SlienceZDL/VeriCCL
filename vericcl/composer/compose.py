@@ -1,13 +1,84 @@
-from typing import Dict, Mapping, Tuple
+from dataclasses import fields, is_dataclass
+from enum import Enum
+from pathlib import PurePath
+from typing import Any, Dict, Mapping, Tuple
 
 from vericcl.composer.dual import reverse_allgather_schedule
 from vericcl.composer.timing import _retime
 from vericcl.errors import SemanticError
+from vericcl.input.json_codec import canonical_json, sha256_json
 from vericcl.planner.model import PlanDAG, PlanNode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.semantics.collective import OutputSlot
 from vericcl.solver.model import SolveCandidate
 from vericcl.topology.model import Topology
+
+
+def _identity_json(value: object) -> Any:
+    if isinstance(value, Enum):
+        return {
+            "enum": type(value).__qualname__,
+            "value": _identity_json(value.value),
+        }
+    if value is None or isinstance(value, (bool, int, str, float)):
+        return value
+    if isinstance(value, PurePath):
+        return {"path": str(value)}
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            "dataclass": type(value).__qualname__,
+            "fields": [
+                [field.name, _identity_json(getattr(value, field.name))]
+                for field in fields(value)
+            ],
+        }
+    if isinstance(value, Mapping):
+        entries = [
+            [_identity_json(key), _identity_json(item)]
+            for key, item in value.items()
+        ]
+        entries.sort(key=lambda entry: canonical_json(entry[0]))
+        return {"mapping": entries}
+    if isinstance(value, (frozenset, set)):
+        items = [_identity_json(item) for item in value]
+        items.sort(key=canonical_json)
+        return {
+            "set": type(value).__qualname__,
+            "items": items,
+        }
+    if isinstance(value, (tuple, list)):
+        return {
+            "sequence": type(value).__qualname__,
+            "items": [_identity_json(item) for item in value],
+        }
+    raise SemanticError(
+        "node schedule identity contains unsupported type: {}".format(
+            type(value).__qualname__
+        )
+    )
+
+
+def route_node_schedule_identity(
+    node_schedules: Mapping[str, Schedule],
+) -> str:
+    if not isinstance(node_schedules, Mapping):
+        raise SemanticError("node_schedules must be a mapping")
+    values = dict(node_schedules)
+    if any(
+        not isinstance(node_id, str)
+        or not node_id
+        or not isinstance(schedule, Schedule)
+        for node_id, schedule in values.items()
+    ):
+        raise SemanticError("node_schedules contains invalid entries")
+    return sha256_json(
+        {
+            "node_schedules": [
+                [node_id, _identity_json(values[node_id])]
+                for node_id in sorted(values)
+            ]
+        }
+    )
 
 
 def _topological_nodes(plan: PlanDAG) -> Tuple[PlanNode, ...]:
@@ -287,6 +358,22 @@ def _compose_schedules(
     if len(slice_sizes) != 1:
         raise SemanticError("node schedules must use one slice size")
     slice_size_bytes = next(iter(slice_sizes))
+    path_hop_counts = tuple(
+        schedule.metadata.get("instantiated_path_hop_count")
+        for schedule in schedules.values()
+    )
+    if any(
+        value is not None
+        and (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+        )
+        for value in path_hop_counts
+    ):
+        raise SemanticError(
+            "instantiated_path_hop_count metadata must be a non-negative integer"
+        )
     producers = _incoming_producers(plan)
     value_dependencies = {}
     value_paths = {}
@@ -424,6 +511,19 @@ def _compose_schedules(
             sorted(value_dependencies[(producer.node_id, slot)])
         )
         final_outputs[key] = tuple(sorted(contributors))
+    metadata = {
+        "path_scope": "global",
+        "semantic_predecessors": {
+            key: tuple(sorted(values))
+            for key, values in semantic.items()
+        },
+        "resource_slots": resource_slots,
+        "final_outputs": final_outputs,
+        "final_dependencies": final_dependencies,
+        "plan_nodes": tuple(node.node_id for node in plan.nodes),
+    }
+    if all(value is not None for value in path_hop_counts):
+        metadata["instantiated_path_hop_count"] = sum(path_hop_counts)
     provisional = Schedule(
         schedule_id="vericcl-composed",
         transfers=tuple(
@@ -435,17 +535,7 @@ def _compose_schedules(
         rank_count=plan.rank_count,
         slice_count=plan.slice_count,
         slice_size_bytes=slice_size_bytes,
-        metadata={
-            "path_scope": "global",
-            "semantic_predecessors": {
-                key: tuple(sorted(values))
-                for key, values in semantic.items()
-            },
-            "resource_slots": resource_slots,
-            "final_outputs": final_outputs,
-            "final_dependencies": final_dependencies,
-            "plan_nodes": tuple(node.node_id for node in plan.nodes),
-        },
+        metadata=metadata,
     )
     return provisional
 
@@ -481,9 +571,21 @@ def compose_routes(
     if topology.rank_count != plan.rank_count:
         raise SemanticError("plan and topology rank counts must agree")
     channels = _validate_channel_count(channel_count)
+    node_schedule_identity = route_node_schedule_identity(node_schedules)
     provisional = _compose_schedules(
         plan,
         _route_node_schedules(plan, node_schedules),
+    )
+    metadata = dict(provisional.metadata)
+    metadata["route_node_schedule_identity"] = node_schedule_identity
+    provisional = Schedule(
+        schedule_id=provisional.schedule_id,
+        transfers=provisional.transfers,
+        final_state_ids=provisional.final_state_ids,
+        rank_count=provisional.rank_count,
+        slice_count=provisional.slice_count,
+        slice_size_bytes=provisional.slice_size_bytes,
+        metadata=metadata,
     )
     return assign_global_resources(
         provisional,

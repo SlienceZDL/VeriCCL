@@ -325,6 +325,7 @@ def _build_route_model(
     objective: ObjectiveMode,
     budget: ModelBudget,
     warm_start: Optional[RoutePattern],
+    environment=None,
 ):
     channels = _validate_api(
         template,
@@ -346,7 +347,8 @@ def _build_route_model(
             template.template_id,
             channels,
             objective.value,
-        )
+        ),
+        environment=environment,
     )
     try:
         thread_count = _effective_threads(inputs)
@@ -763,6 +765,7 @@ def solve_route_milp(
     objective: ObjectiveMode,
     budget: ModelBudget,
     warm_start: Optional[RoutePattern] = None,
+    environment=None,
 ) -> RoutePattern:
     model, variables, context = _build_route_model(
         template,
@@ -772,6 +775,7 @@ def solve_route_milp(
         objective,
         budget,
         warm_start,
+        environment,
     )
     gp = context.gp
     progress = _PrimaryObjectiveProgress(gp)
@@ -875,3 +879,6 @@ def solve_route_milp(
         )
     finally:
         model.dispose()
+
+
+solve_route_milp.requires_explicit_environment = True

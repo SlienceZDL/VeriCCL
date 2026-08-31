@@ -47,3 +47,38 @@ def test_broken_gurobi_install_is_reported_as_unavailable(monkeypatch):
 
     with pytest.raises(SolverUnavailableError, match="could not be imported"):
         GurobiAdapter.require()
+
+
+def test_model_creation_uses_the_supplied_explicit_environment(monkeypatch):
+    calls = []
+
+    class FakeGurobiError(Exception):
+        pass
+
+    class FakeGp:
+        GurobiError = FakeGurobiError
+
+        @staticmethod
+        def Model(name, **kwargs):
+            calls.append((name, kwargs))
+            return object()
+
+    monkeypatch.setattr(
+        GurobiAdapter,
+        "require",
+        classmethod(lambda cls: FakeGp),
+    )
+    environment = object()
+
+    _, explicit = GurobiAdapter.create_model(
+        "explicit-model",
+        environment=environment,
+    )
+    _, compatible = GurobiAdapter.create_model("compatible-model")
+
+    assert explicit is not None
+    assert compatible is not None
+    assert calls == [
+        ("explicit-model", {"env": environment}),
+        ("compatible-model", {}),
+    ]

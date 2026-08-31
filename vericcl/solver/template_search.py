@@ -4,6 +4,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
+from queue import Queue
 from typing import Dict, Mapping, Tuple
 
 from vericcl.errors import (
@@ -17,6 +18,7 @@ from vericcl.solver.budget import ModelBudget
 from vericcl.solver.cache import candidate_cache_key
 from vericcl.solver.constructive import construct_route_pattern
 from vericcl.solver.demands import SolverProblem
+from vericcl.solver.gurobi_api import GurobiAdapter
 from vericcl.solver.instantiate import instantiate_route_patterns
 from vericcl.solver.model import (
     SearchDiagnostics,
@@ -36,6 +38,7 @@ from vericcl.solver.templates import (
     build_solver_templates,
     split_routing_units,
 )
+from vericcl.topology.model import LinkKey, Topology
 
 
 _monotonic = time.monotonic
@@ -164,20 +167,57 @@ def _makespan(schedule: Schedule) -> float:
     )
 
 
-def _maximum_resource_load(schedule: Schedule) -> float:
+def _maximum_resource_load(
+    schedule: Schedule,
+    topology: Topology,
+    channel_count: int,
+) -> float:
+    if (
+        isinstance(channel_count, bool)
+        or not isinstance(channel_count, int)
+        or channel_count < 1
+    ):
+        raise SemanticError("channel_count must be a positive integer")
     raw_slots = schedule.metadata.get("resource_slots", {})
     if not isinstance(raw_slots, Mapping):
         raise SemanticError("resource_slots metadata must be a mapping")
     loads = defaultdict(float)
     for transfer in schedule.transfers:
         duration = transfer.ed_time - transfer.st_time
-        loads[("link", transfer.src_rank, transfer.dst_rank)] += duration
+        physical = LinkKey(transfer.src_rank, transfer.dst_rank)
+        edge = topology.link(physical)
+        loads[("link", physical)] += duration
         slots = raw_slots.get(transfer.transfer_id, {})
         if not isinstance(slots, Mapping):
             raise SemanticError("transfer resource slots must be a mapping")
+        if set(slots) != set(edge.resource_ids):
+            raise SemanticError(
+                "transfer resource slots do not cover topology resources"
+            )
         for resource_id in slots:
+            resource = topology.shared_resources.get(resource_id)
+            if resource is None or physical not in resource.member_links:
+                raise SemanticError(
+                    "transfer resource slot does not match the topology"
+                )
             loads[("resource", resource_id)] += duration
-    return max(loads.values(), default=0.0)
+    normalized = []
+    for key, load in loads.items():
+        if key[0] == "link":
+            capacity = topology.link(key[1]).max_channels
+        else:
+            capacity = topology.shared_resources[key[1]].max_channels
+        normalized.append(load / min(channel_count, capacity))
+    return max(normalized, default=0.0)
+
+
+def _instantiated_hop_count(schedule: Schedule) -> int:
+    value = schedule.metadata.get("instantiated_path_hop_count")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise SemanticError(
+            "global route schedule must report instantiated path hops"
+        )
+    return value
 
 
 def _objective_values(
@@ -249,9 +289,13 @@ def _candidate(
     model_count: int,
 ) -> SolveCandidate:
     makespan_us = _makespan(global_schedule)
-    resource_load_us = _maximum_resource_load(global_schedule)
+    resource_load_us = _maximum_resource_load(
+        global_schedule,
+        request.topology,
+        channel_count,
+    )
     operation_count = len(global_schedule.transfers)
-    hop_count = operation_count
+    hop_count = _instantiated_hop_count(global_schedule)
     restrictions = {
         restriction
         for schedule in node_schedules.values()
@@ -292,9 +336,7 @@ def _candidate(
             best_bound=0.0,
             mip_gap=mip_gap,
             within_requested_gap=False,
-            solve_time_s=sum(
-                pattern.metrics.solve_time_s for pattern in patterns
-            ),
+            solve_time_s=0.0,
             model_count=model_count,
             operation_count=operation_count,
             hop_count=hop_count,
@@ -320,6 +362,7 @@ def _candidate(
         search_space_restricted=True,
         restrictions=tuple(sorted(restrictions)),
         parent_candidate_id=parent_id,
+        global_schedule=global_schedule,
     )
 
 
@@ -328,6 +371,16 @@ def _work_failure(item: _WorkItem, error: Exception) -> SemanticError:
         "template route work item failed ({}): {}".format(
             item.identity(),
             error,
+        )
+    )
+
+
+def _requires_explicit_environment() -> bool:
+    return bool(
+        getattr(
+            solve_route_milp,
+            "requires_explicit_environment",
+            False,
         )
     )
 
@@ -393,6 +446,47 @@ def search_route_models(
         )[0]
         configured_inputs = _configured_inputs(inputs, thread_count)
         running = {}
+        environments = []
+        environment_pool = None
+        if _requires_explicit_environment() and _monotonic() < deadline:
+            environment_pool = Queue()
+            try:
+                for index in range(worker_count):
+                    environment = GurobiAdapter.create_environment()
+                    environments.append(environment)
+                    environment_pool.put((index, environment))
+            except SolverUnavailableError:
+                backend_unavailable = True
+                for environment in environments:
+                    GurobiAdapter.dispose_environment(environment)
+                environments = []
+                environment_pool = None
+
+        def solve_one(item: _WorkItem, budget: ModelBudget):
+            if environment_pool is None:
+                return solve_route_milp(
+                    item.template,
+                    configured_inputs,
+                    request.topology,
+                    item.channel_count,
+                    objective,
+                    budget,
+                    None,
+                )
+            environment_index, environment = environment_pool.get()
+            try:
+                return solve_route_milp(
+                    item.template,
+                    configured_inputs,
+                    request.topology,
+                    item.channel_count,
+                    objective,
+                    budget,
+                    None,
+                    environment=environment,
+                )
+            finally:
+                environment_pool.put((environment_index, environment))
 
         def submit_one(executor) -> bool:
             nonlocal next_work
@@ -410,68 +504,73 @@ def search_route_models(
             item = work_items[next_work]
             next_work += 1
             measurements.route_model_count += 1
-            future = executor.submit(
-                solve_route_milp,
-                item.template,
-                configured_inputs,
-                request.topology,
-                item.channel_count,
-                objective,
-                budget,
-                None,
-            )
+            future = executor.submit(solve_one, item, budget)
             running[future] = item
             return True
 
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            for _ in range(worker_count):
-                if not submit_one(executor):
-                    break
-            while running:
-                finished, _ = wait(
-                    tuple(running),
-                    return_when=FIRST_COMPLETED,
-                )
-                for future in sorted(
-                    finished,
-                    key=lambda value: running[value],
-                ):
-                    item = running.pop(future)
-                    try:
-                        pattern = future.result()
-                    except SolverUnavailableError:
-                        backend_unavailable = True
-                        pattern = None
-                    except ConstructionInfeasibleError:
-                        pattern = None
-                    except Exception as error:
-                        raise _work_failure(item, error) from error
-                    if pattern is None and inputs.strategies.constructive_trees:
-                        try:
-                            pattern = construct_route_pattern(
-                                item.template,
-                                configured_inputs,
-                                request.topology,
-                                item.channel_count,
-                                objective,
-                            )
-                        except ConstructionInfeasibleError:
-                            pattern = None
-                    if pattern is not None:
-                        if (
-                            not isinstance(pattern, RoutePattern)
-                            or pattern.template_id != item.template_id
-                            or pattern.channel_count != item.channel_count
-                            or pattern.objective_mode is not objective
+        try:
+            if not backend_unavailable:
+                with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                    for _ in range(worker_count):
+                        if not submit_one(executor):
+                            break
+                    while running:
+                        finished, _ = wait(
+                            tuple(running),
+                            return_when=FIRST_COMPLETED,
+                        )
+                        for future in sorted(
+                            finished,
+                            key=lambda value: running[value],
                         ):
-                            raise SemanticError(
-                                "route backend returned a mismatched pattern"
-                            )
-                        patterns[(item.channel_count, item.template_id)] = pattern
-                        if pattern.metrics.model_count > 0:
-                            measurements.record_pattern(pattern)
-                while len(running) < worker_count and submit_one(executor):
-                    pass
+                            item = running.pop(future)
+                            try:
+                                pattern = future.result()
+                            except SolverUnavailableError:
+                                backend_unavailable = True
+                                pattern = None
+                            except ConstructionInfeasibleError:
+                                pattern = None
+                            except Exception as error:
+                                raise _work_failure(item, error) from error
+                            if (
+                                pattern is None
+                                and inputs.strategies.constructive_trees
+                            ):
+                                try:
+                                    pattern = construct_route_pattern(
+                                        item.template,
+                                        configured_inputs,
+                                        request.topology,
+                                        item.channel_count,
+                                        objective,
+                                    )
+                                except ConstructionInfeasibleError:
+                                    pattern = None
+                            if pattern is not None:
+                                if (
+                                    not isinstance(pattern, RoutePattern)
+                                    or pattern.template_id != item.template_id
+                                    or pattern.channel_count
+                                    != item.channel_count
+                                    or pattern.objective_mode is not objective
+                                ):
+                                    raise SemanticError(
+                                        "route backend returned a mismatched pattern"
+                                    )
+                                patterns[
+                                    (item.channel_count, item.template_id)
+                                ] = pattern
+                                if pattern.metrics.model_count > 0:
+                                    measurements.record_pattern(pattern)
+                        while (
+                            len(running) < worker_count
+                            and submit_one(executor)
+                        ):
+                            pass
+        finally:
+            for environment in environments:
+                GurobiAdapter.dispose_environment(environment)
     if not inputs.strategies.milp or backend_unavailable:
         configured_inputs = inputs
         if inputs.strategies.constructive_trees:
@@ -559,23 +658,40 @@ def search_route_models(
                                 cpu_count,
                             ),
                         )
-                        measurements.fallback_member_model_count += 1
                         item = _WorkItem(
                             objective.value,
                             channel_count,
                             fallback.template_id,
                             fallback,
                         )
+                        environment = None
                         try:
-                            pattern = solve_route_milp(
-                                fallback,
-                                fallback_inputs,
-                                request.topology,
-                                channel_count,
-                                objective,
-                                budget,
-                                None,
-                            )
+                            if _requires_explicit_environment():
+                                environment = (
+                                    GurobiAdapter.create_environment()
+                                )
+                            measurements.fallback_member_model_count += 1
+                            if environment is None:
+                                pattern = solve_route_milp(
+                                    fallback,
+                                    fallback_inputs,
+                                    request.topology,
+                                    channel_count,
+                                    objective,
+                                    budget,
+                                    None,
+                                )
+                            else:
+                                pattern = solve_route_milp(
+                                    fallback,
+                                    fallback_inputs,
+                                    request.topology,
+                                    channel_count,
+                                    objective,
+                                    budget,
+                                    None,
+                                    environment=environment,
+                                )
                         except (
                             ConstructionInfeasibleError,
                             SolverUnavailableError,
@@ -583,6 +699,11 @@ def search_route_models(
                             pattern = None
                         except Exception as error:
                             raise _work_failure(item, error) from error
+                        finally:
+                            if environment is not None:
+                                GurobiAdapter.dispose_environment(
+                                    environment
+                                )
                         if pattern is not None:
                             measurements.record_pattern(pattern)
                 if pattern is None and inputs.strategies.constructive_trees:

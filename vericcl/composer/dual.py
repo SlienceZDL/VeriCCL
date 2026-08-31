@@ -571,6 +571,10 @@ def reverse_allgather_schedule(
         "final_outputs": final_outputs,
         "final_ready_times": final_ready_times,
     }
+    if "instantiated_path_hop_count" in ag_schedule.metadata:
+        metadata["instantiated_path_hop_count"] = ag_schedule.metadata[
+            "instantiated_path_hop_count"
+        ]
     if routing_only:
         metadata.update(
             {

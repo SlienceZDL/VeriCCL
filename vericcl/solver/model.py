@@ -243,6 +243,7 @@ class SolveCandidate:
     search_space_restricted: bool
     restrictions: Tuple[str, ...]
     parent_candidate_id: Optional[str]
+    global_schedule: Optional[Schedule] = None
 
     def __post_init__(self) -> None:
         _identifier(self.candidate_id, "solve_candidate.candidate_id")
@@ -304,6 +305,13 @@ class SolveCandidate:
             _identifier(
                 self.parent_candidate_id,
                 "solve_candidate.parent_candidate_id",
+            )
+        if self.global_schedule is not None and not isinstance(
+            self.global_schedule,
+            Schedule,
+        ):
+            raise SemanticError(
+                "solve_candidate.global_schedule must be a Schedule or None"
             )
 
 

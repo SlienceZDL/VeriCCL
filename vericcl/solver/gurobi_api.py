@@ -23,10 +23,32 @@ class GurobiAdapter:
             ) from error
 
     @classmethod
-    def create_model(cls, name):
+    def create_environment(cls):
+        gp = cls.require()
+        environment = None
+        try:
+            environment = gp.Env(empty=True)
+            environment.setParam("OutputFlag", 0)
+            environment.start()
+            return environment
+        except gp.GurobiError as error:
+            if environment is not None:
+                environment.dispose()
+            raise SolverUnavailableError(
+                "Gurobi environment creation failed: {}".format(error)
+            ) from error
+
+    @staticmethod
+    def dispose_environment(environment) -> None:
+        environment.dispose()
+
+    @classmethod
+    def create_model(cls, name, environment=None):
         gp = cls.require()
         try:
-            return gp, gp.Model(name)
+            if environment is None:
+                return gp, gp.Model(name)
+            return gp, gp.Model(name, env=environment)
         except gp.GurobiError as error:
             raise SolverUnavailableError(
                 "Gurobi model creation failed: {}".format(error)

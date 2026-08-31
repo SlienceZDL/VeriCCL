@@ -365,6 +365,7 @@ def _empty_schedule(
         routing_only=True,
         include_resource_order=False,
         include_final_metadata=True,
+        extra_metadata={"instantiated_path_hop_count": 0},
     )
 
 
@@ -408,6 +409,13 @@ def _node_schedule(
         routing_only=True,
         include_resource_order=False,
         include_final_metadata=not next(iter(reduction_flags)),
+        extra_metadata={
+            "instantiated_path_hop_count": sum(
+                len(path)
+                for tree in trees
+                for _, path in tree.selected_paths
+            )
+        },
     )
     if not next(iter(reduction_flags)):
         return virtual

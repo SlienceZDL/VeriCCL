@@ -18,7 +18,11 @@ from vericcl.artifacts.writer import (
     write_resolved_input,
     write_run_summary,
 )
-from vericcl.composer import compose, compose_routes
+from vericcl.composer import (
+    compose,
+    compose_routes,
+    route_node_schedule_identity,
+)
 from vericcl.errors import SemanticError
 from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import ResolvedInput
@@ -599,6 +603,76 @@ def _merge_applied_calibration(
 
 
 def _global_schedule(plan, candidate: SolveCandidate, topology) -> Schedule:
+    if candidate.global_schedule is not None:
+        schedule = candidate.global_schedule
+        expected_nodes = tuple(node.node_id for node in plan.nodes)
+        expected_node_set = set(expected_nodes)
+        if set(candidate.node_schedules) != expected_node_set:
+            raise SemanticError(
+                "carried global schedule requires one schedule per plan node"
+            )
+        if tuple(schedule.metadata.get("plan_nodes", ())) != expected_nodes:
+            raise SemanticError(
+                "carried global schedule does not match the plan identity"
+            )
+        if schedule.metadata.get(
+            "route_node_schedule_identity"
+        ) != route_node_schedule_identity(candidate.node_schedules):
+            raise SemanticError(
+                "carried global schedule does not match node schedule identity"
+            )
+        if (
+            schedule.rank_count != plan.rank_count
+            or schedule.slice_count != plan.slice_count
+            or schedule.rank_count != topology.rank_count
+            or schedule.metadata.get("channel_count")
+            != candidate.channel_count
+            or schedule.metadata.get("global_resources_assigned") is not True
+        ):
+            raise SemanticError(
+                "carried global schedule dimensions or resources are invalid"
+            )
+        node_transfer_ids = set()
+        path_hop_count = 0
+        for node_id in expected_nodes:
+            node_schedule = candidate.node_schedules[node_id]
+            if (
+                node_schedule.rank_count != plan.rank_count
+                or node_schedule.slice_count != plan.slice_count
+                or node_schedule.slice_size_bytes != schedule.slice_size_bytes
+                or node_schedule.metadata.get("routing_only") is not True
+            ):
+                raise SemanticError(
+                    "carried global schedule has an invalid node schedule"
+                )
+            node_transfer_ids.update(
+                transfer.transfer_id for transfer in node_schedule.transfers
+            )
+            node_hops = node_schedule.metadata.get(
+                "instantiated_path_hop_count"
+            )
+            if (
+                isinstance(node_hops, bool)
+                or not isinstance(node_hops, int)
+                or node_hops < 0
+            ):
+                raise SemanticError(
+                    "node schedule must report instantiated path hops"
+                )
+            path_hop_count += node_hops
+        if node_transfer_ids != {
+            transfer.transfer_id for transfer in schedule.transfers
+        }:
+            raise SemanticError(
+                "carried global schedule does not match node transfers"
+            )
+        if schedule.metadata.get(
+            "instantiated_path_hop_count"
+        ) != path_hop_count:
+            raise SemanticError(
+                "carried global schedule path hops do not match node schedules"
+            )
+        return schedule
     if candidate.node_schedules and all(
         schedule.metadata.get("routing_only") is True
         for schedule in candidate.node_schedules.values()
