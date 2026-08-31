@@ -189,6 +189,77 @@ def external_alias_topology():
     )
 
 
+def symmetric_external_alias_topology():
+    node_groups = (
+        (0, 1),
+        (2, 4),
+        (3, 5),
+        (6, 9),
+        (7, 8),
+    )
+    targets = {
+        0: (1, 2),
+        1: (3, 4),
+        2: (0, 1),
+        3: (1, 2),
+        4: (1, 2),
+    }
+    link_resources = {}
+    resources = []
+    for node_index, group in enumerate(node_groups):
+        root, peer = group
+        resource_id = "fabric-{}".format(node_index)
+        members = [(root, peer)]
+        for target_index in targets[node_index]:
+            members.extend(
+                (root, rank) for rank in node_groups[target_index]
+            )
+        for member in members:
+            link_resources.setdefault(member, set()).add(resource_id)
+        link_resources.setdefault((peer, root), set())
+        resources.append(
+            {
+                "id": resource_id,
+                "member_links": [list(member) for member in members],
+                "alpha": 1,
+                "invbw": 2,
+                "max_channels": 8,
+            }
+        )
+    gateways = tuple(group[0] for group in node_groups)
+    for src in gateways:
+        for dst in gateways:
+            if src != dst:
+                link_resources.setdefault((src, dst), set())
+    return topology_from_mapping(
+        {
+            "ranks": 10,
+            "nodes": [
+                {
+                    "id": 101 + node_index * 7,
+                    "ranks": list(group),
+                    "gateways": [group[0]],
+                }
+                for node_index, group in enumerate(node_groups)
+            ],
+            "directed_links": [
+                {
+                    "src": src,
+                    "dst": dst,
+                    "alpha": 1,
+                    "invbw": 2,
+                    "max_channels": 8,
+                    "resources": sorted(resource_ids),
+                }
+                for (src, dst), resource_ids in sorted(
+                    link_resources.items()
+                )
+            ],
+            "shared_resources": resources,
+        }
+    )
+
+
 def test_gateway_groups_do_not_invent_rank_pairs():
     groups = discover_communication_groups(gateway_topology())
 
@@ -475,6 +546,42 @@ def test_external_node_alias_mismatch_falls_back_to_direct_allgather():
     )
 
     plan = build_plan(inputs, external_alias_topology())
+
+    assert plan.planning_mode is PlanningMode.DIRECT
+    assert plan.planning_reason == "no_eligible_gateway_domain"
+
+
+def test_signature_distinguishes_symmetric_crossed_alias_partition():
+    topology = symmetric_external_alias_topology()
+    parallel = exact_domain_signature(topology, (0, 1))
+    crossed = exact_domain_signature(topology, (2, 4))
+    renumbered_parallel = exact_domain_signature(topology, (3, 5))
+
+    assert parallel == renumbered_parallel
+    assert parallel != crossed
+    assert eligible_gateway_groups(
+        topology,
+        discover_communication_groups(topology),
+    ) == ()
+
+
+def test_symmetric_crossed_alias_partition_falls_back_to_direct_allgather():
+    inputs = resolve_inputs(
+        EXAMPLES / "topo" / "two_node_gateway.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    inputs = replace(
+        inputs,
+        rank_count=10,
+        collective=CollectiveSpec(
+            kind=CollectiveKind.ALL_GATHER,
+            datatype="float32",
+        ),
+        strategies=replace(inputs.strategies, hierarchy=True),
+    )
+
+    plan = build_plan(inputs, symmetric_external_alias_topology())
 
     assert plan.planning_mode is PlanningMode.DIRECT
     assert plan.planning_reason == "no_eligible_gateway_domain"

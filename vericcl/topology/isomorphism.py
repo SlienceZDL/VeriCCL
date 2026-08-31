@@ -52,14 +52,43 @@ def _endpoint_shape(
     }
 
 
-def _external_node_labels(
+def _member_shape(
+    topology: Topology,
+    member: object,
+    relative_rank: dict,
+    relative_node: dict,
+    node_members: dict,
+) -> dict:
+    return {
+        "src": _endpoint_shape(
+            topology,
+            member.src_rank,
+            relative_rank,
+            relative_node,
+            node_members,
+        ),
+        "dst": _endpoint_shape(
+            topology,
+            member.dst_rank,
+            relative_rank,
+            relative_node,
+            node_members,
+        ),
+        "same_node": (
+            topology.node_membership[member.src_rank]
+            == topology.node_membership[member.dst_rank]
+        ),
+    }
+
+
+def _external_alias_partition(
     topology: Topology,
     domain_set: set,
     relative_rank: dict,
     relative_node: dict,
     node_members: dict,
 ) -> dict:
-    occurrences = {}
+    resource_records = []
     for key, edge in topology.links.items():
         if key.src_rank not in domain_set or key.dst_rank not in domain_set:
             continue
@@ -72,44 +101,72 @@ def _external_node_labels(
             resource_shape = {
                 "max_channels": resource.max_channels,
                 "performance": _performance(resource.performance),
+                "members": sorted(
+                    (
+                        _member_shape(
+                            topology,
+                            member,
+                            relative_rank,
+                            relative_node,
+                            node_members,
+                        )
+                        for member in resource.member_links
+                    ),
+                    key=canonical_json,
+                ),
             }
-            for member in resource.member_links:
-                endpoints = (
-                    ("src", member.src_rank, member.dst_rank),
-                    ("dst", member.dst_rank, member.src_rank),
+            context = {
+                "link": link_shape,
+                "resource": resource_shape,
+            }
+            resource_records.append(
+                (canonical_json(context), resource_id, context, resource)
+            )
+
+    occurrences = []
+    classes = {}
+    for _, _, context, resource in sorted(resource_records):
+        member_records = []
+        for member in resource.member_links:
+            member_shape = _member_shape(
+                topology,
+                member,
+                relative_rank,
+                relative_node,
+                node_members,
+            )
+            member_records.append(
+                (
+                    canonical_json(member_shape),
+                    member.src_rank,
+                    member.dst_rank,
+                    member_shape,
+                    member,
                 )
-                for side, rank, peer in endpoints:
-                    node = topology.node_membership[rank]
-                    if rank in relative_rank or node in relative_node:
-                        continue
-                    occurrences.setdefault(node, []).append(
-                        {
-                            "link": link_shape,
-                            "resource": resource_shape,
-                            "side": side,
-                            "endpoint": _endpoint_shape(
-                                topology,
-                                rank,
-                                relative_rank,
-                                relative_node,
-                                node_members,
-                            ),
-                            "peer": _endpoint_shape(
-                                topology,
-                                peer,
-                                relative_rank,
-                                relative_node,
-                                node_members,
-                            ),
-                            "same_node": (
-                                topology.node_membership[rank]
-                                == topology.node_membership[peer]
-                            ),
-                        }
-                    )
+            )
+        for _, _, _, member_shape, member in sorted(member_records):
+            endpoints = (
+                ("src", member.src_rank),
+                ("dst", member.dst_rank),
+            )
+            for side, rank in endpoints:
+                node = topology.node_membership[rank]
+                if rank in relative_rank or node in relative_node:
+                    continue
+                occurrence_index = len(occurrences)
+                occurrences.append(
+                    {
+                        "context": context,
+                        "member": member_shape,
+                        "side": side,
+                    }
+                )
+                classes.setdefault(node, []).append(occurrence_index)
     return {
-        node: sha256_json(sorted(values, key=canonical_json))
-        for node, values in occurrences.items()
+        "occurrences": occurrences,
+        "classes": sorted(
+            tuple(indices) for indices in classes.values()
+        ),
     }
 
 
@@ -134,7 +191,7 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
                 "gateway": rank in topology.gateways,
             }
         )
-    external_node_labels = _external_node_labels(
+    external_alias_partition = _external_alias_partition(
         topology,
         domain_set,
         relative_rank,
@@ -150,28 +207,13 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
         for resource_id in edge.resource_ids:
             resource = topology.shared_resources[resource_id]
             members = [
-                {
-                    "src": _relative_endpoint(
-                        topology,
-                        member.src_rank,
-                        relative_rank,
-                        relative_node,
-                        node_members,
-                        external_node_labels,
-                    ),
-                    "dst": _relative_endpoint(
-                        topology,
-                        member.dst_rank,
-                        relative_rank,
-                        relative_node,
-                        node_members,
-                        external_node_labels,
-                    ),
-                    "same_node": (
-                        topology.node_membership[member.src_rank]
-                        == topology.node_membership[member.dst_rank]
-                    ),
-                }
+                _member_shape(
+                    topology,
+                    member,
+                    relative_rank,
+                    relative_node,
+                    node_members,
+                )
                 for member in resource.member_links
             ]
             resources.append(
@@ -200,28 +242,6 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
         "rank_count": len(domain),
         "roles": roles,
         "links": sorted(links, key=lambda item: (item["src"], item["dst"])),
+        "external_alias_partition": external_alias_partition,
     }
     return sha256_json(value)
-
-
-def _relative_endpoint(
-    topology: Topology,
-    rank: int,
-    relative_rank: dict,
-    relative_node: dict,
-    node_members: dict,
-    external_node_labels: dict,
-) -> dict:
-    value = _endpoint_shape(
-        topology,
-        rank,
-        relative_rank,
-        relative_node,
-        node_members,
-    )
-    if rank in relative_rank:
-        return value
-    node = topology.node_membership[rank]
-    if node not in relative_node:
-        value["external_node"] = external_node_labels[node]
-    return value
