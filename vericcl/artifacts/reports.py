@@ -201,6 +201,7 @@ class CandidateReport:
     model_constraints_max: int = 0
     model_general_constraints_max: int = 0
     verification_time_s: float = 0.0
+    cache_hit: bool = False
 
     def __post_init__(self) -> None:
         for field in (
@@ -253,6 +254,8 @@ class CandidateReport:
                 "candidate report verification_time_s",
             ),
         )
+        if not isinstance(self.cache_hit, bool):
+            raise SemanticError("candidate report cache_hit must be a boolean")
 
 
 def build_candidate_report(
@@ -270,6 +273,7 @@ def build_candidate_report(
     tuning_strategy: Mapping[str, object],
     diagnostics: Optional[SearchDiagnostics] = None,
     verification_time_s: float = 0.0,
+    cache_hit: bool = False,
 ) -> CandidateReport:
     if not isinstance(candidate, SolveCandidate):
         raise SemanticError("candidate must be a SolveCandidate")
@@ -279,6 +283,7 @@ def build_candidate_report(
         raise SemanticError("topology must be a Topology")
     if not isinstance(outcome, VerificationOutcome):
         raise SemanticError("outcome must be a VerificationOutcome")
+    hierarchy_value = _mapping(hierarchy_plan, "hierarchy_plan")
     if outcome.artifact is None:
         raise SemanticError("candidate report requires an XML artifact")
     diagnostics_value = (
@@ -307,7 +312,6 @@ def build_candidate_report(
     )
     xml_sha256 = outcome.artifact.sha256
     requested = _strategies(inputs)
-    hierarchy_value = _mapping(hierarchy_plan, "hierarchy_plan")
     unknown_applied = set(applied_strategies) - set(requested)
     if unknown_applied:
         raise SemanticError("applied strategies contain an unknown field")
@@ -385,6 +389,7 @@ def build_candidate_report(
             diagnostics_value.model_general_constraints_max
         ),
         verification_time_s=verification_time_s,
+        cache_hit=cache_hit,
     )
 
 

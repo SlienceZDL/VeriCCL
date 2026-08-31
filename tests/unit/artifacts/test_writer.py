@@ -202,6 +202,155 @@ def test_writer_reports_diagnostics_without_changing_stable_sidecar(tmp_path):
     assert "global_schedule" not in sidecar["candidate"]
 
 
+def test_sidecar_bytes_ignore_solver_and_diagnostic_wall_clocks(tmp_path):
+    input_value = inputs()
+    topology_value = topology()
+    schedule = two_rank_allreduce_schedule()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology_value,
+    )
+    first_layout = create_run_layout(
+        tmp_path / "first",
+        input_value,
+        run_id="first",
+    )
+    second_layout = create_run_layout(
+        tmp_path / "second",
+        input_value,
+        run_id="second",
+    )
+    first_candidate = _candidate(schedule)
+    second_candidate = replace(
+        first_candidate,
+        metrics=replace(first_candidate.metrics, solve_time_s=91.0),
+    )
+    first = write_candidate_artifact(
+        first_layout,
+        input_value,
+        topology_value,
+        first_candidate,
+        schedule,
+        outcome,
+        iteration=0,
+        selected_best=True,
+        accepted=True,
+        rejection_reason=None,
+        diagnostics=SearchDiagnostics(
+            route_model_build_time_s=0.25,
+            route_model_optimize_time_s=0.5,
+        ),
+        verification_time_s=0.75,
+    )
+    second = write_candidate_artifact(
+        second_layout,
+        input_value,
+        topology_value,
+        second_candidate,
+        schedule,
+        outcome,
+        iteration=0,
+        selected_best=True,
+        accepted=True,
+        rejection_reason=None,
+        diagnostics=SearchDiagnostics(
+            route_model_build_time_s=21.0,
+            route_model_optimize_time_s=34.0,
+        ),
+        verification_time_s=55.0,
+    )
+
+    assert first.schedule_path.read_bytes() == second.schedule_path.read_bytes()
+    first_report = json.loads(first.report_path.read_text(encoding="utf-8"))
+    second_report = json.loads(second.report_path.read_text(encoding="utf-8"))
+    assert first_report["solver_metrics"]["solve_time_s"] == 0.25
+    assert second_report["solver_metrics"]["solve_time_s"] == 91.0
+    assert first_report["verification_time_s"] == 0.75
+    assert second_report["verification_time_s"] == 55.0
+
+
+def test_sidecar_missing_solve_time_reads_as_zero(tmp_path):
+    input_value = inputs()
+    topology_value = topology()
+    schedule = two_rank_allreduce_schedule()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology_value,
+    )
+    layout = create_run_layout(tmp_path, input_value, run_id="no-solve-time")
+    artifact = write_candidate_artifact(
+        layout,
+        input_value,
+        topology_value,
+        _candidate(schedule),
+        schedule,
+        outcome,
+        iteration=0,
+        selected_best=True,
+        accepted=True,
+        rejection_reason=None,
+    )
+    payload = json.loads(artifact.schedule_path.read_text(encoding="utf-8"))
+    assert "solve_time_s" not in payload["candidate"]["metrics"]
+    artifact.schedule_path.write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+    sidecar = read_schedule_sidecar(artifact.schedule_path)
+
+    assert sidecar.candidate.metrics.solve_time_s == 0.0
+
+    payload["candidate"]["metrics"]["solve_time_s"] = 4.5
+    artifact.schedule_path.write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+    legacy = read_schedule_sidecar(artifact.schedule_path)
+
+    assert legacy.candidate.metrics.solve_time_s == 4.5
+
+
+@pytest.mark.parametrize("has_xml", (True, False))
+def test_writer_rejects_malformed_hierarchy_before_report_branch(
+    tmp_path,
+    has_xml,
+):
+    input_value = inputs()
+    topology_value = topology()
+    schedule = two_rank_allreduce_schedule()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology_value,
+    )
+    if not has_xml:
+        outcome = replace(outcome, artifact=None)
+    layout = create_run_layout(
+        tmp_path,
+        input_value,
+        run_id="hierarchy-{}".format(has_xml),
+    )
+
+    with pytest.raises(SemanticError, match="hierarchy_plan"):
+        write_candidate_artifact(
+            layout,
+            input_value,
+            topology_value,
+            _candidate(schedule),
+            schedule,
+            outcome,
+            iteration=0,
+            selected_best=True,
+            accepted=True,
+            rejection_reason=None,
+            hierarchy_plan=object(),
+        )
+
+
 def test_writer_uses_candidate_suffix_and_final_alias_is_exact(tmp_path):
     input_value = inputs()
     topology_value = topology()

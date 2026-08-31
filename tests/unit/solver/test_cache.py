@@ -8,18 +8,20 @@ import pytest
 
 from vericcl.errors import SemanticError
 from vericcl.input.loader import resolve_inputs
+from vericcl.input.json_codec import canonical_json
 from vericcl.planner.build import build_plan
 from vericcl.planner.model import PlanningMode
 from vericcl.solver.cache import (
     CacheSignature,
     CandidateCache,
+    _CacheEntry,
     build_cache_signature,
     candidate_cache_key,
     performance_cache_key,
     structural_cache_key,
 )
 from vericcl.solver.demands import build_solver_problem
-from vericcl.solver.model import SolveRequest, SolveStatus
+from vericcl.solver.model import SearchDiagnostics, SolveRequest, SolveStatus
 from vericcl.solver.orchestrator import solve
 from vericcl.solver.templates import build_solver_templates
 from vericcl.topology.loader import load_topology
@@ -169,13 +171,49 @@ def test_cache_key_versions_are_explicit_and_independent():
         replace(signature, planning_mode="manual"),
     )
     assert CacheSignature().backend_type == "template_route"
-    assert signature == CacheSignature(
-        backend_type="template_route",
-        planning_mode=value.plan.planning_mode.value,
-        problem_summaries=signature.problem_summaries,
-        template_exact_signatures=signature.template_exact_signatures,
-        template_member_mappings=signature.template_member_mappings,
+    assert signature.problem_count == len(problems)
+    assert signature.template_count == len(templates)
+    assert signature.template_member_count == sum(
+        len(template.members) for template in templates
     )
+    assert len(signature.structure_digest_sha256) == 64
+    assert len(signature.problem_digest_sha256) == 64
+    assert len(signature.template_digest_sha256) == 64
+
+
+def test_cache_signature_serialized_size_is_bounded_across_slice_counts():
+    sizes = []
+    for slice_count in (2, 8, 32, 128, 512):
+        value = request()
+        inputs = replace(
+            value.inputs,
+            hyperparameters=replace(
+                value.inputs.hyperparameters,
+                total_size_bytes=(
+                    slice_count
+                    * value.inputs.hyperparameters.slice_size_bytes
+                ),
+            ),
+        )
+        value = replace(
+            value,
+            inputs=inputs,
+            plan=build_plan(inputs, value.topology),
+        )
+        problems = tuple(
+            build_solver_problem(node, value.inputs, value.topology)
+            for node in value.plan.nodes
+        )
+        templates = build_solver_templates(
+            problems,
+            value.plan.planning_mode,
+        )
+
+        signature = build_cache_signature(value, problems, templates)
+        sizes.append(len(canonical_json(signature)))
+
+    assert max(sizes) < 700
+    assert max(sizes) - min(sizes) < 32
 
 
 def test_cache_key_tracks_exact_templates_and_member_mappings_stably():
@@ -326,6 +364,49 @@ def test_complete_cache_entry_is_returned_unchanged():
 
     assert cache.get("key", now=1) is value
     assert cache.get("missing", now=1) is None
+
+
+def test_typed_cache_entry_round_trips_candidate_and_diagnostics():
+    cache = CandidateCache()
+    value = candidate()
+    diagnostics = SearchDiagnostics(
+        requested_problem_count=2,
+        route_model_count=3,
+        search_model_count_total=3,
+        route_model_build_time_s=1.25,
+        route_model_optimize_time_s=2.5,
+        model_variables_max=17,
+    )
+    cache.put(
+        "key",
+        value,
+        ttl_seconds=10,
+        complete=True,
+        now=0,
+        diagnostics=diagnostics,
+    )
+
+    cached = cache.get_entry("key", now=1)
+
+    assert cached is not None
+    assert cached.candidate is value
+    assert cached.diagnostics == diagnostics
+
+
+def test_candidate_only_cache_entry_reads_with_default_diagnostics():
+    cache = CandidateCache()
+    value = candidate()
+    cache._entries["key"] = _CacheEntry(
+        value=value,
+        expires_at=10.0,
+        complete=True,
+    )
+
+    cached = cache.get_entry("key", now=1)
+
+    assert cached is not None
+    assert cached.candidate is value
+    assert cached.diagnostics == SearchDiagnostics()
 
 
 @pytest.mark.parametrize("key_function", [structural_cache_key, performance_cache_key])

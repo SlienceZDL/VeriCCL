@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+import vericcl.solver.orchestrator as orchestrator_module
 import vericcl.workflow as workflow_module
+from vericcl.solver.cache import CandidateCache
 from vericcl.workflow import RunContext, execute_solve, execute_verify
 from vericcl.errors import SemanticError
 from vericcl.solver.model import SearchDiagnostics
@@ -195,6 +197,66 @@ def test_workflow_propagates_run_diagnostics_and_measured_times(
     assert report["verification_time_s"] > 0.0
     assert summary["verification_time_s"] >= report["verification_time_s"]
     assert summary["total_wall_clock_time_s"] == summary["elapsed_s"]
+
+
+def test_workflow_reports_cold_and_hot_cache_diagnostic_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_DEFAULT_CACHE",
+        CandidateCache(),
+    )
+
+    cold = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="cache-cold",
+        )
+    )
+    hot = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="cache-hot",
+        )
+    )
+    cold_summary = json.loads(cold.layout.summary.read_text(encoding="utf-8"))
+    hot_summary = json.loads(hot.layout.summary.read_text(encoding="utf-8"))
+    cold_report = json.loads(cold.final_report.read_text(encoding="utf-8"))
+    hot_report = json.loads(hot.final_report.read_text(encoding="utf-8"))
+
+    assert cold_summary["cache_hit"] is False
+    assert hot_summary["cache_hit"] is True
+    assert cold_report["cache_hit"] is False
+    assert hot_report["cache_hit"] is True
+    for field in (
+        "requested_problem_count",
+        "routing_unit_count",
+        "template_count",
+        "template_member_count",
+        "route_model_count",
+        "search_model_count_total",
+    ):
+        assert hot_summary[field] == cold_summary[field]
+        assert hot_report[field] == cold_report[field]
+    assert hot_summary["requested_problem_count"] > 0
+    assert hot_summary["template_count"] > 0
+    for field in (
+        "route_model_build_time_s",
+        "route_model_optimize_time_s",
+        "template_expansion_time_s",
+        "global_scheduling_time_s",
+    ):
+        assert hot_summary[field] == 0.0
+        assert hot_report[field] == 0.0
 
 
 def test_solve_reports_direct_fallback_for_requested_hierarchy(tmp_path):

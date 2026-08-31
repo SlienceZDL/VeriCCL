@@ -28,7 +28,11 @@ from vericcl.solver.model import (
     SolverMetrics,
 )
 from vericcl.solver.objectives import rank_candidates
-from vericcl.solver.routing import RoutePattern
+from vericcl.solver.routing import (
+    RoutePattern,
+    RoutingModelFailure,
+    RoutingModelStats,
+)
 from vericcl.solver.routing_milp import solve_route_milp
 from vericcl.solver.search import allocate_model_threads
 from vericcl.solver.templates import (
@@ -90,7 +94,9 @@ class _Measurements:
     general_constraints_max: int = 0
 
     def record_pattern(self, pattern: RoutePattern) -> None:
-        stats = pattern.model_stats
+        self.record_stats(pattern.model_stats)
+
+    def record_stats(self, stats: RoutingModelStats) -> None:
         self.build_time_s += stats.build_time_s
         self.optimize_time_s += stats.optimize_time_s
         self.variables_max = max(self.variables_max, stats.variable_count)
@@ -389,24 +395,63 @@ def _requires_explicit_environment() -> bool:
     )
 
 
+def _instantiate_with_timing(
+    request: SolveRequest,
+    templates: Tuple[SolverTemplate, ...],
+    patterns: Mapping[str, RoutePattern],
+    inputs: ResolvedInput,
+    measurements: _Measurements,
+):
+    started = _monotonic()
+    try:
+        return instantiate_route_patterns(
+            request.plan,
+            templates,
+            patterns,
+            inputs,
+            request.topology,
+        )
+    finally:
+        measurements.expansion_time_s += max(
+            0.0,
+            _monotonic() - started,
+        )
+
+
 def search_route_models(
     request: SolveRequest,
     problems: Tuple[SolverProblem, ...],
     objective: ObjectiveMode,
     deadline: float,
+    *,
+    templates: Optional[Tuple[SolverTemplate, ...]] = None,
+    cache_key: Optional[str] = None,
 ) -> TemplateSearchResult:
     from vericcl.composer import compose_routes
 
     problems = _validate_api(request, problems, objective, deadline)
     inputs = problems[0].inputs
-    templates = build_solver_templates(
-        problems,
-        request.plan.planning_mode,
-    )
-    cache_key = candidate_cache_key(
-        request,
-        build_cache_signature(request, problems, templates),
-    )
+    if templates is None:
+        templates = build_solver_templates(
+            problems,
+            request.plan.planning_mode,
+        )
+    else:
+        try:
+            templates = tuple(templates)
+        except TypeError as error:
+            raise SemanticError("templates must be iterable") from error
+        if not all(isinstance(value, SolverTemplate) for value in templates):
+            raise SemanticError(
+                "templates must contain SolverTemplate values"
+            )
+    if cache_key is None:
+        cache_key = candidate_cache_key(
+            request,
+            build_cache_signature(request, problems, templates),
+        )
+    elif not isinstance(cache_key, str) or not cache_key:
+        raise SemanticError("cache_key must be a non-empty string")
     units = tuple(
         unit for problem in problems for unit in split_routing_units(problem)
     )
@@ -537,6 +582,9 @@ def search_route_models(
                             except SolverUnavailableError:
                                 backend_unavailable = True
                                 pattern = None
+                            except RoutingModelFailure as error:
+                                measurements.record_stats(error.model_stats)
+                                pattern = None
                             except ConstructionInfeasibleError:
                                 pattern = None
                             except Exception as error:
@@ -609,15 +657,13 @@ def search_route_models(
         }
         if len(base_patterns) != len(templates):
             continue
-        expansion_started = _monotonic()
-        instantiated = instantiate_route_patterns(
-            request.plan,
+        instantiated = _instantiate_with_timing(
+            request,
             templates,
             base_patterns,
             inputs,
-            request.topology,
+            measurements,
         )
-        expansion_time = max(0.0, _monotonic() - expansion_started)
         candidate_templates = list(templates)
         candidate_patterns = dict(base_patterns)
         if instantiated.failures:
@@ -700,6 +746,9 @@ def search_route_models(
                                     None,
                                     environment=environment,
                                 )
+                        except RoutingModelFailure as error:
+                            measurements.record_stats(error.model_stats)
+                            pattern = None
                         except (
                             ConstructionInfeasibleError,
                             SolverUnavailableError,
@@ -752,17 +801,12 @@ def search_route_models(
                 continue
             candidate_templates = adjusted + fallback_templates
             candidate_patterns.update(fallback_patterns)
-            expansion_started = _monotonic()
-            instantiated = instantiate_route_patterns(
-                request.plan,
+            instantiated = _instantiate_with_timing(
+                request,
                 tuple(candidate_templates),
                 candidate_patterns,
                 inputs,
-                request.topology,
-            )
-            expansion_time += max(
-                0.0,
-                _monotonic() - expansion_started,
+                measurements,
             )
             if instantiated.failures:
                 continue
@@ -796,7 +840,6 @@ def search_route_models(
                 cache_key,
             )
         )
-        measurements.expansion_time_s += expansion_time
         measurements.scheduling_time_s += scheduling_time
     diagnostics = SearchDiagnostics(
         requested_problem_count=len(problems),

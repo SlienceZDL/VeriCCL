@@ -64,6 +64,7 @@ def build_run_summary(
     planning_mode: str = "unknown",
     diagnostics: Optional[SearchDiagnostics] = None,
     verification_time_s: float = 0.0,
+    cache_hit: bool = False,
 ) -> Mapping[str, object]:
     if mode not in {"solve", "verify"}:
         raise SemanticError("run summary mode must be solve or verify")
@@ -94,6 +95,8 @@ def build_run_summary(
         raise SemanticError(
             "run summary verification_time_s must be finite and non-negative"
         )
+    if not isinstance(cache_hit, bool):
+        raise SemanticError("run summary cache_hit must be a boolean")
     final_selection = None
     if final_candidate_id is not None:
         selected = tuple(
@@ -150,6 +153,7 @@ def build_run_summary(
             diagnostics_value.model_general_constraints_max
         ),
         "verification_time_s": float(verification_time_s),
+        "cache_hit": cache_hit,
         "candidates": tuple(candidate_summary(layout, item) for item in values),
         "final_selection": final_selection,
     }

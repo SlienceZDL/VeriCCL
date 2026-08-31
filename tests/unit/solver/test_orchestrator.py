@@ -107,7 +107,16 @@ def test_explicit_workflow_budget_bounds_solver_deadline(monkeypatch):
     )
     captured = []
 
-    def no_candidates(request_value, problems, objective, deadline):
+    def no_candidates(
+        request_value,
+        problems,
+        objective,
+        deadline,
+        *,
+        templates,
+        cache_key,
+    ):
+        del templates, cache_key
         captured.append(deadline)
         return TemplateSearchResult((), SearchDiagnostics())
 
@@ -452,6 +461,41 @@ def test_force_resolve_bypasses_complete_candidate_cache(monkeypatch):
     assert calls
 
 
+def test_cache_hit_preserves_structural_diagnostics_and_zeros_hit_times():
+    cache = CandidateCache()
+    request = _request()
+
+    cold = solve(request, cache=cache)
+    hot = solve(request, cache=cache)
+
+    assert not cold.cache_hit
+    assert hot.cache_hit
+    assert hot.selected_candidate is not None
+    assert hot.selected_candidate.metrics == cold.selected_candidate.metrics
+    for field in (
+        "requested_problem_count",
+        "routing_unit_count",
+        "template_count",
+        "template_member_count",
+        "route_model_count",
+        "fallback_member_model_count",
+        "search_model_count_total",
+        "model_variables_max",
+        "model_constraints_max",
+        "model_general_constraints_max",
+    ):
+        assert getattr(hot.diagnostics, field) == getattr(
+            cold.diagnostics,
+            field,
+        )
+    assert hot.diagnostics.requested_problem_count > 0
+    assert hot.diagnostics.template_count > 0
+    assert hot.diagnostics.route_model_build_time_s == 0.0
+    assert hot.diagnostics.route_model_optimize_time_s == 0.0
+    assert hot.diagnostics.template_expansion_time_s == 0.0
+    assert hot.diagnostics.global_scheduling_time_s == 0.0
+
+
 def test_auto_skips_throughput_when_cv_adjusted_gain_is_too_small(
     monkeypatch,
 ):
@@ -463,7 +507,16 @@ def test_auto_skips_throughput_when_cv_adjusted_gain_is_too_small(
     )
     objectives = []
 
-    def template_pipeline(request_value, problems, objective, deadline):
+    def template_pipeline(
+        request_value,
+        problems,
+        objective,
+        deadline,
+        *,
+        templates,
+        cache_key,
+    ):
+        del templates, cache_key
         del problems, deadline
         objectives.append(objective)
         return TemplateSearchResult(
@@ -509,7 +562,16 @@ def test_auto_does_not_prune_with_unstable_calibration(monkeypatch):
     )
     objectives = []
 
-    def template_pipeline(request_value, problems, objective, deadline):
+    def template_pipeline(
+        request_value,
+        problems,
+        objective,
+        deadline,
+        *,
+        templates,
+        cache_key,
+    ):
+        del templates, cache_key
         del problems, deadline
         objectives.append(objective)
         count = 2 if objective is ObjectiveMode.LATENCY else 3
@@ -563,7 +625,16 @@ def test_auto_keeps_latency_candidate_when_total_budget_expires(
     )
     times = iter((0.0, 11_000.0))
 
-    def latency_only(request_value, problems, objective, deadline):
+    def latency_only(
+        request_value,
+        problems,
+        objective,
+        deadline,
+        *,
+        templates,
+        cache_key,
+    ):
+        del templates, cache_key
         del problems, deadline
         assert objective is ObjectiveMode.LATENCY
         return TemplateSearchResult(
@@ -663,7 +734,16 @@ def test_default_and_strict_requests_use_disjoint_solver_paths(monkeypatch):
     )
     calls = []
 
-    def template_pipeline(request, problems, objective, deadline):
+    def template_pipeline(
+        request,
+        problems,
+        objective,
+        deadline,
+        *,
+        templates,
+        cache_key,
+    ):
+        del templates, cache_key
         calls.append("template_route_pipeline")
         return TemplateSearchResult(
             (_backend_candidate(request, objective, proven=False),),
@@ -674,7 +754,15 @@ def test_default_and_strict_requests_use_disjoint_solver_paths(monkeypatch):
             ),
         )
 
-    def legacy_pipeline(request, problems, objective, deadline):
+    def legacy_pipeline(
+        request,
+        problems,
+        objective,
+        deadline,
+        *,
+        cache_key,
+    ):
+        del cache_key
         calls.append("legacy_full_time_milp")
         return TemplateSearchResult(
             (_backend_candidate(request, objective, proven=True),),
@@ -745,3 +833,66 @@ def test_solver_paths_use_distinct_cache_backend_signatures():
     assert default_signature.backend_type == "template_route"
     assert strict_signature.backend_type == "legacy_full_time_milp"
     assert default_signature != strict_signature
+
+
+def test_solver_prepares_templates_once_per_solve(monkeypatch):
+    from vericcl.solver import template_search
+
+    request = _request(force_resolve=True)
+    original = build_solver_templates
+    calls = []
+
+    def counted(problems, planning_mode):
+        calls.append((tuple(problems), planning_mode))
+        return original(problems, planning_mode)
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "build_solver_templates",
+        counted,
+    )
+    monkeypatch.setattr(
+        template_search,
+        "build_solver_templates",
+        counted,
+    )
+
+    result = solve(request, cache=CandidateCache())
+
+    assert result.selected_candidate is not None
+    assert len(calls) == 1
+
+
+def test_legacy_candidate_id_uses_authoritative_cache_key():
+    request = _request(require_proven_optimal=True)
+    problems = tuple(
+        build_solver_problem(node, request.inputs, request.topology)
+        for node in request.plan.nodes
+    )
+    local = {}
+    for problem in problems:
+        schedule = orchestrator_module.construct_candidate(problem, 1)
+        local[problem.node.node_id] = (
+            orchestrator_module._constructive_candidate(
+                problem,
+                schedule,
+                ObjectiveMode.LATENCY,
+                1,
+                None,
+            )
+        )
+    signature = build_cache_signature(request, problems, ())
+    from vericcl.solver.cache import candidate_cache_key
+
+    cache_key = candidate_cache_key(request, signature)
+
+    combined = orchestrator_module._combine_node_candidates(
+        request,
+        local,
+        "milp",
+        ObjectiveMode.LATENCY,
+        1,
+        cache_key=cache_key,
+    )
+
+    assert combined.candidate_id.endswith(cache_key[:12])

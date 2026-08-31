@@ -15,7 +15,11 @@ from vericcl.solver.objectives import (
     ObjectiveExpressions,
     configure_lexicographic_objective,
 )
-from vericcl.solver.routing import RoutePattern, RoutingModelStats
+from vericcl.solver.routing import (
+    RoutePattern,
+    RoutingModelFailure,
+    RoutingModelStats,
+)
 from vericcl.solver.scheduling import NUMERICAL_TOLERANCE
 from vericcl.solver.templates import SolverTemplate
 from vericcl.topology.model import LinkKey, Topology
@@ -767,27 +771,68 @@ def solve_route_milp(
     warm_start: Optional[RoutePattern] = None,
     environment=None,
 ) -> RoutePattern:
-    model, variables, context = _build_route_model(
-        template,
-        inputs,
-        topology,
-        channel_count,
-        objective,
-        budget,
-        warm_start,
-        environment,
-    )
+    build_started = time.monotonic()
+    try:
+        model, variables, context = _build_route_model(
+            template,
+            inputs,
+            topology,
+            channel_count,
+            objective,
+            budget,
+            warm_start,
+            environment,
+        )
+    except RoutingModelFailure:
+        raise
+    except ConstructionInfeasibleError as error:
+        raise RoutingModelFailure(
+            str(error),
+            RoutingModelStats(
+                variable_count=0,
+                constraint_count=0,
+                general_constraint_count=0,
+                build_time_s=max(0.0, time.monotonic() - build_started),
+                optimize_time_s=0.0,
+            ),
+        ) from error
     gp = context.gp
     progress = _PrimaryObjectiveProgress(gp)
     optimize_started = time.monotonic()
     try:
-        status = _optimize_route_model(model, progress)
+        try:
+            status = _optimize_route_model(model, progress)
+        except RoutingModelFailure:
+            raise
+        except ConstructionInfeasibleError as error:
+            raise RoutingModelFailure(
+                str(error),
+                RoutingModelStats(
+                    variable_count=context.variable_count,
+                    constraint_count=context.constraint_count,
+                    general_constraint_count=(
+                        context.general_constraint_count
+                    ),
+                    build_time_s=context.build_time_s,
+                    optimize_time_s=max(
+                        0.0,
+                        time.monotonic() - optimize_started,
+                    ),
+                ),
+            ) from error
         optimize_time = max(0.0, time.monotonic() - optimize_started)
         if model.SolCount <= 0:
-            raise ConstructionInfeasibleError(
+            raise RoutingModelFailure(
                 "representative routing model has no incumbent: status {}".format(
                     model.Status
-                )
+                ),
+                RoutingModelStats(
+                    variable_count=context.variable_count,
+                    constraint_count=context.constraint_count,
+                    general_constraint_count=context.general_constraint_count,
+                    build_time_s=context.build_time_s,
+                    optimize_time_s=optimize_time,
+                ),
             )
         selected_edges = tuple(
             (link.src_rank, link.dst_rank)

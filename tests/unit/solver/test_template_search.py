@@ -24,6 +24,7 @@ from vericcl.solver.instantiate import (
 )
 from vericcl.solver.gurobi_api import GurobiAdapter
 from vericcl.solver.model import SolveRequest
+from vericcl.solver.budget import ModelBudget
 from vericcl.solver.template_search import (
     _candidate,
     _maximum_resource_load,
@@ -928,6 +929,161 @@ def test_route_model_without_incumbent_constructs_only_the_representative(
     assert result.diagnostics.route_model_count == 1
     assert result.diagnostics.fallback_member_model_count == 0
     assert result.diagnostics.search_model_count_total == 1
+
+
+def test_failed_route_attempts_preserve_model_stats(monkeypatch):
+    from vericcl.solver.routing import RoutingModelFailure
+
+    request = _configured_request(max_channels=2, max_parallel_models=1)
+    request = replace(
+        request,
+        inputs=replace(
+            request.inputs,
+            strategies=replace(
+                request.inputs.strategies,
+                constructive_trees=False,
+                milp=True,
+            ),
+        ),
+    )
+    problems = tuple(
+        build_solver_problem(node, request.inputs, request.topology)
+        for node in request.plan.nodes
+    )
+    templates = build_solver_templates(problems, request.plan.planning_mode)
+    stats = replace(
+        _pattern(
+            templates[0],
+            request.inputs,
+            1,
+            ObjectiveMode.LATENCY,
+        ).model_stats,
+        variable_count=11,
+        constraint_count=13,
+        general_constraint_count=17,
+        build_time_s=1.25,
+        optimize_time_s=2.5,
+    )
+
+    def no_incumbent(*args, **kwargs):
+        del args, kwargs
+        raise RoutingModelFailure("no incumbent", stats)
+
+    monkeypatch.setattr(
+        "vericcl.solver.template_search.solve_route_milp",
+        no_incumbent,
+    )
+    monkeypatch.setattr(
+        "vericcl.solver.template_search.os.cpu_count",
+        lambda: 1,
+    )
+    monkeypatch.setattr(
+        "vericcl.solver.template_search._monotonic",
+        lambda: 0.0,
+    )
+
+    result = search_route_models(
+        request,
+        problems,
+        ObjectiveMode.LATENCY,
+        deadline=100.0,
+    )
+
+    attempts = len(templates) * 2
+    assert result.candidates == ()
+    assert result.diagnostics.route_model_count == attempts
+    assert result.diagnostics.search_model_count_total == attempts
+    assert result.diagnostics.route_model_build_time_s == 1.25 * attempts
+    assert result.diagnostics.route_model_optimize_time_s == 2.5 * attempts
+    assert result.diagnostics.model_variables_max == 11
+    assert result.diagnostics.model_constraints_max == 13
+    assert result.diagnostics.model_general_constraints_max == 17
+
+
+def test_route_build_infeasibility_carries_elapsed_stats(monkeypatch):
+    from vericcl.solver import routing_milp
+    from vericcl.solver.routing import RoutingModelFailure
+
+    request = _configured_request(max_channels=1, max_parallel_models=1)
+    problems = tuple(
+        build_solver_problem(node, request.inputs, request.topology)
+        for node in request.plan.nodes
+    )
+    template = build_solver_templates(
+        problems,
+        request.plan.planning_mode,
+    )[0]
+    clock = iter((10.0, 12.5))
+
+    def infeasible(*args, **kwargs):
+        del args, kwargs
+        raise ConstructionInfeasibleError("no legal path")
+
+    monkeypatch.setattr(routing_milp, "_build_route_model", infeasible)
+    monkeypatch.setattr(routing_milp.time, "monotonic", lambda: next(clock))
+
+    with pytest.raises(RoutingModelFailure) as captured:
+        routing_milp.solve_route_milp(
+            template,
+            request.inputs,
+            request.topology,
+            1,
+            ObjectiveMode.LATENCY,
+            ModelBudget(100.0, 0.0, 100.0),
+        )
+
+    assert captured.value.model_stats.build_time_s == 2.5
+    assert captured.value.model_stats.optimize_time_s == 0.0
+    assert captured.value.model_stats.variable_count == 0
+
+
+def test_failed_expansion_is_included_in_diagnostics(monkeypatch):
+    request = _request(
+        constructive=True,
+        milp=False,
+        force_resolve=True,
+    )
+    problems = tuple(
+        build_solver_problem(node, request.inputs, request.topology)
+        for node in request.plan.nodes
+    )
+    finished = {"expansion": False}
+
+    def clock():
+        return 3.0 if finished["expansion"] else 0.0
+
+    def failed_expansion(*args, **kwargs):
+        del args, kwargs
+        finished["expansion"] = True
+        return InstantiationResult(
+            {},
+            (
+                InstantiationFailure(
+                    "missing-unit",
+                    "missing-node",
+                    "forced failure",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "vericcl.solver.template_search.instantiate_route_patterns",
+        failed_expansion,
+    )
+    monkeypatch.setattr(
+        "vericcl.solver.template_search._monotonic",
+        clock,
+    )
+
+    result = search_route_models(
+        request,
+        problems,
+        ObjectiveMode.LATENCY,
+        deadline=100.0,
+    )
+
+    assert result.candidates == ()
+    assert result.diagnostics.template_expansion_time_s == 3.0
 
 
 def test_route_work_exception_identifies_objective_k_and_template(monkeypatch):

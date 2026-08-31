@@ -196,6 +196,7 @@ class _CandidateRecord:
     rejection_reason: Optional[str]
     diagnostics: SearchDiagnostics = field(default_factory=SearchDiagnostics)
     verification_time_s: float = 0.0
+    cache_hit: bool = False
 
 
 def _validate_schedules(
@@ -977,6 +978,7 @@ def _finalize(
     planning_mode: str = "unknown",
     diagnostics: Optional[SearchDiagnostics] = None,
     verification_time_s: float = 0.0,
+    cache_hit: bool = False,
 ) -> RunArtifacts:
     final_xml = None
     final_report = None
@@ -1002,6 +1004,7 @@ def _finalize(
             SearchDiagnostics() if diagnostics is None else diagnostics
         ),
         verification_time_s=verification_time_s,
+        cache_hit=cache_hit,
     )
     write_run_summary(layout, summary)
     return RunArtifacts(
@@ -1051,6 +1054,8 @@ def execute_solve(context: RunContext) -> RunArtifacts:
     result = solve(request)
     run_diagnostics = result.diagnostics
     phase_diagnostics = result.diagnostics
+    run_cache_hit = result.cache_hit
+    phase_cache_hit = result.cache_hit
     deadline.check("solve")
     schedules = tuple(
         _global_schedule(plan, candidate, topology)
@@ -1106,6 +1111,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
                     rejection_reason=_rejection_reason(outcome),
                     diagnostics=phase_diagnostics,
                     verification_time_s=candidate_verification_time_s,
+                    cache_hit=phase_cache_hit,
                 )
                 for candidate, schedule, outcome, candidate_verification_time_s in zip(
                     result.candidates,
@@ -1129,11 +1135,13 @@ def execute_solve(context: RunContext) -> RunArtifacts:
                 wall_clock_budget_s=deadline.remaining(),
             )
             result = solve(request)
+            run_cache_hit = run_cache_hit and result.cache_hit
             run_diagnostics = _merge_search_diagnostics(
                 run_diagnostics,
                 result.diagnostics,
             )
             phase_diagnostics = result.diagnostics
+            phase_cache_hit = result.cache_hit
             result = replace(
                 result,
                 candidates=tuple(
@@ -1215,6 +1223,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             rejection_reason=_rejection_reason(outcome),
             diagnostics=phase_diagnostics,
             verification_time_s=candidate_verification_time_s,
+            cache_hit=phase_cache_hit,
         )
         for candidate, schedule, outcome, candidate_verification_time_s in zip(
             result.candidates,
@@ -1274,6 +1283,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             overlay=record.overlay,
             diagnostics=record.diagnostics,
             verification_time_s=record.verification_time_s,
+            cache_hit=record.cache_hit,
         )
         for index, record in enumerate(records)
     )
@@ -1311,6 +1321,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
         planning_mode=plan.planning_mode.value,
         diagnostics=run_diagnostics,
         verification_time_s=verification_time_s,
+        cache_hit=run_cache_hit,
     )
 
 
@@ -1496,6 +1507,7 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             overlay=record.overlay,
             diagnostics=record.diagnostics,
             verification_time_s=record.verification_time_s,
+            cache_hit=record.cache_hit,
         )
         for index, record in enumerate(records)
     )
@@ -1522,4 +1534,5 @@ def execute_verify(context: RunContext) -> RunArtifacts:
         planning_mode=plan.planning_mode.value,
         diagnostics=SearchDiagnostics(),
         verification_time_s=verification_time_s,
+        cache_hit=False,
     )

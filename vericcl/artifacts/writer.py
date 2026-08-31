@@ -199,12 +199,35 @@ def _schedule_payload(schedule: Schedule) -> Mapping[str, object]:
     }
 
 
+def _stable_metrics_payload(metrics: SolverMetrics) -> Mapping[str, object]:
+    return {
+        "status": metrics.status.value,
+        "objective_values": metrics.objective_values,
+        "best_bound": metrics.best_bound,
+        "mip_gap": metrics.mip_gap,
+        "within_requested_gap": metrics.within_requested_gap,
+        "model_count": metrics.model_count,
+        "operation_count": metrics.operation_count,
+        "hop_count": metrics.hop_count,
+        "makespan_us": metrics.makespan_us,
+        "maximum_normalized_resource_load": (
+            metrics.maximum_normalized_resource_load
+        ),
+        "solver_name": metrics.solver_name,
+        "solver_version": metrics.solver_version,
+        "solver_seed": metrics.solver_seed,
+        "thread_count": metrics.thread_count,
+        "termination_reason": metrics.termination_reason,
+        "model_index": metrics.model_index,
+    }
+
+
 def _candidate_payload(candidate: SolveCandidate) -> Mapping[str, object]:
     return {
         "candidate_id": candidate.candidate_id,
         "objective_mode": candidate.objective_mode.value,
         "channel_count": candidate.channel_count,
-        "metrics": candidate.metrics,
+        "metrics": _stable_metrics_payload(candidate.metrics),
         "selected_best": candidate.selected_best,
         "proven_optimal": candidate.proven_optimal,
         "search_space_restricted": candidate.search_space_restricted,
@@ -313,7 +336,7 @@ def _parse_metrics(payload: object) -> SolverMetrics:
         best_bound=payload.get("best_bound"),
         mip_gap=payload.get("mip_gap"),
         within_requested_gap=payload.get("within_requested_gap"),
-        solve_time_s=payload.get("solve_time_s"),
+        solve_time_s=payload.get("solve_time_s", 0.0),
         model_count=payload.get("model_count"),
         operation_count=payload.get("operation_count"),
         hop_count=payload.get("hop_count"),
@@ -439,6 +462,7 @@ def _generic_report(
     hierarchy_plan: Mapping[str, object],
     diagnostics: SearchDiagnostics,
     verification_time_s: float,
+    cache_hit: bool,
 ) -> Mapping[str, object]:
     return {
         "schema_version": "1",
@@ -479,7 +503,18 @@ def _generic_report(
             diagnostics.model_general_constraints_max
         ),
         "verification_time_s": verification_time_s,
+        "cache_hit": cache_hit,
     }
+
+
+def _hierarchy_payload(value: object) -> Mapping[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise SemanticError("hierarchy_plan must be a mapping")
+    if not all(isinstance(key, str) for key in value):
+        raise SemanticError("hierarchy_plan keys must be strings")
+    return dict(value)
 
 
 def write_candidate_artifact(
@@ -500,6 +535,7 @@ def write_candidate_artifact(
     overlay: Optional[TuningOverlay] = None,
     diagnostics: Optional[SearchDiagnostics] = None,
     verification_time_s: float = 0.0,
+    cache_hit: bool = False,
 ) -> CandidateArtifact:
     if not isinstance(layout, RunLayout):
         raise SemanticError("layout must be a RunLayout")
@@ -532,7 +568,9 @@ def write_candidate_artifact(
             "candidate verification_time_s must be finite and non-negative"
         )
     verification_time_s = float(verification_time_s)
-    hierarchy_value = {} if hierarchy_plan is None else hierarchy_plan
+    if not isinstance(cache_hit, bool):
+        raise SemanticError("candidate cache_hit must be a boolean")
+    hierarchy_value = _hierarchy_payload(hierarchy_plan)
     base = _candidate_base(layout, iteration, selected_best)
     report_path = layout.reports / "{}.validation.json".format(base)
     schedule_path = layout.schedules / "{}.schedule.json".format(base)
@@ -575,6 +613,7 @@ def write_candidate_artifact(
             ),
             diagnostics=diagnostics_value,
             verification_time_s=verification_time_s,
+            cache_hit=cache_hit,
         )
         report_payload = json.loads(build_validation_json(report_object))
         binding = (
@@ -590,6 +629,7 @@ def write_candidate_artifact(
                 hierarchy_value,
                 diagnostics_value,
                 verification_time_s,
+                cache_hit,
             )
         )
         binding = None

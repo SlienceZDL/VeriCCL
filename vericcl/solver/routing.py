@@ -2,7 +2,7 @@ import math
 from dataclasses import dataclass
 from typing import Tuple
 
-from vericcl.errors import SemanticError
+from vericcl.errors import ConstructionInfeasibleError, SemanticError
 from vericcl.input.models import ObjectiveMode
 from vericcl.solver.model import SolveStatus, SolverMetrics
 
@@ -91,6 +91,19 @@ class RoutingModelStats:
                 "routing_model_stats.optimize_time_s",
             ),
         )
+
+
+class RoutingModelFailure(ConstructionInfeasibleError):
+    """A routing-model failure with completed build/optimize statistics."""
+
+    def __init__(self, message: str, model_stats: RoutingModelStats) -> None:
+        _identifier(message, "routing_model_failure.message")
+        if not isinstance(model_stats, RoutingModelStats):
+            raise SemanticError(
+                "routing_model_failure.model_stats must be RoutingModelStats"
+            )
+        super().__init__(message)
+        self.model_stats = model_stats
 
 
 @dataclass(frozen=True)

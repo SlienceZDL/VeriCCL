@@ -36,7 +36,7 @@ from vericcl.solver.template_search import (
     TemplateSearchResult,
     search_route_models,
 )
-from vericcl.solver.templates import build_solver_templates
+from vericcl.solver.templates import SolverTemplate, build_solver_templates
 
 
 _CACHE_TTL_SECONDS = 3600.0
@@ -154,6 +154,7 @@ def _combine_node_candidates(
     backend: str,
     objective: ObjectiveMode,
     channel_count: int,
+    cache_key: Optional[str] = None,
 ) -> SolveCandidate:
     from vericcl.composer import compose
 
@@ -208,7 +209,11 @@ def _combine_node_candidates(
             objective.value,
             backend,
             channel_count,
-            candidate_cache_key(request)[:12],
+            (
+                candidate_cache_key(request)
+                if cache_key is None
+                else cache_key
+            )[:12],
         ),
         node_schedules=node_schedules,
         objective_mode=objective,
@@ -319,6 +324,8 @@ def _solve_legacy_objective(
     problems: Tuple[SolverProblem, ...],
     objective: ObjectiveMode,
     deadline: float,
+    *,
+    cache_key: Optional[str] = None,
 ) -> TemplateSearchResult:
     local_constructive: Dict[str, SolveCandidate] = {}
     warm_starts: Dict[str, Schedule] = {}
@@ -356,6 +363,7 @@ def _solve_legacy_objective(
                 "constructive",
                 objective,
                 channel_count,
+                cache_key,
             )
         )
     if request.inputs.strategies.milp:
@@ -430,6 +438,7 @@ def _solve_legacy_objective(
                     "milp",
                     objective,
                     model_channels,
+                    cache_key,
                 )
             )
     else:
@@ -448,12 +457,17 @@ def _solve_template_objective(
     problems: Tuple[SolverProblem, ...],
     objective: ObjectiveMode,
     deadline: float,
+    *,
+    templates: Optional[Tuple[SolverTemplate, ...]] = None,
+    cache_key: Optional[str] = None,
 ) -> TemplateSearchResult:
     return search_route_models(
         request,
         problems,
         objective,
         deadline,
+        templates=templates,
+        cache_key=cache_key,
     )
 
 
@@ -626,18 +640,26 @@ def solve(
         )
     cache_key = candidate_cache_key(request, cache_signature)
     if not request.inputs.solver.force_resolve:
-        cached = selected_cache.get(cache_key)
-        if cached is not None and (
+        cached_entry = selected_cache.get_entry(cache_key)
+        if cached_entry is not None and (
             not request.inputs.solver.require_proven_optimal
-            or cached.proven_optimal
+            or cached_entry.candidate.proven_optimal
         ):
-            cached = replace(cached, selected_best=True)
+            cached = replace(cached_entry.candidate, selected_best=True)
+            cached_diagnostics = replace(
+                cached_entry.diagnostics,
+                route_model_build_time_s=0.0,
+                route_model_optimize_time_s=0.0,
+                template_expansion_time_s=0.0,
+                global_scheduling_time_s=0.0,
+            )
             return SolveResult(
                 status=cached.metrics.status,
                 candidates=(cached,),
                 selected_candidate_id=cached.candidate_id,
                 cache_hit=True,
                 message="cache_hit",
+                diagnostics=cached_diagnostics,
             )
     if (
         not request.inputs.strategies.constructive_trees
@@ -683,11 +705,25 @@ def solve(
             solve_budget = min(solve_budget, request.wall_clock_budget_s)
         deadline = _monotonic() + solve_budget
         mode = request.inputs.hyperparameters.objective_mode
-        solve_objective = (
-            _solve_legacy_objective
-            if request.inputs.solver.require_proven_optimal
-            else _solve_template_objective
-        )
+        if request.inputs.solver.require_proven_optimal:
+            def solve_objective(request_value, problems_value, objective, deadline):
+                return _solve_legacy_objective(
+                    request_value,
+                    problems_value,
+                    objective,
+                    deadline,
+                    cache_key=cache_key,
+                )
+        else:
+            def solve_objective(request_value, problems_value, objective, deadline):
+                return _solve_template_objective(
+                    request_value,
+                    problems_value,
+                    objective,
+                    deadline,
+                    templates=templates,
+                    cache_key=cache_key,
+                )
         if mode is not ObjectiveMode.AUTO:
             search_result = solve_objective(
                 request,
@@ -823,6 +859,7 @@ def solve(
         selected,
         ttl_seconds=_CACHE_TTL_SECONDS,
         complete=True,
+        diagnostics=diagnostics,
     )
     return SolveResult(
         status=selected.metrics.status,
