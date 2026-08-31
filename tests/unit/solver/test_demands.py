@@ -17,6 +17,7 @@ from vericcl.solver.demands import (
     CandidateEdge,
     SolverProblem,
     build_solver_problem,
+    routing_unit_key,
 )
 from vericcl.topology.loader import load_topology
 from vericcl.topology.model import (
@@ -113,6 +114,17 @@ def test_broadcast_demand_excludes_local_root_output():
     assert demand.required_leaf_rank == 1
     assert demand.candidate_paths == ((0, 1),)
     assert demand.member_slice_ids == frozenset({0, 8})
+
+
+def test_routing_unit_key_is_the_complete_semantic_tree_boundary():
+    demand = allreduce_problem("allreduce-ag-a00000000").demands[0]
+
+    assert routing_unit_key(demand) == (
+        demand.root_rank,
+        demand.logical_position,
+        tuple(sorted(demand.contributors)),
+        demand.reduction_dual,
+    )
 
 
 def test_shared_transfer_is_removed_if_any_member_is_forbidden():

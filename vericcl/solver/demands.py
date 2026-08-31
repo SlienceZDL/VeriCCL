@@ -22,6 +22,9 @@ _REDUCTION_KINDS = frozenset(
 )
 
 
+RoutingUnitKey = Tuple[int, int, Tuple[int, ...], bool]
+
+
 def _identifier(value: object, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise SemanticError("{} must be a non-empty string".format(field))
@@ -126,6 +129,17 @@ class TransferDemand:
         if self.reduction_dual:
             return dst_rank, src_rank
         return src_rank, dst_rank
+
+
+def routing_unit_key(demand: TransferDemand) -> RoutingUnitKey:
+    if not isinstance(demand, TransferDemand):
+        raise SemanticError("demand must be a TransferDemand")
+    return (
+        demand.root_rank,
+        demand.logical_position,
+        tuple(sorted(demand.contributors)),
+        demand.reduction_dual,
+    )
 
 
 @dataclass(frozen=True)
