@@ -1,6 +1,7 @@
 import pytest
 from hypothesis import given, settings, strategies as st
 
+from vericcl.solver.global_scheduler import assign_global_resources
 from vericcl.topology.model import LinkKey
 from vericcl.topology.performance import transfer_duration_us
 from vericcl.verification.resource_events import directed_link_timeline_id
@@ -27,10 +28,12 @@ def test_same_link_concurrency_uses_one_physical_transfer_per_channel(
         max_channels=4,
     )
 
-    result = simulate_schedule(
+    scheduled = assign_global_resources(
         same_direction_schedule(channel_count),
         topology,
+        channel_count,
     )
+    result = simulate_schedule(scheduled, topology)
 
     expected = transfer_duration_us(
         topology.link(LinkKey(0, 1)),

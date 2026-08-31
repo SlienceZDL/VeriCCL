@@ -55,6 +55,30 @@ def test_recompute_earliest_times_is_idempotent_for_composed_schedule():
     assert recomputed == schedule
 
 
+def test_retime_rebuilds_final_ready_times_from_final_dependencies():
+    schedule = compose(_pipeline_plan(), _pipeline_candidates())
+    metadata = dict(schedule.metadata)
+    metadata["final_ready_times"] = {
+        key: 999.0 for key in metadata["final_dependencies"]
+    }
+
+    recomputed = recompute_earliest_times(
+        replace(schedule, metadata=metadata),
+        _topology((0, 1), (1, 2)),
+    )
+
+    by_id = {transfer.transfer_id: transfer for transfer in recomputed.transfers}
+    assert recomputed.metadata["final_ready_times"] == {
+        key: max(
+            (by_id[transfer_id].ed_time for transfer_id in dependencies),
+            default=0.0,
+        )
+        for key, dependencies in recomputed.metadata[
+            "final_dependencies"
+        ].items()
+    }
+
+
 def test_recompute_earliest_times_rejects_missing_physical_link():
     schedule = compose(_pipeline_plan(), _pipeline_candidates())
 

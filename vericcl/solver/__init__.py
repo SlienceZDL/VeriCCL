@@ -3,6 +3,11 @@ from vericcl.solver.cache import candidate_cache_key
 from vericcl.solver.constructive import construct_candidate
 from vericcl.solver.demands import build_solver_problem
 from vericcl.solver.gurobi_api import GurobiAdapter
+from vericcl.solver.global_scheduler import (
+    GLOBAL_SCHEDULER_VERSION,
+    GlobalSchedulingError,
+    assign_global_resources,
+)
 from vericcl.solver.instantiate import (
     InstantiationFailure,
     InstantiationResult,
@@ -36,6 +41,8 @@ from vericcl.solver.templates import (
 __all__ = [
     "ModelBudget",
     "GurobiAdapter",
+    "GLOBAL_SCHEDULER_VERSION",
+    "GlobalSchedulingError",
     "InstantiationFailure",
     "InstantiationResult",
     "LowerBound",
@@ -51,6 +58,7 @@ __all__ = [
     "RoutingModelStats",
     "TemplateMember",
     "allocate_model_threads",
+    "assign_global_resources",
     "build_solver_problem",
     "build_solver_templates",
     "candidate_cache_key",

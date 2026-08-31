@@ -6,7 +6,7 @@ from vericcl.errors import SemanticError
 from vericcl.planner.model import PlanNode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.solver.demands import CandidateEdge, SolverProblem, TransferDemand
-from vericcl.topology.model import LaneKey, LinkKey, PerformanceCurve
+from vericcl.topology.model import LaneKey, LinkKey, PerformanceCurve, Topology
 from vericcl.topology.performance import (
     safe_per_channel_bandwidth,
     transfer_duration_us,
@@ -130,6 +130,51 @@ def fixed_transfer_duration_us(
             problem.topology.shared_resources[resource_id].performance,
             problem.slice_size_bytes,
             concurrency,
+        )
+        for resource_id in edge.resource_ids
+    )
+    return max(durations)
+
+
+def fixed_topology_transfer_duration_us(
+    topology: Topology,
+    link: LinkKey,
+    slice_size_bytes: int,
+    channel_count: int,
+) -> float:
+    """Return the conservative fixed-K duration for one physical transfer."""
+    if not isinstance(topology, Topology):
+        raise SemanticError("topology must be a Topology")
+    if not isinstance(link, LinkKey):
+        raise SemanticError("link must be a LinkKey")
+    if (
+        isinstance(slice_size_bytes, bool)
+        or not isinstance(slice_size_bytes, int)
+        or slice_size_bytes < 1
+    ):
+        raise SemanticError("slice_size_bytes must be a positive integer")
+    if (
+        isinstance(channel_count, bool)
+        or not isinstance(channel_count, int)
+        or channel_count < 1
+    ):
+        raise SemanticError("channel_count must be a positive integer")
+    edge = topology.link(link)
+    durations = [
+        curve_duration_us(
+            edge.performance,
+            slice_size_bytes,
+            min(channel_count, edge.max_channels),
+        )
+    ]
+    durations.extend(
+        curve_duration_us(
+            topology.shared_resources[resource_id].performance,
+            slice_size_bytes,
+            min(
+                channel_count,
+                topology.shared_resources[resource_id].max_channels,
+            ),
         )
         for resource_id in edge.resource_ids
     )

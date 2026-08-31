@@ -2,7 +2,11 @@ from dataclasses import replace
 
 import pytest
 
-from vericcl.composer.compose import _output_path_transfers, compose
+from vericcl.composer.compose import (
+    _output_path_transfers,
+    compose,
+    compose_routes,
+)
 from vericcl.composer.dual import reverse_allgather_schedule
 from vericcl.errors import SemanticError
 from vericcl.input.models import ObjectiveMode
@@ -21,6 +25,11 @@ from vericcl.semantics.collective import (
 )
 from vericcl.solver.model import SolveCandidate, SolveStatus, SolverMetrics
 from vericcl.topology.model import LinkKey
+
+from tests.unit.verification.simulator_helpers import (
+    curve,
+    simulation_topology,
+)
 
 from tests.unit.composer.helpers import (
     reduce_spec,
@@ -231,6 +240,63 @@ def test_composer_pipelines_ready_slice_without_stage_barrier():
         for symbol in stage.symbols
     ] == [0.0, 2.0]
     assert schedule.metadata["path_scope"] == "global"
+
+
+def test_compose_routes_assigns_resources_after_cross_node_semantics():
+    plan = _pipeline_plan()
+    nodes = {node.node_id: node for node in plan.nodes}
+    candidates = _pipeline_candidates()
+    schedules = {}
+    for node_id, candidate in candidates.items():
+        schedule = candidate.node_schedules[node_id]
+        metadata = dict(schedule.metadata)
+        final_outputs = {}
+        final_dependencies = {}
+        for slot, contributors in nodes[node_id].logical_output.values.items():
+            key = "r{:08d}-o{:08d}".format(slot.rank, slot.offset)
+            final_outputs[key] = tuple(sorted(contributors))
+            final_dependencies[key] = tuple(
+                sorted(
+                    transfer.transfer_id
+                    for transfer in schedule.transfers
+                    if transfer.dst_rank == slot.rank
+                    and frozenset(
+                        metadata["tree_contributors"][transfer.transfer_id]
+                    )
+                    == contributors
+                )
+            )
+        metadata.update(
+            {
+                "routing_only": True,
+                "final_outputs": final_outputs,
+                "final_dependencies": final_dependencies,
+            }
+        )
+        schedules[node_id] = replace(schedule, metadata=metadata)
+    topology = simulation_topology(
+        3,
+        {
+            (0, 1): curve(),
+            (1, 2): curve(),
+        },
+        max_channels=1,
+    )
+
+    schedule = compose_routes(
+        plan,
+        schedules,
+        topology,
+        1,
+    )
+    by_id = {transfer.transfer_id: transfer for transfer in schedule.transfers}
+
+    assert by_id["pipeline-second-t0"].st_time == 2.0
+    assert by_id["pipeline-second-t0"].st_time < by_id[
+        "pipeline-first-t1"
+    ].ed_time
+    assert schedule.metadata["global_resources_assigned"] is True
+    assert "routing_only" not in schedule.metadata
 
 
 def test_composer_requires_one_complete_candidate_per_plan_node():

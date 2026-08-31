@@ -38,6 +38,43 @@ def _resource_slots(schedule: Schedule) -> Mapping[str, Mapping[str, int]]:
     return result
 
 
+def _final_dependencies(
+    schedule: Schedule,
+) -> Optional[Mapping[str, frozenset]]:
+    raw = schedule.metadata.get("final_dependencies")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise SemanticError("final_dependencies metadata must be a mapping")
+    transfer_ids = {transfer.transfer_id for transfer in schedule.transfers}
+    result = {}
+    for key, values in raw.items():
+        if not isinstance(key, str) or not key:
+            raise SemanticError("final dependency key must be a non-empty string")
+        try:
+            dependencies = tuple(values)
+        except TypeError as error:
+            raise SemanticError(
+                "final dependencies must be iterable"
+            ) from error
+        if len(dependencies) != len(set(dependencies)):
+            raise SemanticError("final dependencies must be unique")
+        if any(
+            not isinstance(transfer_id, str) or not transfer_id
+            for transfer_id in dependencies
+        ):
+            raise SemanticError("final dependency IDs must be non-empty strings")
+        if not set(dependencies) <= transfer_ids:
+            raise SemanticError("final dependency is missing from the schedule")
+        result[key] = frozenset(dependencies)
+    final_outputs = schedule.metadata.get("final_outputs")
+    if isinstance(final_outputs, Mapping) and set(result) != set(final_outputs):
+        raise SemanticError(
+            "final_dependencies must cover every final output exactly"
+        )
+    return result
+
+
 def _validate_topology(
     transfer: Transfer,
     slots: Mapping[str, int],
@@ -210,13 +247,27 @@ def _retime(
                 predecessor_ids=all_predecessors[transfer.transfer_id],
             )
         )
+    final_dependencies = _final_dependencies(schedule)
     metadata = dict(schedule.metadata)
     metadata["semantic_predecessors"] = {
         key: tuple(sorted(values)) for key, values in semantic.items()
     }
     metadata["resource_slots"] = {
-        key: dict(values) for key, values in resource_slots.items()
+        key: dict(sorted(values.items()))
+        for key, values in sorted(resource_slots.items())
     }
+    if final_dependencies is not None:
+        metadata["final_dependencies"] = {
+            key: tuple(sorted(values))
+            for key, values in sorted(final_dependencies.items())
+        }
+        metadata["final_ready_times"] = {
+            key: max(
+                (times[transfer_id][1] for transfer_id in values),
+                default=0.0,
+            )
+            for key, values in sorted(final_dependencies.items())
+        }
     metadata["timing_recomputed"] = True
     return Schedule(
         schedule_id=schedule.schedule_id,
