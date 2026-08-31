@@ -3,7 +3,10 @@ from typing import Dict, Mapping, Sequence, Tuple
 
 from vericcl.errors import InputValidationError, SemanticError
 from vericcl.input.models import ResolvedInput
-from vericcl.planner.groups import CommunicationGroups
+from vericcl.planner.groups import (
+    CommunicationGroups,
+    eligible_gateway_group,
+)
 from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
@@ -497,16 +500,7 @@ def build_gateway_allreduce_plan(
 ) -> PlanDAG:
     if inputs.collective.kind is not CollectiveKind.ALL_REDUCE:
         raise InputValidationError("gateway template requires AllReduce")
-    node_count = len(set(topology.node_membership.values()))
-    gateway_group = next(
-        (
-            group
-            for group in groups.inter_node
-            if len({topology.node_membership[rank] for rank in group})
-            == node_count
-        ),
-        None,
-    )
+    gateway_group = eligible_gateway_group(topology, groups)
     if gateway_group is None:
         raise InputValidationError(
             "no real gateway communication group covers every node"

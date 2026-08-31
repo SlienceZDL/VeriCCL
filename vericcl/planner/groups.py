@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, Set, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 from vericcl.errors import SemanticError
 from vericcl.topology.model import Topology
@@ -40,6 +40,29 @@ class CommunicationGroups:
         if any(len(group) < 2 for group in inter_node):
             raise SemanticError("inter_node groups must contain at least two ranks")
         object.__setattr__(self, "inter_node", inter_node)
+
+
+def eligible_gateway_group(
+    topology: Topology,
+    groups: CommunicationGroups,
+) -> Optional[Tuple[int, ...]]:
+    if not isinstance(topology, Topology):
+        raise SemanticError("topology must be a Topology")
+    if not isinstance(groups, CommunicationGroups):
+        raise SemanticError("groups must be CommunicationGroups")
+    node_ids = set(topology.node_membership.values())
+    return next(
+        (
+            group
+            for group in groups.inter_node
+            if all(rank in topology.node_membership for rank in group)
+            and {
+                topology.node_membership[rank] for rank in group
+            }
+            == node_ids
+        ),
+        None,
+    )
 
 
 def _components(

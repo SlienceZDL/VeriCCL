@@ -4,7 +4,10 @@ from vericcl.errors import InputValidationError
 from vericcl.input.json_codec import sha256_json
 from vericcl.input.models import ResolvedInput
 from vericcl.input.validation import validate_collective
-from vericcl.planner.groups import discover_communication_groups
+from vericcl.planner.groups import (
+    discover_communication_groups,
+    eligible_gateway_group,
+)
 from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
@@ -434,7 +437,11 @@ def build_direct_plan(
         inputs.collective.kind is CollectiveKind.ALL_REDUCE
         and inputs.strategies.hierarchy
         and len(set(topology.node_membership.values())) > 1
-        and discover_communication_groups(topology).inter_node
+        and eligible_gateway_group(
+            topology,
+            discover_communication_groups(topology),
+        )
+        is not None
     ):
         raise InputValidationError(
             "hierarchical AllReduce must use the gateway plan builder"

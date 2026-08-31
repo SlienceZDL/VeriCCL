@@ -1,7 +1,10 @@
 from vericcl.errors import InputValidationError
 from vericcl.input.models import ResolvedInput
 from vericcl.planner.direct import build_direct_plan
-from vericcl.planner.groups import discover_communication_groups
+from vericcl.planner.groups import (
+    discover_communication_groups,
+    eligible_gateway_group,
+)
 from vericcl.planner.hierarchy import (
     build_gateway_allreduce_plan,
     build_manual_plan,
@@ -35,7 +38,7 @@ def build_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
         and inputs.collective.kind is CollectiveKind.ALL_REDUCE
     ):
         groups = discover_communication_groups(topology)
-        if groups.inter_node:
+        if eligible_gateway_group(topology, groups) is not None:
             plan = build_gateway_allreduce_plan(inputs, topology, groups)
         else:
             plan = build_direct_plan(

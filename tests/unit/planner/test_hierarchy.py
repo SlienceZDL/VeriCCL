@@ -13,7 +13,8 @@ from vericcl.planner.hierarchy import (
 from vericcl.planner.groups import CommunicationGroups
 from vericcl.planner.model import PlanningMode
 from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
-from vericcl.topology.loader import load_topology
+from vericcl.topology.loader import load_topology, topology_from_mapping
+from vericcl.workflow import _applied_strategies
 
 
 pytestmark = pytest.mark.phase02
@@ -207,6 +208,40 @@ def test_hierarchy_without_cross_node_group_falls_back_to_direct_plan():
     assert plan.nodes[0].node_id.startswith("allreduce-rs")
     assert plan.planning_mode is PlanningMode.DIRECT
     assert plan.planning_reason == "no_eligible_gateway_domain"
+
+
+def test_hierarchy_with_partial_gateway_domain_falls_back_to_direct_plan():
+    base = two_rank_inputs()
+    inputs = replace(
+        base,
+        rank_count=3,
+        hyperparameters=replace(
+            base.hyperparameters,
+            total_size_bytes=3,
+            slice_size_bytes=1,
+        ),
+        strategies=replace(base.strategies, hierarchy=True),
+    )
+    topology = topology_from_mapping(
+        {
+            "ranks": 3,
+            "nodes": [
+                {"id": rank, "ranks": [rank], "gateways": [rank]}
+                for rank in range(3)
+            ],
+            "directed_links": [
+                {"src": 0, "dst": 1, "alpha": 1, "invbw": 2},
+                {"src": 1, "dst": 0, "alpha": 1, "invbw": 2},
+            ],
+            "shared_resources": [],
+        }
+    )
+
+    plan = build_plan(inputs, topology)
+
+    assert plan.planning_mode is PlanningMode.DIRECT
+    assert plan.planning_reason == "no_eligible_gateway_domain"
+    assert _applied_strategies(inputs, plan)["hierarchy"] is False
 
 
 def test_hierarchy_with_gateway_domain_records_gateway_allreduce_metadata():
