@@ -216,6 +216,10 @@ def _logical_position(contributors: FrozenSet[int], slice_count: int) -> int:
     return next(iter(positions))
 
 
+def _value_identity(values: FrozenSet[int]) -> str:
+    return ".".join("{:08d}".format(value) for value in sorted(values))
+
+
 def _virtual_links(node: PlanNode, reduction_dual: bool) -> FrozenSet[LinkKey]:
     if reduction_dual:
         return frozenset(
@@ -302,11 +306,13 @@ def _demand(
         contributors,
         inputs.hyperparameters.slice_count,
     )
-    demand_id = "{}-a{:08d}-r{:08d}-l{:08d}".format(
+    demand_id = "{}-a{:08d}-r{:08d}-l{:08d}-c{}-m{}".format(
         node.node_id,
         logical_position,
         root,
         leaf,
+        _value_identity(contributors),
+        _value_identity(members),
     )
     forbidden = _matching_forbidden(inputs, members, node.stage_id)
     legal_links, candidate_paths = _candidate_paths(

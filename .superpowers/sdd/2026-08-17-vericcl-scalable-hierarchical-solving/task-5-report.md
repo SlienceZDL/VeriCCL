@@ -2,7 +2,7 @@
 
 ## 状态
 
-已完成路由模板实例化、真实 slice 语义重建、归约对偶状态汇合，以及旧 MILP schedule 语义构造逻辑的纯函数复用。实现保持 `solve_milp` 的外部行为不变，并将 provisional schedule 明确标记为 `routing_only=True`。
+已完成路由模板实例化、真实 slice 语义重建、归约对偶状态汇合，以及旧 MILP schedule 语义构造逻辑的纯函数复用。实现保持 `solve_milp` 的外部行为不变，并将 provisional schedule 明确标记为 `routing_only=True`。审查修复轮次 1 已处理真实网关 AllGather demand ID 冲突、routing-only 归约状态版本链，以及非 routing-only dual metadata 兼容性。
 
 ## RED 证据
 
@@ -57,6 +57,46 @@ vericcl/composer/dual.py       96%
 ```
 
 旧 MILP 兼容性除回归测试外，还将基线提交中的 `_build_schedule` 动态加载，与新实现对 Broadcast 多值、共享资源多跳和 reduction-dual 输入逐对象比较，三类结果均相等。
+
+## 审查修复轮次 1
+
+### RED 证据
+
+- 标准 `two_node_gateway.json` AllGather 走完整 `build_solver_problem -> split/templates -> instantiate -> compose -> semantic verifier -> BufferPlan` 链时，首次在 `SolverProblem` 构造阶段得到 `SemanticError: solver problem demand IDs must be unique`。根因是多个 stage demand 共享 node、logical position、root 和 leaf，但具有不同真实 contributors/member slice 集。
+- routing-only 4 Rank star 的判别测试初次运行有 3 个失败：三个 REDUCE 没有 accumulator 前驱链；`aggregate_consumptions` 仍是 `final_dependencies` 的别名；非 routing-only dual 比基线多出 routing metadata。
+- 对重复 final state 的精确版本测试加入 `(correct, unknown)` 和 `(correct, wrong-contributor-producer)` 后，inplace 与 out-of-place 两个用例均错误返回 `VALID`，证明仅过滤未知依赖会放宽语义守恒。
+- 多跳 routing-only reduction 的 path closure 判别测试先选择按 ID 排序的子树 transfer，得到 `reduce-a-child`，而不是包含完整成员路径的 terminal transfer。
+
+### 修复边界
+
+- demand ID 继续保留 node、logical position、root 和 leaf 的可读前缀，并追加 contributors 与 member slice IDs 的完整、排序、定长十进制编码；不使用截断哈希。candidate path 域、剪枝逻辑和模板签名未改变，模板签名仍由相对 rank/contributor/logical-position 语义构造，不读取原始 demand ID。
+- routing-only dual 按同一 tree、目标 Rank 和 logical position 建立确定性 accumulator chain。每个 REDUCE 同时依赖其源子树与上一个 accumulator producer；`_schedule_drafts` 因该语义链重算 provisional 时间，因此后继开始时间不早于前驱结束时间，不同 logical position 仍可并行。
+- `aggregate_consumptions[transfer_id]` 记录 `consumed_state_ids=(source, accumulator)` 与 `produced_state_id`；`aggregate_states[state_id]` 记录 rank、logical position、contributors 和 producer ID。状态 ID 本身完整编码 tree、rank、logical position、version 和 contributors。输入 contributors 必须不相交，输出必须为并集，同一状态版本不得消费两次。
+- 每个 final output 的 `final_dependencies` 只含生成完整 contributors 的 terminal rrc，`final_ready_time` 等于该 rrc 的结束时间。Composer 仅把 terminal rrc 作为下游 SEND 的直接语义前驱，同时沿其语义闭包重建成员路径，并优先使用 terminal transfer 中已有的完整路径。
+- BufferPlan 将最终完整 `AggregateValue` 绑定到唯一 terminal rrc；endpoint lowering 产生对应 `RECV_REDUCE_COPY`。TransferDAG 对 `AggregateValue` 的 path 边使用相同 value 与 source ref 的精确 producer，因此早期 rrc 只通过 terminal rrc 形成传递依赖。
+- final-state 消歧不是放宽语义守恒：仅当某 output slot 的 `final_dependencies` 恰有一个字符串 ID，且该 ID 对应 replay 后仍活动、rank/slot/contributors 完全匹配的状态版本时，重复候选才可消歧。空依赖、未知 ID、错误 contributor、混合正确与错误 ID，以及多个匹配 producer 均保持 `INVALID/duplicate_final_state`。该判定发生在逻辑 payload replay 层，与后续 buffer placement 无关；测试分别覆盖 inplace 与 out-of-place。
+- `final_dependencies`、`aggregate_consumptions`、`aggregate_states` 和 routing path metadata 仅在 `routing_only=True` 分支生成。非 routing-only `reverse_allgather_schedule` 通过硬编码基线完整 `Schedule` 与 metadata 的逐对象相等测试。
+
+### 最新 GREEN 与回归
+
+```text
+审查修复定向链：7 passed in 2.45s
+Task 5 计划指定测试：28 passed in 2.51s
+tests/unit/solver + tests/unit/composer + tests/property：252 passed in 21.23s
+受影响 verification + XML 与聚焦模块：306 passed in 2.76s
+完整非硬件测试：1223 passed, 1 skipped in 29.89s
+tests/gurobi：30 passed in 0.24s
+文档命令回归：29 passed in 2.53s
+```
+
+最终静态门禁：
+
+```text
+.venv/bin/python -m compileall -q vericcl tests: passed
+git diff --check: passed
+.venv/bin/python -m vericcl --help: passed
+changed production/test Han-character scan: no matches
+```
 
 静态检查：
 

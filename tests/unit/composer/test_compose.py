@@ -2,7 +2,8 @@ from dataclasses import replace
 
 import pytest
 
-from vericcl.composer.compose import compose
+from vericcl.composer.compose import _output_path_transfers, compose
+from vericcl.composer.dual import reverse_allgather_schedule
 from vericcl.errors import SemanticError
 from vericcl.input.models import ObjectiveMode
 from vericcl.planner.model import (
@@ -20,6 +21,12 @@ from vericcl.semantics.collective import (
 )
 from vericcl.solver.model import SolveCandidate, SolveStatus, SolverMetrics
 from vericcl.topology.model import LinkKey
+
+from tests.unit.composer.helpers import (
+    reduce_spec,
+    reduce_target,
+    virtual_reduce_chain,
+)
 
 
 pytestmark = pytest.mark.phase03
@@ -304,3 +311,51 @@ def test_composer_rejects_invalid_stage_resource_slot_metadata():
 
     with pytest.raises(SemanticError, match="resource_slots"):
         compose(_pipeline_plan(), candidates)
+
+
+def test_routing_output_paths_prefer_the_terminal_aggregate_transfer():
+    virtual = virtual_reduce_chain(3)
+    identifiers = {
+        "virtual-t0000": "z-terminal",
+        "virtual-t0001": "a-child",
+    }
+    transfers = tuple(
+        replace(
+            transfer,
+            transfer_id=identifiers[transfer.transfer_id],
+            predecessor_ids=frozenset(
+                identifiers[predecessor]
+                for predecessor in transfer.predecessor_ids
+            ),
+        )
+        for transfer in virtual.transfers
+    )
+    metadata = dict(virtual.metadata)
+    for field in (
+        "path_roots",
+        "semantic_contributors",
+        "tree_contributors",
+        "resource_slots",
+    ):
+        metadata[field] = {
+            identifiers[transfer_id]: value
+            for transfer_id, value in metadata[field].items()
+        }
+    metadata["routing_only"] = True
+    reduced = reverse_allgather_schedule(
+        replace(virtual, transfers=transfers, metadata=metadata),
+        reduce_spec(),
+        reduce_target(3),
+    )
+    terminal = next(
+        transfer for transfer in reduced.transfers if transfer.dst_rank == 0
+    )
+
+    ordered = _output_path_transfers(reduced, (terminal,))
+    member_source = next(
+        transfer
+        for transfer in ordered
+        if any(atom.slice_id == 2 for atom in transfer.atoms)
+    )
+
+    assert member_source.transfer_id == terminal.transfer_id

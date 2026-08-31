@@ -6,7 +6,7 @@ from vericcl.composer.dual import reverse_allgather_schedule
 from vericcl.errors import SemanticError
 from vericcl.planner.dual import extract_dual_trees
 from vericcl.planner.model import StageInterface
-from vericcl.semantics.atom import Schedule
+from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.semantics.collective import (
     CollectiveKind,
     CollectiveSpec,
@@ -118,6 +118,91 @@ def test_star_dual_keeps_independent_contributions_parallel():
     } == {(1,), (2,)}
 
 
+def test_non_routing_dual_matches_the_legacy_schedule_object_and_metadata():
+    reduced = reverse_allgather_schedule(
+        virtual_reduce_star(3),
+        reduce_spec(),
+        reduce_target(3),
+    )
+    first_id = "reduce-virtual-star-t0001"
+    second_id = "reduce-virtual-star-t0002"
+    expected = Schedule(
+        schedule_id="virtual-star-reduce",
+        transfers=(
+            Transfer(
+                transfer_id=first_id,
+                kind="REDUCE",
+                src_rank=1,
+                dst_rank=0,
+                channel=0,
+                stage_id=0,
+                member_slice_ids=frozenset({1}),
+                atoms=(
+                    Atom(
+                        slice_id=1,
+                        slice_size_bytes=1024,
+                        path=(
+                            PathStage(0, "REDUCE", (Symbol(1, 0, 0.0),)),
+                        ),
+                        st_time=0.0,
+                        ed_time=2.0,
+                    ),
+                ),
+                st_time=0.0,
+                ed_time=2.0,
+                predecessor_ids=frozenset(),
+            ),
+            Transfer(
+                transfer_id=second_id,
+                kind="REDUCE",
+                src_rank=2,
+                dst_rank=0,
+                channel=0,
+                stage_id=0,
+                member_slice_ids=frozenset({2}),
+                atoms=(
+                    Atom(
+                        slice_id=2,
+                        slice_size_bytes=1024,
+                        path=(
+                            PathStage(0, "REDUCE", (Symbol(2, 0, 0.0),)),
+                        ),
+                        st_time=0.0,
+                        ed_time=2.0,
+                    ),
+                ),
+                st_time=0.0,
+                ed_time=2.0,
+                predecessor_ids=frozenset(),
+            ),
+        ),
+        final_state_ids=("reduce-r00000000-o00000000",),
+        rank_count=3,
+        slice_count=1,
+        slice_size_bytes=1024,
+        metadata={
+            "path_scope": "stage_suffix",
+            "path_roots": {first_id: {1: 1}, second_id: {2: 2}},
+            "reduction_dual": False,
+            "dual_converted": True,
+            "dual_source_schedule_id": "virtual-star",
+            "reduction_op": "sum",
+            "semantic_predecessors": {first_id: (), second_id: ()},
+            "semantic_contributors": {first_id: (1,), second_id: (2,)},
+            "tree_contributors": {
+                first_id: (0, 1, 2),
+                second_id: (0, 1, 2),
+            },
+            "resource_slots": {first_id: {}, second_id: {}},
+            "final_outputs": {"r00000000-o00000000": (0, 1, 2)},
+            "final_ready_times": {"r00000000-o00000000": 2.0},
+        },
+    )
+
+    assert reduced == expected
+    assert reduced.metadata == expected.metadata
+
+
 def test_zero_edge_dual_preserves_already_local_state():
     virtual = Schedule(
         schedule_id="zero-edge-dual",
@@ -190,10 +275,73 @@ def test_routing_only_dual_discards_placeholder_lane_and_resource_order():
         not slots for slots in reduced.metadata["resource_slots"].values()
     )
     assert reduced.metadata["routing_only"] is True
-    assert (
-        reduced.metadata["aggregate_consumptions"]
-        == reduced.metadata["final_dependencies"]
+    assert set(reduced.metadata["aggregate_consumptions"]) == {
+        transfer.transfer_id for transfer in reduced.transfers
+    }
+    assert set(reduced.metadata["aggregate_states"]) >= {
+        transition["produced_state_id"]
+        for transition in reduced.metadata["aggregate_consumptions"].values()
+    }
+
+
+def test_routing_only_star_dual_builds_one_versioned_accumulator_chain():
+    virtual = virtual_reduce_star(4)
+    metadata = dict(virtual.metadata)
+    metadata["routing_only"] = True
+
+    reduced = reverse_allgather_schedule(
+        replace(virtual, metadata=metadata),
+        reduce_spec(),
+        reduce_target(4),
     )
+    ordered = tuple(
+        sorted(reduced.transfers, key=lambda item: (item.st_time, item.transfer_id))
+    )
+    ordered_ids = tuple(transfer.transfer_id for transfer in ordered)
+
+    assert tuple(
+        reduced.metadata["semantic_predecessors"][transfer_id]
+        for transfer_id in ordered_ids
+    ) == ((), (ordered_ids[0],), (ordered_ids[1],))
+    assert ordered[0].ed_time <= ordered[1].st_time
+    assert ordered[1].ed_time <= ordered[2].st_time
+    assert reduced.metadata["final_dependencies"] == {
+        "r00000000-o00000000": (ordered_ids[-1],)
+    }
+    assert reduced.metadata["final_ready_times"] == {
+        "r00000000-o00000000": ordered[-1].ed_time
+    }
+
+    transitions = reduced.metadata["aggregate_consumptions"]
+    states = reduced.metadata["aggregate_states"]
+    assert set(transitions) == set(ordered_ids)
+    consumed_state_ids = []
+    previous_accumulator = None
+    for transfer in ordered:
+        transition = transitions[transfer.transfer_id]
+        consumed = tuple(transition["consumed_state_ids"])
+        produced = transition["produced_state_id"]
+        assert len(consumed) == 2
+        assert states[consumed[0]]["contributors"] == tuple(
+            sorted(transfer.member_slice_ids)
+        )
+        assert states[consumed[0]]["rank"] == transfer.src_rank
+        assert states[consumed[1]]["rank"] == transfer.dst_rank
+        assert set(states[consumed[0]]["contributors"]).isdisjoint(
+            states[consumed[1]]["contributors"]
+        )
+        assert set(states[produced]["contributors"]) == set(
+            states[consumed[0]]["contributors"]
+        ) | set(states[consumed[1]]["contributors"])
+        assert states[produced]["producer_id"] == transfer.transfer_id
+        if previous_accumulator is not None:
+            assert consumed[1] == previous_accumulator
+        previous_accumulator = produced
+        consumed_state_ids.extend(consumed)
+    assert len(consumed_state_ids) == len(set(consumed_state_ids))
+    assert states[transitions[ordered_ids[-1]]["produced_state_id"]][
+        "contributors"
+    ] == (0, 1, 2, 3)
 
 
 def test_dual_tree_extraction_rejects_invalid_public_inputs_and_metadata():

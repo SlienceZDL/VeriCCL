@@ -162,6 +162,27 @@ def _output_matches(
     slot: OutputSlot,
     contributors: frozenset,
 ) -> Tuple[Transfer, ...]:
+    if schedule.metadata.get("routing_only") is True:
+        key = "r{:08d}-o{:08d}".format(slot.rank, slot.offset)
+        final_outputs = schedule.metadata.get("final_outputs")
+        final_dependencies = schedule.metadata.get("final_dependencies")
+        if not isinstance(final_outputs, Mapping) or not isinstance(
+            final_dependencies,
+            Mapping,
+        ):
+            raise SemanticError(
+                "routing-only schedule requires final dependency metadata"
+            )
+        if tuple(final_outputs.get(key, ())) != tuple(sorted(contributors)):
+            raise SemanticError("routing-only final output metadata is inconsistent")
+        by_id = {
+            transfer.transfer_id: transfer
+            for transfer in schedule.transfers
+        }
+        dependency_ids = tuple(final_dependencies.get(key, ()))
+        if any(transfer_id not in by_id for transfer_id in dependency_ids):
+            raise SemanticError("final dependency references a missing transfer")
+        return tuple(by_id[transfer_id] for transfer_id in dependency_ids)
     matches = []
     for transfer in schedule.transfers:
         if (
@@ -186,6 +207,38 @@ def _passthrough_input(
     if len(matches) != 1:
         raise SemanticError("node output has no unique pass-through input")
     return matches[0]
+
+
+def _output_path_transfers(
+    schedule: Schedule,
+    matches: Tuple[Transfer, ...],
+) -> Tuple[Transfer, ...]:
+    if schedule.metadata.get("routing_only") is not True or not matches:
+        return matches
+    by_id = {
+        transfer.transfer_id: transfer for transfer in schedule.transfers
+    }
+    known_ids = set(by_id)
+    pending = [transfer.transfer_id for transfer in matches]
+    closure = set()
+    while pending:
+        transfer_id = pending.pop()
+        if transfer_id in closure:
+            continue
+        closure.add(transfer_id)
+        predecessors = _semantic_predecessors(
+            schedule,
+            by_id[transfer_id],
+        )
+        if not predecessors <= known_ids:
+            raise SemanticError(
+                "semantic predecessor references a missing transfer"
+            )
+        pending.extend(sorted(predecessors))
+    match_ids = tuple(transfer.transfer_id for transfer in matches)
+    remaining = sorted(closure - set(match_ids))
+    ordered_ids = match_ids + tuple(remaining)
+    return tuple(by_id[transfer_id] for transfer_id in ordered_ids)
 
 
 def compose(
@@ -282,6 +335,7 @@ def compose(
                 global_atoms[(transfer.transfer_id, atom.slice_id)] = atom
         for slot, contributors in node.logical_output.values.items():
             matches = _output_matches(schedule, slot, contributors)
+            path_matches = _output_path_transfers(schedule, matches)
             if matches:
                 dependencies = frozenset(
                     transfer.transfer_id for transfer in matches
@@ -292,7 +346,7 @@ def compose(
             paths = {}
             for member in contributors:
                 path = None
-                for transfer in matches:
+                for transfer in path_matches:
                     atom = next(
                         (
                             value

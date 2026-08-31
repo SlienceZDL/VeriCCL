@@ -235,6 +235,14 @@ def build_transfer_dag(
         for predecessor in semantic:
             add_edge(predecessor, transfer.transfer_id, "semantic")
 
+    output_producers = defaultdict(set)
+    exact_producers = defaultdict(set)
+    for transfer_id, value in buffers.transfer_output_values.items():
+        output_producers[value].add(transfer_id)
+        exact_producers[
+            (value, buffers.transfer_dst_refs[transfer_id])
+        ].add(transfer_id)
+
     path_index = {}
     for transfer in schedule.transfers:
         for atom in transfer.atoms:
@@ -251,6 +259,12 @@ def build_transfer_dag(
                 raise SemanticError("path operation maps to multiple transfers")
             path_index[key] = transfer.transfer_id
     for transfer in schedule.transfers:
+        input_value = buffers.transfer_input_values[transfer.transfer_id]
+        if isinstance(input_value, AggregateValue):
+            source_ref = buffers.transfer_src_refs[transfer.transfer_id]
+            for producer in exact_producers.get((input_value, source_ref), ()):
+                add_edge(producer, transfer.transfer_id, "path")
+            continue
         for atom in transfer.atoms:
             flattened = [
                 (stage.stage_id, stage.operator, symbol)
@@ -279,13 +293,6 @@ def build_transfer_dag(
                 "path",
             )
 
-    output_producers = defaultdict(set)
-    exact_producers = defaultdict(set)
-    for transfer_id, value in buffers.transfer_output_values.items():
-        output_producers[value].add(transfer_id)
-        exact_producers[
-            (value, buffers.transfer_dst_refs[transfer_id])
-        ].add(transfer_id)
     for copy in buffers.local_copies:
         if copy.predecessor_state_id in nodes:
             add_edge(copy.predecessor_state_id, copy.copy_id, "copy_source")

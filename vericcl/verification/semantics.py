@@ -273,7 +273,7 @@ def _concurrent_reduce_group(
 def _apply_reduce_group(
     ledger: PayloadLedger,
     group: Tuple[Transfer, ...],
-) -> None:
+) -> Tuple[Tuple[str, PayloadState], ...]:
     sources = tuple(_source_state(ledger, transfer) for transfer in group)
     for transfer, source in zip(group, sources):
         if source.ready_time > transfer.st_time:
@@ -294,6 +294,7 @@ def _apply_reduce_group(
         )
     group_ready_time = max(transfer.ed_time for transfer in group)
     current = destination
+    produced = []
     for transfer, source in zip(group, sources):
         current = ledger.reduce(
             source.state_id,
@@ -301,6 +302,8 @@ def _apply_reduce_group(
             transfer.dst_rank,
             group_ready_time,
         )
+        produced.append((transfer.transfer_id, current))
+    return tuple(produced)
 
 
 def _required_contributors(
@@ -353,6 +356,7 @@ def _state_result(
         return _invalid("state", "state_replay_failed", str(error))
     remaining = list(ordered)
     completed_ids = set()
+    produced_state_ids = {}
     while remaining:
         transfer = remaining.pop(0)
         active_transfer_ids = (transfer.transfer_id,)
@@ -363,12 +367,13 @@ def _state_result(
                     raise SemanticError(
                         "transfer starts before its source state is ready"
                     )
-                ledger.send(
+                output = ledger.send(
                     source.state_id,
                     transfer.dst_rank,
                     transfer.ed_time,
                     _required_contributors(transfer, outputs),
                 )
+                produced_state_ids[transfer.transfer_id] = output.state_id
             else:
                 group = _concurrent_reduce_group(
                     transfer,
@@ -379,7 +384,10 @@ def _state_result(
                 active_transfer_ids = tuple(
                     item.transfer_id for item in group
                 )
-                _apply_reduce_group(ledger, group)
+                produced_state_ids.update(
+                    (transfer_id, state.state_id)
+                    for transfer_id, state in _apply_reduce_group(ledger, group)
+                )
                 grouped_ids = set(active_transfer_ids[1:])
                 remaining = [
                     item
@@ -419,12 +427,36 @@ def _state_result(
                 },
             )
         if len(matches) > 1:
-            return _invalid(
-                "state",
-                "duplicate_final_state",
-                "multiple final states match one output slot",
-                {"rank": slot.rank, "offset": slot.offset},
-            )
+            raw_dependencies = schedule.metadata.get("final_dependencies", {})
+            try:
+                dependencies = (
+                    tuple(
+                        raw_dependencies.get(
+                            "r{:08d}-o{:08d}".format(slot.rank, slot.offset),
+                            (),
+                        )
+                    )
+                    if isinstance(raw_dependencies, Mapping)
+                    else ()
+                )
+            except TypeError:
+                dependencies = ()
+            selected = []
+            if len(dependencies) == 1 and isinstance(dependencies[0], str):
+                selected_state_id = produced_state_ids.get(dependencies[0])
+                selected = [
+                    state
+                    for state in matches
+                    if state.state_id == selected_state_id
+                ]
+            if len(selected) != 1:
+                return _invalid(
+                    "state",
+                    "duplicate_final_state",
+                    "multiple final states match one output slot",
+                    {"rank": slot.rank, "offset": slot.offset},
+                )
+            matches = selected
         final_states.append(matches[0])
     try:
         check_final_states(

@@ -7,6 +7,7 @@ from vericcl.composer.compose import compose
 from vericcl.errors import SemanticError
 from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import AtomConstraints, ForbiddenTransfer, ObjectiveMode
+from vericcl.planner.build import build_plan
 from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
@@ -41,6 +42,7 @@ from vericcl.topology.model import (
     SharedResource,
     Topology,
 )
+from vericcl.topology.loader import load_topology
 from vericcl.verification.model import ValidationStatus
 from vericcl.verification.semantics import verify_schedule_semantics
 from vericcl.xml import (
@@ -347,6 +349,30 @@ def _allreduce_fixture():
     return inputs, topology, plan, templates, _patterns(templates)
 
 
+def _gateway_allgather_fixture(*, inplace=False):
+    inputs = resolve_inputs(
+        EXAMPLES / "topo" / "two_node_gateway.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    inputs = replace(
+        inputs,
+        collective=CollectiveSpec(
+            kind=CollectiveKind.ALL_GATHER,
+            datatype="float32",
+            inplace=inplace,
+        ),
+        strategies=replace(inputs.strategies, hierarchy=True),
+    )
+    topology = load_topology(inputs)
+    plan = build_plan(inputs, topology)
+    problems = tuple(
+        build_solver_problem(node, inputs, topology) for node in plan.nodes
+    )
+    templates = build_solver_templates(problems, plan.planning_mode)
+    return inputs, topology, plan, templates, _patterns(templates)
+
+
 def test_logical_position_instantiation_rebuilds_real_paths_and_provisional_policy():
     inputs, topology, plan, templates, patterns = _broadcast_fixture()
 
@@ -414,6 +440,151 @@ def test_allgather_preserves_local_values_after_output_offset_remapping():
     assert verify_schedule_semantics(schedule, inputs).status is ValidationStatus.VALID
 
 
+def test_gateway_allgather_real_demands_instantiate_and_compose_without_id_collisions():
+    inputs, topology, plan, templates, patterns = _gateway_allgather_fixture()
+
+    assert {node.stage_id for node in plan.nodes} == {0, 1, 2}
+    assert inputs.hyperparameters.slice_count > 1
+    assert any(
+        source != target
+        for template in templates
+        for member in template.members
+        for source, target in member.rank_map
+    )
+    assert any(
+        source != target
+        for template in templates
+        for member in template.members
+        for source, target in member.contributor_map
+    )
+
+    result = instantiate_route_patterns(
+        plan,
+        templates,
+        patterns,
+        inputs,
+        topology,
+    )
+    assert result.failures == ()
+    candidates = {
+        node_id: SolveCandidate(
+            candidate_id="candidate-{}".format(node_id),
+            node_schedules={node_id: schedule},
+            objective_mode=ObjectiveMode.LATENCY,
+            channel_count=2,
+            metrics=_metrics(),
+            selected_best=False,
+            proven_optimal=False,
+            search_space_restricted=False,
+            restrictions=(),
+            parent_candidate_id=None,
+        )
+        for node_id, schedule in result.node_schedules.items()
+    }
+    composed = compose(plan, candidates)
+
+    assert verify_schedule_semantics(composed, inputs).status is ValidationStatus.VALID
+    buffers = build_buffer_plan(composed, inputs)
+    assert len(buffers.final_values) == len(plan.final_outputs.values)
+
+
+@pytest.mark.parametrize("inplace", [False, True])
+def test_gateway_allgather_duplicate_final_versions_require_one_exact_dependency(
+    inplace,
+):
+    inputs, topology, plan, templates, patterns = _gateway_allgather_fixture(
+        inplace=inplace
+    )
+    result = instantiate_route_patterns(
+        plan,
+        templates,
+        patterns,
+        inputs,
+        topology,
+    )
+    candidates = {
+        node_id: SolveCandidate(
+            candidate_id="candidate-{}".format(node_id),
+            node_schedules={node_id: schedule},
+            objective_mode=ObjectiveMode.LATENCY,
+            channel_count=2,
+            metrics=_metrics(),
+            selected_best=False,
+            proven_optimal=False,
+            search_space_restricted=False,
+            restrictions=(),
+            parent_candidate_id=None,
+        )
+        for node_id, schedule in result.node_schedules.items()
+    }
+    composed = compose(plan, candidates)
+    final_key = "r00000001-o00000008"
+    correct_id = composed.metadata["final_dependencies"][final_key][0]
+    wrong_id = composed.metadata["final_dependencies"]["r00000001-o00000009"][0]
+
+    assert verify_schedule_semantics(
+        composed,
+        inputs,
+    ).status is ValidationStatus.VALID
+    for dependencies in (
+        (),
+        ("unknown-transfer",),
+        (wrong_id,),
+        (correct_id, "unknown-transfer"),
+        (correct_id, wrong_id),
+    ):
+        metadata = dict(composed.metadata)
+        final_dependencies = dict(metadata["final_dependencies"])
+        final_dependencies[final_key] = dependencies
+        metadata["final_dependencies"] = final_dependencies
+        invalid = verify_schedule_semantics(
+            replace(composed, metadata=metadata),
+            inputs,
+        )
+        assert invalid.status is ValidationStatus.INVALID
+        assert invalid.code == "duplicate_final_state"
+
+    original = next(
+        transfer
+        for transfer in composed.transfers
+        if transfer.transfer_id == correct_id
+    )
+    duration = original.ed_time - original.st_time
+    duplicate_id = "duplicate-final-copy"
+    duplicate_start = original.ed_time
+    duplicate = replace(
+        original,
+        transfer_id=duplicate_id,
+        atoms=tuple(
+            replace(
+                atom,
+                st_time=duplicate_start,
+                ed_time=duplicate_start + duration,
+            )
+            for atom in original.atoms
+        ),
+        st_time=duplicate_start,
+        ed_time=duplicate_start + duration,
+        predecessor_ids=frozenset({correct_id}),
+    )
+    metadata = dict(composed.metadata)
+    semantic = dict(metadata["semantic_predecessors"])
+    semantic[duplicate_id] = (correct_id,)
+    metadata["semantic_predecessors"] = semantic
+    final_dependencies = dict(metadata["final_dependencies"])
+    final_dependencies[final_key] = (correct_id, duplicate_id)
+    metadata["final_dependencies"] = final_dependencies
+    duplicated = replace(
+        composed,
+        transfers=composed.transfers + (duplicate,),
+        metadata=metadata,
+    )
+
+    invalid = verify_schedule_semantics(duplicated, inputs)
+    assert invalid.status is ValidationStatus.INVALID
+    assert invalid.code == "duplicate_final_state"
+
+
 def test_one_forbidden_member_falls_back_without_partial_schedule():
     inputs, topology, plan, templates, patterns = _broadcast_fixture()
     forbidden_inputs = replace(
@@ -469,17 +640,25 @@ def test_reduction_dual_rebuilds_join_and_downstream_dependencies():
         for member in transfer.member_slice_ids
     } == {1, 2, 3}
     assert sum(len(transfer.member_slice_ids) for transfer in reductions) == 3
+    ordered_reductions = tuple(
+        sorted(reductions, key=lambda item: (item.st_time, item.transfer_id))
+    )
     reduce_ids = {transfer.transfer_id for transfer in reductions}
-    assert set(
-        reduce_schedule.metadata["final_dependencies"][
-            "r00000000-o00000000"
+    terminal_reduction = ordered_reductions[-1].transfer_id
+    assert tuple(
+        reduce_schedule.metadata["semantic_predecessors"][
+            transfer.transfer_id
         ]
-    ) == reduce_ids
-    assert set(
-        reduce_schedule.metadata["aggregate_consumptions"][
-            "r00000000-o00000000"
-        ]
-    ) == reduce_ids
+        for transfer in ordered_reductions
+    ) == (
+        (),
+        (ordered_reductions[0].transfer_id,),
+        (ordered_reductions[1].transfer_id,),
+    )
+    assert reduce_schedule.metadata["final_dependencies"][
+        "r00000000-o00000000"
+    ] == (terminal_reduction,)
+    assert set(reduce_schedule.metadata["aggregate_consumptions"]) == reduce_ids
 
     candidates = {
         node_id: SolveCandidate(
@@ -502,7 +681,11 @@ def test_reduction_dual_rebuilds_join_and_downstream_dependencies():
     ]
     semantic = composed.metadata["semantic_predecessors"]
     assert sends
-    assert all(reduce_ids <= set(semantic[transfer.transfer_id]) for transfer in sends)
+    assert all(
+        set(semantic[transfer.transfer_id]) & reduce_ids
+        == {terminal_reduction}
+        for transfer in sends
+    )
     assert verify_schedule_semantics(composed, inputs).status is ValidationStatus.VALID
 
     buffers = build_buffer_plan(composed, inputs)
@@ -517,13 +700,15 @@ def test_reduction_dual_rebuilds_join_and_downstream_dependencies():
     }
     assert len(final_reductions) == 1
     final_reduction = next(iter(final_reductions))
+    assert final_reduction == terminal_reduction
     assert any(
         endpoint.transfer_id == final_reduction
         and endpoint.xml_type is EndpointType.RECV_REDUCE_COPY
         for endpoint in endpoints.endpoints
     )
     assert all(
-        final_reduction in transfer_dag.predecessors[transfer.transfer_id]
+        transfer_dag.predecessors[transfer.transfer_id] & reduce_ids
+        == {final_reduction}
         for transfer in sends
     )
 

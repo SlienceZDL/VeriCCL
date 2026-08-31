@@ -141,7 +141,8 @@ def test_shared_transfer_is_removed_if_any_member_is_forbidden():
 
     assert CandidateEdge(0, 1, 0) not in problem.candidate_edges
     assert problem.infeasible_demand_ids == (
-        "allreduce-ag-a00000000-a00000000-r00000000-l00000001",
+        "allreduce-ag-a00000000-a00000000-r00000000-l00000001-"
+        "c00000000.00000008-m00000000.00000008",
     )
 
 
