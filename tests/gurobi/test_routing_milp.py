@@ -1,18 +1,31 @@
 from dataclasses import replace
 
 import pytest
+import vericcl.solver.routing_milp as routing_milp
 
 from vericcl.errors import ConstructionInfeasibleError, SemanticError
+from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import AtomConstraints, ForbiddenTransfer, ObjectiveMode
-from vericcl.planner.model import PlanningMode
+from vericcl.planner.model import (
+    PlanNode,
+    PlanningMode,
+    StageInterface,
+)
+from vericcl.semantics.collective import (
+    CollectiveKind,
+    CollectiveSpec,
+    OutputSlot,
+)
 from vericcl.solver.budget import ModelBudget
 from vericcl.solver.demands import build_solver_problem
 from vericcl.solver.model import SolveStatus
 from vericcl.solver.routing_milp import solve_route_milp
 from vericcl.solver.templates import build_solver_templates
+from vericcl.topology.loader import topology_from_mapping
 from vericcl.topology.model import LinkKey
 
 from tests.gurobi.helpers import (
+    EXAMPLES,
     multihop_problem,
     reduction_dual_problem,
     require_gurobi_license,
@@ -42,6 +55,145 @@ def _solve(problem, objective, channel_count=2):
 
 def _path_nodes(path):
     return (path[0][0],) + tuple(edge[1] for edge in path)
+
+
+def _inputs(collective, rank_count):
+    base = resolve_inputs(
+        EXAMPLES / "topo" / "two_rank.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    return replace(
+        base,
+        collective=collective,
+        rank_count=rank_count,
+        hyperparameters=replace(
+            base.hyperparameters,
+            total_size_bytes=1024,
+            slice_size_bytes=1024,
+        ),
+        strategies=replace(
+            base.strategies,
+            shortest_paths=False,
+        ),
+    )
+
+
+def _branching_broadcast_problem():
+    collective = CollectiveSpec(
+        kind=CollectiveKind.BROADCAST,
+        datatype="float32",
+        root=0,
+    )
+    inputs = _inputs(collective, rank_count=5)
+    topology = topology_from_mapping(
+        {
+            "ranks": 5,
+            "nodes": [
+                {"id": 0, "ranks": [0, 1, 2, 3, 4], "gateways": []}
+            ],
+            "directed_links": [
+                {
+                    "src": src,
+                    "dst": dst,
+                    "alpha": 0,
+                    "invbw": invbw,
+                    "max_channels": 2,
+                }
+                for src, dst, invbw in (
+                    (0, 1, 1),
+                    (1, 3, 1),
+                    (1, 4, 1),
+                    (0, 2, 2),
+                    (2, 3, 2),
+                    (2, 4, 2),
+                )
+            ],
+            "shared_resources": [],
+        }
+    )
+    contributors = frozenset({0})
+    node = PlanNode(
+        node_id="route-branching-broadcast",
+        stage_id=0,
+        local_collective=collective,
+        communication_group=(0, 1, 2, 3, 4),
+        logical_input=StageInterface({OutputSlot(0, 0): contributors}),
+        logical_output=StageInterface(
+            {
+                OutputSlot(0, 0): contributors,
+                OutputSlot(3, 0): contributors,
+                OutputSlot(4, 0): contributors,
+            }
+        ),
+        allowed_links=frozenset(topology.links),
+        shared_resource_ids=frozenset(),
+    )
+    return build_solver_problem(node, inputs, topology)
+
+
+def _branching_reduction_dual_problem():
+    collective = CollectiveSpec(
+        kind=CollectiveKind.REDUCE,
+        datatype="float32",
+        reduction_op="sum",
+        root=0,
+    )
+    inputs = _inputs(collective, rank_count=4)
+    topology = topology_from_mapping(
+        {
+            "ranks": 4,
+            "nodes": [{"id": 0, "ranks": [0, 1, 2, 3], "gateways": []}],
+            "directed_links": [
+                {
+                    "src": src,
+                    "dst": dst,
+                    "alpha": 0,
+                    "invbw": 1,
+                    "max_channels": 2,
+                    "resources": ["reduce-fabric"],
+                }
+                for src, dst in ((1, 0), (2, 1), (3, 1))
+            ],
+            "shared_resources": [
+                {
+                    "id": "reduce-fabric",
+                    "member_links": [[1, 0], [2, 1], [3, 1]],
+                    "alpha": 0,
+                    "invbw": 1,
+                    "max_channels": 2,
+                }
+            ],
+        }
+    )
+    node = PlanNode(
+        node_id="route-branching-reduction-dual",
+        stage_id=0,
+        local_collective=collective,
+        communication_group=(0, 1, 2, 3),
+        logical_input=StageInterface(
+            {
+                OutputSlot(0, 0): frozenset({0}),
+                OutputSlot(1, 0): frozenset({1}),
+                OutputSlot(2, 0): frozenset({2}),
+                OutputSlot(3, 0): frozenset({3}),
+            }
+        ),
+        logical_output=StageInterface(
+            {OutputSlot(0, 0): frozenset({0, 1, 2, 3})}
+        ),
+        allowed_links=frozenset(topology.links),
+        shared_resource_ids=frozenset({"reduce-fabric"}),
+    )
+    return build_solver_problem(node, inputs, topology)
+
+
+class _CallbackSnapshot:
+    def __init__(self, values):
+        self._values = values
+
+    def cbGet(self, key):
+        return self._values[key]
 
 
 def test_broadcast_route_reaches_each_leaf_with_one_parent_and_legal_flows():
@@ -78,6 +230,141 @@ def test_broadcast_route_reaches_each_leaf_with_one_parent_and_legal_flows():
     assert pattern.model_stats.general_constraint_count >= 0
     assert pattern.model_stats.build_time_s >= 0.0
     assert pattern.model_stats.optimize_time_s >= 0.0
+
+
+def test_branching_broadcast_selects_one_parent_and_continuous_shared_paths():
+    require_gurobi_license()
+    problem = _branching_broadcast_problem()
+
+    pattern = _solve(
+        problem,
+        ObjectiveMode.LATENCY,
+        channel_count=1,
+    )
+
+    representative = _template(problem).representative
+    assert all(
+        len(demand.candidate_paths) == 2
+        for demand in representative.demands
+    )
+    assert all(
+        {path[-2] for path in demand.candidate_paths} == {1, 2}
+        for demand in representative.demands
+    )
+    assert pattern.selected_edges == ((0, 1), (1, 3), (1, 4))
+    assert {path[0] for _, path in pattern.member_paths} == {(0, 1)}
+    parents = {}
+    for src, dst in pattern.selected_edges:
+        assert dst not in parents
+        parents[dst] = src
+    assert parents == {1: 0, 3: 1, 4: 1}
+    for _, path in pattern.member_paths:
+        nodes = _path_nodes(path)
+        assert len(nodes) == len(set(nodes))
+        assert all(
+            first[1] == second[0]
+            for first, second in zip(path, path[1:])
+        )
+
+
+def test_branching_reduction_dual_shares_virtual_tree_over_physical_reverse_links():
+    require_gurobi_license()
+    problem = _branching_reduction_dual_problem()
+
+    pattern = _solve(
+        problem,
+        ObjectiveMode.LATENCY,
+        channel_count=1,
+    )
+
+    representative = _template(problem).representative
+    assert all(demand.reduction_dual for demand in representative.demands)
+    assert pattern.selected_edges == ((0, 1), (1, 2), (1, 3))
+    assert pattern.member_paths == (
+        (representative.demands[0].demand_id, ((0, 1),)),
+        (representative.demands[1].demand_id, ((0, 1), (1, 2))),
+        (representative.demands[2].demand_id, ((0, 1), (1, 3))),
+    )
+    demand_by_id = {
+        demand.demand_id: demand for demand in representative.demands
+    }
+    assert {
+        demand_by_id[demand_id].physical_link(src, dst)
+        for demand_id, path in pattern.member_paths
+        for src, dst in path
+    } == {(1, 0), (2, 1), (3, 1)}
+    assert all(
+        "reduce-fabric"
+        in problem.topology.link(LinkKey(*physical)).resource_ids
+        for physical in ((1, 0), (2, 1), (3, 1))
+    )
+
+
+def test_optimal_route_is_scoped_to_the_candidate_path_domain():
+    require_gurobi_license()
+    base = throughput_tradeoff_problem()
+    demand = replace(
+        base.demands[0],
+        candidate_paths=((0, 1, 2),),
+    )
+    problem = replace(base, demands=(demand,))
+
+    pattern = _solve(problem, ObjectiveMode.LATENCY)
+
+    assert LinkKey(0, 2) in demand.legal_links
+    assert pattern.metrics.status is SolveStatus.OPTIMAL
+    assert pattern.selected_edges == ((0, 1), (1, 2))
+    assert pattern.metrics.makespan_us == 5.0
+
+
+def test_time_limit_incumbent_keeps_primary_callback_bound_and_gap(monkeypatch):
+    require_gurobi_license()
+    base = multihop_problem(shared_resource=True)
+    problem = replace(
+        base,
+        inputs=replace(
+            base.inputs,
+            solver=replace(base.inputs.solver, mip_gap=0.3),
+        ),
+    )
+
+    def controlled_time_limit(model, progress):
+        model.optimize()
+        callback = progress.gp.GRB.Callback
+        progress(
+            _CallbackSnapshot(
+                {
+                    callback.MULTIOBJ_OBJCNT: 1,
+                    callback.MULTIOBJ_OBJBST: 4.0,
+                    callback.MULTIOBJ_OBJBND: 3.0,
+                }
+            ),
+            callback.MULTIOBJ,
+        )
+        progress(
+            _CallbackSnapshot(
+                {
+                    callback.MIP_OBJBST: 2.0,
+                    callback.MIP_OBJBND: 2.0,
+                }
+            ),
+            callback.MIP,
+        )
+        return SolveStatus.TIME_LIMIT
+
+    monkeypatch.setattr(
+        routing_milp,
+        "_optimize_route_model",
+        controlled_time_limit,
+    )
+
+    pattern = _solve(problem, ObjectiveMode.LATENCY)
+
+    assert pattern.metrics.status is SolveStatus.TIME_LIMIT
+    assert pattern.metrics.objective_values[0] == 4.0
+    assert pattern.metrics.best_bound == 3.0
+    assert pattern.metrics.mip_gap == 0.25
+    assert pattern.metrics.within_requested_gap
 
 
 def test_forbidden_direct_link_is_not_selected_even_when_topology_allows_it():

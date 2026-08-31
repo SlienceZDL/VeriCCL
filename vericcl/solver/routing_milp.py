@@ -412,6 +412,8 @@ def _build_route_model(
         flow_selected = {}
         path_selected = {}
         for demand_index, demand in enumerate(demands):
+            # Model optimality is scoped to this TransferDemand candidate-path
+            # domain; it does not assert optimality over every legal graph path.
             paths = candidate_paths[demand.demand_id]
             path_variables = []
             for path_index, _ in enumerate(paths):
@@ -593,6 +595,14 @@ def _status(gp, model) -> SolveStatus:
     return SolveStatus.ERROR
 
 
+def _optimize_route_model(
+    model,
+    progress: _PrimaryObjectiveProgress,
+) -> SolveStatus:
+    model.optimize(progress)
+    return _status(progress.gp, model)
+
+
 def _primary_bound_and_gap(
     model,
     status: SolveStatus,
@@ -758,9 +768,8 @@ def solve_route_milp(
     progress = _PrimaryObjectiveProgress(gp)
     optimize_started = time.monotonic()
     try:
-        model.optimize(progress)
+        status = _optimize_route_model(model, progress)
         optimize_time = max(0.0, time.monotonic() - optimize_started)
-        status = _status(gp, model)
         if model.SolCount <= 0:
             raise ConstructionInfeasibleError(
                 "representative routing model has no incumbent: status {}".format(

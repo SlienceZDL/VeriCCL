@@ -1,3 +1,4 @@
+import re
 from dataclasses import replace
 
 import pytest
@@ -16,6 +17,16 @@ from tests.gurobi.helpers import EXAMPLES, require_gurobi_license
 
 
 pytestmark = [pytest.mark.phase03, pytest.mark.gurobi]
+
+
+_ROUTE_VARIABLE_TYPES = (
+    (re.compile(r"tree-edge-e\d{4}-r\d{4}-r\d{4}"), "B"),
+    (re.compile(r"flow-path-d\d{4}-p\d{4}"), "B"),
+    (re.compile(r"flow-edge-d\d{4}-e\d{4}"), "B"),
+    (re.compile(r"level-r\d{4}"), "C"),
+    (re.compile(r"route-completion-us"), "C"),
+    (re.compile(r"maximum-resource-load-us"), "C"),
+)
 
 
 def _representative_case(slice_count):
@@ -85,7 +96,7 @@ def _representative_case(slice_count):
 def test_route_model_size_is_exactly_slice_invariant_and_has_no_schedule_vars():
     require_gurobi_license()
     counts = []
-    names = []
+    variable_shapes = []
     for slice_count in (8, 16, 64, 128):
         inputs, topology, template = _representative_case(slice_count)
         pattern = solve_route_milp(
@@ -112,25 +123,33 @@ def test_route_model_size_is_exactly_slice_invariant_and_has_no_schedule_vars():
             budget=ModelBudget(seconds=30, started_at=0, deadline=30),
             warm_start=None,
         )
-        names.append(tuple(variable.VarName for variable in model.getVars()))
+        variables = tuple(
+            (variable.VarName, variable.VType)
+            for variable in model.getVars()
+        )
+        variable_shapes.append(variables)
+        for name, variable_type in variables:
+            matches = [
+                expected_type
+                for pattern, expected_type in _ROUTE_VARIABLE_TYPES
+                if pattern.fullmatch(name)
+            ]
+            assert matches, "unexpected route variable family: {}".format(
+                name
+            )
+            assert matches == [variable_type]
+        assert len(model.getConstrs()) == model.NumConstrs
+        assert all(
+            constraint.Sense in {"<", "=", ">"}
+            for constraint in model.getConstrs()
+        )
+        assert model.NumQConstrs == 0
+        assert model.getQConstrs() == []
+        assert model.NumSOS == 0
+        assert model.getSOSs() == []
+        assert model.NumGenConstrs == 0
+        assert model.getGenConstrs() == []
         model.dispose()
 
     assert counts == [counts[0]] * 4
-    assert names == [names[0]] * 4
-    forbidden_fragments = (
-        "channel-",
-        "start-",
-        "end-",
-        "st-time",
-        "ed-time",
-        "lane-order",
-        "resource-order",
-        "-both",
-        "-first",
-        "-second",
-    )
-    assert not any(
-        fragment in name
-        for name in names[0]
-        for fragment in forbidden_fragments
-    )
+    assert variable_shapes == [variable_shapes[0]] * 4
