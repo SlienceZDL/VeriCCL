@@ -190,30 +190,32 @@ def external_alias_topology():
 
 
 def symmetric_external_alias_topology():
-    node_groups = (
-        (0, 1),
-        (2, 4),
-        (3, 5),
-        (6, 9),
-        (7, 8),
+    node_groups = tuple(
+        (2 * node_index, 2 * node_index + 1)
+        for node_index in range(7)
     )
-    targets = {
-        0: (1, 2),
-        1: (3, 4),
-        2: (0, 1),
-        3: (1, 2),
-        4: (1, 2),
-    }
     link_resources = {}
     resources = []
     for node_index, group in enumerate(node_groups):
         root, peer = group
         resource_id = "fabric-{}".format(node_index)
         members = [(root, peer)]
-        for target_index in targets[node_index]:
-            members.extend(
-                (root, rank) for rank in node_groups[target_index]
+        external_gateways = [
+            other_group[0]
+            for other_index, other_group in enumerate(node_groups)
+            if other_index != node_index
+        ]
+        if node_index == 1:
+            components = (
+                external_gateways[:3],
+                external_gateways[3:],
             )
+        else:
+            components = (external_gateways,)
+        for component in components:
+            for index, src in enumerate(component):
+                dst = component[(index + 1) % len(component)]
+                members.extend(((src, dst), (dst, src)))
         for member in members:
             link_resources.setdefault(member, set()).add(resource_id)
         link_resources.setdefault((peer, root), set())
@@ -233,10 +235,109 @@ def symmetric_external_alias_topology():
                 link_resources.setdefault((src, dst), set())
     return topology_from_mapping(
         {
-            "ranks": 10,
+            "ranks": 14,
             "nodes": [
                 {
                     "id": 101 + node_index * 7,
+                    "ranks": list(group),
+                    "gateways": [group[0]],
+                }
+                for node_index, group in enumerate(node_groups)
+            ],
+            "directed_links": [
+                {
+                    "src": src,
+                    "dst": dst,
+                    "alpha": 1,
+                    "invbw": 2,
+                    "max_channels": 8,
+                    "resources": sorted(resource_ids),
+                }
+                for (src, dst), resource_ids in sorted(
+                    link_resources.items()
+                )
+            ],
+            "shared_resources": resources,
+        }
+    )
+
+
+def permuted_resource_id_topology(
+    permute_ids,
+    reverse_external_rank_ids=False,
+):
+    original_groups = tuple(
+        (2 * node_index, 2 * node_index + 1)
+        for node_index in range(5)
+    )
+    node_groups = (
+        original_groups
+        if not permute_ids
+        else (
+            original_groups[0],
+            original_groups[3],
+            original_groups[4],
+            original_groups[1],
+            original_groups[2],
+        )
+    )
+    if reverse_external_rank_ids:
+        node_groups = (node_groups[0],) + tuple(
+            tuple(reversed(group)) for group in node_groups[1:]
+        )
+    link_resources = {}
+    resources = []
+    for node_index, group in enumerate(node_groups):
+        root, peer = group
+        first_target = node_groups[(node_index + 1) % len(node_groups)]
+        second_target = node_groups[(node_index + 2) % len(node_groups)]
+        parallel_members = [
+            (root, peer),
+            (root, first_target[0]),
+            (peer, second_target[0]),
+            (root, first_target[1]),
+            (peer, second_target[1]),
+        ]
+        crossed_members = [
+            (root, peer),
+            (root, first_target[0]),
+            (peer, second_target[0]),
+            (root, second_target[1]),
+            (peer, first_target[1]),
+        ]
+        first_id = "resource-{:02d}-a".format(node_index)
+        second_id = "resource-{:02d}-b".format(node_index)
+        assignments = (
+            (first_id, crossed_members),
+            (second_id, parallel_members),
+        ) if permute_ids else (
+            (first_id, parallel_members),
+            (second_id, crossed_members),
+        )
+        for resource_id, members in assignments:
+            for member in members:
+                link_resources.setdefault(member, set()).add(resource_id)
+            resources.append(
+                {
+                    "id": resource_id,
+                    "member_links": [list(member) for member in members],
+                    "alpha": 1,
+                    "invbw": 2,
+                    "max_channels": 8,
+                }
+            )
+        link_resources.setdefault((peer, root), set())
+    gateways = tuple(group[0] for group in node_groups)
+    for src in gateways:
+        for dst in gateways:
+            if src != dst:
+                link_resources.setdefault((src, dst), set())
+    return topology_from_mapping(
+        {
+            "ranks": 10,
+            "nodes": [
+                {
+                    "id": 211 + node_index * 11,
                     "ranks": list(group),
                     "gateways": [group[0]],
                 }
@@ -554,8 +655,8 @@ def test_external_node_alias_mismatch_falls_back_to_direct_allgather():
 def test_signature_distinguishes_symmetric_crossed_alias_partition():
     topology = symmetric_external_alias_topology()
     parallel = exact_domain_signature(topology, (0, 1))
-    crossed = exact_domain_signature(topology, (2, 4))
-    renumbered_parallel = exact_domain_signature(topology, (3, 5))
+    crossed = exact_domain_signature(topology, (2, 3))
+    renumbered_parallel = exact_domain_signature(topology, (4, 5))
 
     assert parallel == renumbered_parallel
     assert parallel != crossed
@@ -573,7 +674,7 @@ def test_symmetric_crossed_alias_partition_falls_back_to_direct_allgather():
     )
     inputs = replace(
         inputs,
-        rank_count=10,
+        rank_count=14,
         collective=CollectiveSpec(
             kind=CollectiveKind.ALL_GATHER,
             datatype="float32",
@@ -585,6 +686,40 @@ def test_symmetric_crossed_alias_partition_falls_back_to_direct_allgather():
 
     assert plan.planning_mode is PlanningMode.DIRECT
     assert plan.planning_reason == "no_eligible_gateway_domain"
+
+
+def test_signature_ignores_permuted_identical_resource_ids():
+    original = permuted_resource_id_topology(False)
+    renamed = permuted_resource_id_topology(True)
+    fully_renamed = permuted_resource_id_topology(True, True)
+
+    assert exact_domain_signature(original, (0, 1)) == (
+        exact_domain_signature(renamed, (0, 1))
+    )
+    assert exact_domain_signature(original, (0, 1)) == (
+        exact_domain_signature(fully_renamed, (0, 1))
+    )
+    assert eligible_gateway_groups(
+        original,
+        discover_communication_groups(original),
+    ) == ((0, 2, 4, 6, 8),)
+    assert eligible_gateway_groups(
+        renamed,
+        discover_communication_groups(renamed),
+    ) == ((0, 2, 4, 6, 8),)
+
+
+def test_signature_canonicalization_limit_is_an_error(monkeypatch):
+    monkeypatch.setattr(
+        "vericcl.topology.isomorphism._MAX_CANONICAL_STATES",
+        0,
+    )
+
+    with pytest.raises(
+        SemanticError,
+        match="domain isomorphism canonicalization limit exceeded",
+    ):
+        exact_domain_signature(domain_topology(), (0, 1))
 
 
 def test_signature_is_deterministic():

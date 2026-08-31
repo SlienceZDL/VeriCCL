@@ -29,145 +29,213 @@ def _performance(curve: PerformanceCurve) -> dict:
     }
 
 
-def _endpoint_shape(
-    topology: Topology,
-    rank: int,
-    relative_rank: dict,
-    relative_node: dict,
-    node_members: dict,
-) -> dict:
-    if rank in relative_rank:
-        return {
-            "scope": "domain",
-            "rank": relative_rank[rank],
+# Bound the exact individualization/refinement search. Exceeding the bound is
+# an explicit semantic error; the planner never accepts an approximate match.
+_MAX_CANONICAL_STATES = 100000
+
+
+def _refine_colors(colors: tuple, edges: tuple) -> tuple:
+    outgoing = [[] for _ in colors]
+    incoming = [[] for _ in colors]
+    for src, dst, label in edges:
+        outgoing[src].append((label, dst))
+        incoming[dst].append((label, src))
+    refined = colors
+    while True:
+        signatures = [
+            (
+                refined[vertex],
+                tuple(
+                    sorted(
+                        (label, refined[dst])
+                        for label, dst in outgoing[vertex]
+                    )
+                ),
+                tuple(
+                    sorted(
+                        (label, refined[src])
+                        for label, src in incoming[vertex]
+                    )
+                ),
+            )
+            for vertex in range(len(refined))
+        ]
+        palette = {
+            signature: color
+            for color, signature in enumerate(sorted(set(signatures)))
         }
-    node = topology.node_membership[rank]
-    members = node_members[node]
-    return {
-        "scope": "external",
-        "domain_node": relative_node.get(node),
-        "node_size": len(members),
-        "node_position": members.index(rank),
-        "gateway": rank in topology.gateways,
+        updated = tuple(palette[signature] for signature in signatures)
+        if updated == refined:
+            return refined
+        refined = updated
+
+
+def _canonical_colored_graph(vertex_colors: tuple, edges: tuple) -> str:
+    """Return the exact canonical hash of a bounded colored graph search."""
+    palette = {
+        color: index for index, color in enumerate(sorted(set(vertex_colors)))
     }
+    initial = tuple(palette[color] for color in vertex_colors)
+    state_count = [0]
+
+    def search(colors: tuple) -> str:
+        state_count[0] += 1
+        if state_count[0] > _MAX_CANONICAL_STATES:
+            raise SemanticError(
+                "domain isomorphism canonicalization limit exceeded"
+            )
+        refined = _refine_colors(colors, edges)
+        classes = {}
+        for vertex, color in enumerate(refined):
+            classes.setdefault(color, []).append(vertex)
+        ambiguous = [
+            (len(vertices), color, tuple(vertices))
+            for color, vertices in classes.items()
+            if len(vertices) > 1
+        ]
+        if not ambiguous:
+            order = tuple(
+                vertex
+                for vertex, _ in sorted(
+                    enumerate(refined),
+                    key=lambda item: item[1],
+                )
+            )
+            relative = {
+                vertex: index for index, vertex in enumerate(order)
+            }
+            return canonical_json(
+                {
+                    "colors": [vertex_colors[vertex] for vertex in order],
+                    "edges": sorted(
+                        (
+                            relative[src],
+                            relative[dst],
+                            label,
+                        )
+                        for src, dst, label in edges
+                    ),
+                }
+            )
+        _, _, vertices = min(ambiguous)
+        candidates = []
+        marker = max(refined) + 1
+        for vertex in vertices:
+            individualized = list(refined)
+            individualized[vertex] = marker
+            candidates.append(search(tuple(individualized)))
+        return min(candidates)
+
+    return sha256_json(search(initial))
 
 
-def _member_shape(
-    topology: Topology,
-    member: object,
-    relative_rank: dict,
-    relative_node: dict,
-    node_members: dict,
-) -> dict:
-    return {
-        "src": _endpoint_shape(
-            topology,
-            member.src_rank,
-            relative_rank,
-            relative_node,
-            node_members,
-        ),
-        "dst": _endpoint_shape(
-            topology,
-            member.dst_rank,
-            relative_rank,
-            relative_node,
-            node_members,
-        ),
-        "same_node": (
-            topology.node_membership[member.src_rank]
-            == topology.node_membership[member.dst_rank]
-        ),
-    }
-
-
-def _external_alias_partition(
+def _resource_incidence_signature(
     topology: Topology,
     domain_set: set,
     relative_rank: dict,
     relative_node: dict,
     node_members: dict,
-) -> dict:
-    resource_records = []
+) -> str:
+    vertex_colors = []
+    edges = []
+
+    def vertex(color: dict) -> int:
+        vertex_id = len(vertex_colors)
+        vertex_colors.append(canonical_json(color))
+        return vertex_id
+
+    rank_vertices = {}
+    node_vertices = {}
+
+    def rank_vertex(rank: int) -> int:
+        if rank in rank_vertices:
+            return rank_vertices[rank]
+        if rank in relative_rank:
+            color = {
+                "kind": "domain_rank",
+                "rank": relative_rank[rank],
+            }
+        else:
+            node = topology.node_membership[rank]
+            members = node_members[node]
+            color = {
+                "kind": "external_rank",
+                "domain_node": relative_node.get(node),
+                "node_size": len(members),
+                "gateway": rank in topology.gateways,
+            }
+        rank_vertices[rank] = vertex(color)
+        if rank not in relative_rank:
+            node = topology.node_membership[rank]
+            if node not in node_vertices:
+                node_vertices[node] = vertex(
+                    {
+                        "kind": "external_node",
+                        "domain_node": relative_node.get(node),
+                        "node_size": len(node_members[node]),
+                    }
+                )
+            edges.append(
+                (node_vertices[node], rank_vertices[rank], "contains")
+            )
+        return rank_vertices[rank]
+
+    link_vertices = {}
+    referenced_resources = set()
     for key, edge in topology.links.items():
         if key.src_rank not in domain_set or key.dst_rank not in domain_set:
             continue
-        link_shape = {
-            "src": relative_rank[key.src_rank],
-            "dst": relative_rank[key.dst_rank],
-        }
+        link_vertices[key] = vertex(
+            {
+                "kind": "domain_link",
+                "src": relative_rank[key.src_rank],
+                "dst": relative_rank[key.dst_rank],
+            }
+        )
         for resource_id in edge.resource_ids:
-            resource = topology.shared_resources[resource_id]
-            resource_shape = {
+            referenced_resources.add(resource_id)
+
+    resource_vertices = {}
+    for resource_id in referenced_resources:
+        resource = topology.shared_resources[resource_id]
+        resource_vertices[resource_id] = vertex(
+            {
+                "kind": "resource",
                 "max_channels": resource.max_channels,
                 "performance": _performance(resource.performance),
-                "members": sorted(
-                    (
-                        _member_shape(
-                            topology,
-                            member,
-                            relative_rank,
-                            relative_node,
-                            node_members,
-                        )
-                        for member in resource.member_links
-                    ),
-                    key=canonical_json,
-                ),
             }
-            context = {
-                "link": link_shape,
-                "resource": resource_shape,
-            }
-            resource_records.append(
-                (canonical_json(context), resource_id, context, resource)
+        )
+    for key, edge in topology.links.items():
+        if key not in link_vertices:
+            continue
+        for resource_id in edge.resource_ids:
+            edges.append(
+                (
+                    link_vertices[key],
+                    resource_vertices[resource_id],
+                    "uses",
+                )
             )
 
-    occurrences = []
-    classes = {}
-    for _, _, context, resource in sorted(resource_records):
-        member_records = []
+    for resource_id in referenced_resources:
+        resource = topology.shared_resources[resource_id]
         for member in resource.member_links:
-            member_shape = _member_shape(
-                topology,
-                member,
-                relative_rank,
-                relative_node,
-                node_members,
-            )
-            member_records.append(
+            member_vertex = vertex({"kind": "resource_member"})
+            edges.append(
                 (
-                    canonical_json(member_shape),
-                    member.src_rank,
-                    member.dst_rank,
-                    member_shape,
-                    member,
+                    resource_vertices[resource_id],
+                    member_vertex,
+                    "member",
                 )
             )
-        for _, _, _, member_shape, member in sorted(member_records):
-            endpoints = (
-                ("src", member.src_rank),
-                ("dst", member.dst_rank),
+            edges.append(
+                (member_vertex, rank_vertex(member.src_rank), "src")
             )
-            for side, rank in endpoints:
-                node = topology.node_membership[rank]
-                if rank in relative_rank or node in relative_node:
-                    continue
-                occurrence_index = len(occurrences)
-                occurrences.append(
-                    {
-                        "context": context,
-                        "member": member_shape,
-                        "side": side,
-                    }
-                )
-                classes.setdefault(node, []).append(occurrence_index)
-    return {
-        "occurrences": occurrences,
-        "classes": sorted(
-            tuple(indices) for indices in classes.values()
-        ),
-    }
+            edges.append(
+                (member_vertex, rank_vertex(member.dst_rank), "dst")
+            )
+
+    return _canonical_colored_graph(tuple(vertex_colors), tuple(edges))
 
 
 def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
@@ -191,7 +259,7 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
                 "gateway": rank in topology.gateways,
             }
         )
-    external_alias_partition = _external_alias_partition(
+    resource_incidence = _resource_incidence_signature(
         topology,
         domain_set,
         relative_rank,
@@ -203,45 +271,18 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
     for key, edge in topology.links.items():
         if key.src_rank not in domain_set or key.dst_rank not in domain_set:
             continue
-        resources = []
-        for resource_id in edge.resource_ids:
-            resource = topology.shared_resources[resource_id]
-            members = [
-                _member_shape(
-                    topology,
-                    member,
-                    relative_rank,
-                    relative_node,
-                    node_members,
-                )
-                for member in resource.member_links
-            ]
-            resources.append(
-                {
-                    "members": sorted(
-                        members,
-                        key=lambda value: sha256_json(value),
-                    ),
-                    "max_channels": resource.max_channels,
-                    "performance": _performance(resource.performance),
-                }
-            )
         links.append(
             {
                 "src": relative_rank[key.src_rank],
                 "dst": relative_rank[key.dst_rank],
                 "max_channels": edge.max_channels,
                 "performance": _performance(edge.performance),
-                "resources": sorted(
-                    resources,
-                    key=lambda value: sha256_json(value),
-                ),
             }
         )
     value = {
         "rank_count": len(domain),
         "roles": roles,
         "links": sorted(links, key=lambda item: (item["src"], item["dst"])),
-        "external_alias_partition": external_alias_partition,
+        "resource_incidence": resource_incidence,
     }
     return sha256_json(value)
