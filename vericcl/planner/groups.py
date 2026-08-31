@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Set, Tuple
 
 from vericcl.errors import SemanticError
+from vericcl.topology.isomorphism import exact_domain_signature
 from vericcl.topology.model import Topology
 
 
@@ -63,6 +64,87 @@ def eligible_gateway_group(
         ),
         None,
     )
+
+
+def eligible_gateway_groups(
+    topology: Topology,
+    groups: CommunicationGroups,
+) -> Tuple[Tuple[int, ...], ...]:
+    if not isinstance(topology, Topology):
+        raise SemanticError("topology must be a Topology")
+    if not isinstance(groups, CommunicationGroups):
+        raise SemanticError("groups must be CommunicationGroups")
+
+    node_ids = set(topology.node_membership.values())
+    local_groups = {}
+    for group in groups.intra_node:
+        group_node_ids = {
+            topology.node_membership.get(rank) for rank in group
+        }
+        if len(group_node_ids) != 1 or None in group_node_ids:
+            return ()
+        node_id = next(iter(group_node_ids))
+        if node_id in local_groups:
+            return ()
+        expected = tuple(
+            rank
+            for rank, rank_node_id in topology.node_membership.items()
+            if rank_node_id == node_id
+        )
+        if group != expected:
+            return ()
+        local_groups[node_id] = group
+    if set(local_groups) != node_ids:
+        return ()
+
+    ordered_nodes = tuple(
+        node_id
+        for node_id, _ in sorted(
+            local_groups.items(),
+            key=lambda item: item[1],
+        )
+    )
+    gateways_by_node = {
+        node_id: tuple(
+            rank
+            for rank in local_groups[node_id]
+            if rank in topology.gateways
+        )
+        for node_id in ordered_nodes
+    }
+    gateway_counts = {
+        len(gateways) for gateways in gateways_by_node.values()
+    }
+    if len(gateway_counts) != 1 or not gateway_counts or 0 in gateway_counts:
+        return ()
+
+    signatures = {
+        exact_domain_signature(topology, local_groups[node_id])
+        for node_id in ordered_nodes
+    }
+    if len(signatures) != 1:
+        return ()
+
+    available = set(groups.inter_node)
+    rails = []
+    rail_count = next(iter(gateway_counts))
+    for position in range(rail_count):
+        rail = tuple(
+            sorted(
+                gateways_by_node[node_id][position]
+                for node_id in ordered_nodes
+            )
+        )
+        if rail not in available:
+            return ()
+        if _components(topology, rail) != (rail,):
+            return ()
+        if {
+            topology.node_membership[rank] for rank in rail
+        } != node_ids:
+            return ()
+        rails.append(rail)
+    return tuple(rails)
 
 
 def _components(

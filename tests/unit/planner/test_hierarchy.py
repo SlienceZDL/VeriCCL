@@ -7,6 +7,7 @@ from vericcl.errors import InputValidationError, SemanticError
 from vericcl.input.loader import resolve_inputs
 from vericcl.planner.build import build_plan
 from vericcl.planner.hierarchy import (
+    build_gateway_allgather_plan,
     build_gateway_allreduce_plan,
     validate_manual_hierarchy,
 )
@@ -485,3 +486,21 @@ def test_gateway_builder_rejects_wrong_collective_and_missing_group():
         build_gateway_allreduce_plan(wrong, topology, groups)
     with pytest.raises(InputValidationError, match="covers every node"):
         build_gateway_allreduce_plan(inputs, topology, groups)
+
+
+def test_gateway_allgather_builder_rejects_wrong_collective_and_missing_group():
+    allreduce_inputs = two_rank_inputs()
+    topology = load_topology(allreduce_inputs)
+    groups = CommunicationGroups(intra_node=((0, 1),), inter_node=())
+    allgather_inputs = replace(
+        allreduce_inputs,
+        collective=CollectiveSpec(
+            kind=CollectiveKind.ALL_GATHER,
+            datatype="float32",
+        ),
+    )
+
+    with pytest.raises(InputValidationError, match="requires AllGather"):
+        build_gateway_allgather_plan(allreduce_inputs, topology, groups)
+    with pytest.raises(InputValidationError, match="covers every node"):
+        build_gateway_allgather_plan(allgather_inputs, topology, groups)

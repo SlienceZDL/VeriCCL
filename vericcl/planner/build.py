@@ -4,8 +4,10 @@ from vericcl.planner.direct import build_direct_plan
 from vericcl.planner.groups import (
     discover_communication_groups,
     eligible_gateway_group,
+    eligible_gateway_groups,
 )
 from vericcl.planner.hierarchy import (
+    build_gateway_allgather_plan,
     build_gateway_allreduce_plan,
     build_manual_plan,
 )
@@ -35,11 +37,20 @@ def build_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
         plan = build_manual_plan(inputs, topology)
     elif (
         inputs.strategies.hierarchy
-        and inputs.collective.kind is CollectiveKind.ALL_REDUCE
+        and inputs.collective.kind
+        in {CollectiveKind.ALL_GATHER, CollectiveKind.ALL_REDUCE}
     ):
         groups = discover_communication_groups(topology)
-        if eligible_gateway_group(topology, groups) is not None:
+        if (
+            inputs.collective.kind is CollectiveKind.ALL_REDUCE
+            and eligible_gateway_group(topology, groups) is not None
+        ):
             plan = build_gateway_allreduce_plan(inputs, topology, groups)
+        elif (
+            inputs.collective.kind is CollectiveKind.ALL_GATHER
+            and eligible_gateway_groups(topology, groups)
+        ):
+            plan = build_gateway_allgather_plan(inputs, topology, groups)
         else:
             plan = build_direct_plan(
                 inputs,

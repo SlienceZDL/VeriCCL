@@ -7,6 +7,7 @@ from vericcl.input.loader import resolve_inputs
 from vericcl.planner.groups import (
     CommunicationGroups,
     discover_communication_groups,
+    eligible_gateway_groups,
 )
 from vericcl.topology.isomorphism import exact_domain_signature
 from vericcl.topology.loader import load_topology, topology_from_mapping
@@ -84,6 +85,113 @@ def test_gateway_groups_do_not_invent_rank_pairs():
     assert groups.intra_node == ((0, 1, 2, 3), (4, 5, 6, 7))
     assert groups.inter_node == ((0, 4),)
     assert (1, 5) not in groups.inter_node
+
+
+def test_eligible_gateway_groups_select_every_real_positional_rail():
+    raw = {
+        "ranks": 8,
+        "nodes": [
+            {"id": 0, "ranks": [0, 1, 2, 3], "gateways": [0, 1, 2, 3]},
+            {"id": 1, "ranks": [4, 5, 6, 7], "gateways": [4, 5, 6, 7]},
+        ],
+        "directed_links": [
+            {"src": src, "dst": dst, "alpha": 1, "invbw": 2}
+            for base in (0, 4)
+            for src in range(base, base + 4)
+            for dst in range(base, base + 4)
+            if src != dst
+        ]
+        + [
+            {"src": src, "dst": dst, "alpha": 2, "invbw": 3}
+            for rail in range(4)
+            for src, dst in ((rail, rail + 4), (rail + 4, rail))
+        ],
+        "shared_resources": [],
+    }
+    topology = topology_from_mapping(raw)
+    groups = discover_communication_groups(topology)
+
+    assert eligible_gateway_groups(topology, groups) == (
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
+    )
+
+
+def test_eligible_gateway_groups_reject_unequal_gateway_counts():
+    raw = {
+        "ranks": 4,
+        "nodes": [
+            {"id": 0, "ranks": [0, 1], "gateways": [0]},
+            {"id": 1, "ranks": [2, 3], "gateways": [2, 3]},
+        ],
+        "directed_links": [
+            {"src": 0, "dst": 1, "alpha": 1, "invbw": 2},
+            {"src": 1, "dst": 0, "alpha": 1, "invbw": 2},
+            {"src": 2, "dst": 3, "alpha": 1, "invbw": 2},
+            {"src": 3, "dst": 2, "alpha": 1, "invbw": 2},
+            {"src": 0, "dst": 2, "alpha": 2, "invbw": 3},
+            {"src": 2, "dst": 0, "alpha": 2, "invbw": 3},
+        ],
+        "shared_resources": [],
+    }
+    topology = topology_from_mapping(raw)
+
+    assert eligible_gateway_groups(
+        topology,
+        discover_communication_groups(topology),
+    ) == ()
+
+
+def test_eligible_gateway_groups_reject_nonisomorphic_local_domains():
+    raw = {
+        "ranks": 4,
+        "nodes": [
+            {"id": 0, "ranks": [0, 1], "gateways": [0]},
+            {"id": 1, "ranks": [2, 3], "gateways": [2]},
+        ],
+        "directed_links": [
+            {"src": 0, "dst": 1, "alpha": 1, "invbw": 2},
+            {"src": 1, "dst": 0, "alpha": 1, "invbw": 2},
+            {"src": 2, "dst": 3, "alpha": 1, "invbw": 3},
+            {"src": 3, "dst": 2, "alpha": 1, "invbw": 2},
+            {"src": 0, "dst": 2, "alpha": 2, "invbw": 3},
+            {"src": 2, "dst": 0, "alpha": 2, "invbw": 3},
+        ],
+        "shared_resources": [],
+    }
+    topology = topology_from_mapping(raw)
+
+    assert eligible_gateway_groups(
+        topology,
+        discover_communication_groups(topology),
+    ) == ()
+
+
+def test_eligible_gateway_groups_recheck_bidirectional_connectivity():
+    raw = {
+        "ranks": 4,
+        "nodes": [
+            {"id": 0, "ranks": [0, 1], "gateways": [0]},
+            {"id": 1, "ranks": [2, 3], "gateways": [2]},
+        ],
+        "directed_links": [
+            {"src": 0, "dst": 1, "alpha": 1, "invbw": 2},
+            {"src": 1, "dst": 0, "alpha": 1, "invbw": 2},
+            {"src": 2, "dst": 3, "alpha": 1, "invbw": 2},
+            {"src": 3, "dst": 2, "alpha": 1, "invbw": 2},
+            {"src": 0, "dst": 2, "alpha": 2, "invbw": 3},
+        ],
+        "shared_resources": [],
+    }
+    topology = topology_from_mapping(raw)
+    forged = CommunicationGroups(
+        intra_node=((0, 1), (2, 3)),
+        inter_node=((0, 2),),
+    )
+
+    assert eligible_gateway_groups(topology, forged) == ()
 
 
 def test_declared_gateway_without_cross_link_is_not_an_inter_node_group():
@@ -171,6 +279,59 @@ def test_signature_changes_with_direction_capacity_performance_and_roles():
     roles = exact_domain_signature(domain_topology(gateways=()), (0, 1))
 
     assert len({baseline, directed, capacity, shared, performance, roles}) == 6
+
+
+def test_signature_includes_cross_domain_resource_membership():
+    def topology_with_external_member(include_external_member):
+        members = [[0, 1]]
+        if include_external_member:
+            members.append([0, 2])
+        return topology_from_mapping(
+            {
+                "ranks": 3,
+                "nodes": [
+                    {"id": 0, "ranks": [0, 1], "gateways": [0]},
+                    {"id": 1, "ranks": [2], "gateways": [2]},
+                ],
+                "directed_links": [
+                    {
+                        "src": 0,
+                        "dst": 1,
+                        "alpha": 1,
+                        "invbw": 2,
+                        "resources": ["fabric"],
+                    },
+                    {
+                        "src": 0,
+                        "dst": 2,
+                        "alpha": 2,
+                        "invbw": 3,
+                        "resources": (
+                            ["fabric"] if include_external_member else []
+                        ),
+                    },
+                ],
+                "shared_resources": [
+                    {
+                        "id": "fabric",
+                        "member_links": members,
+                        "alpha": 1,
+                        "invbw": 2,
+                    }
+                ],
+            }
+        )
+
+    local_only = exact_domain_signature(
+        topology_with_external_member(False),
+        (0, 1),
+    )
+    cross_domain = exact_domain_signature(
+        topology_with_external_member(True),
+        (0, 1),
+    )
+
+    assert local_only != cross_domain
 
 
 def test_signature_is_deterministic():

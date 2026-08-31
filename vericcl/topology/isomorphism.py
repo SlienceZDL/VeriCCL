@@ -36,6 +36,9 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
     relative_rank = {rank: index for index, rank in enumerate(domain)}
     domain_set = set(domain)
     relative_node = {}
+    node_members = {}
+    for rank, node in topology.node_membership.items():
+        node_members.setdefault(node, []).append(rank)
     roles = []
     for rank in domain:
         node = topology.node_membership[rank]
@@ -56,17 +59,34 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
         for resource_id in edge.resource_ids:
             resource = topology.shared_resources[resource_id]
             members = [
-                (
-                    relative_rank[member.src_rank],
-                    relative_rank[member.dst_rank],
-                )
+                {
+                    "src": _relative_endpoint(
+                        topology,
+                        member.src_rank,
+                        relative_rank,
+                        relative_node,
+                        node_members,
+                    ),
+                    "dst": _relative_endpoint(
+                        topology,
+                        member.dst_rank,
+                        relative_rank,
+                        relative_node,
+                        node_members,
+                    ),
+                    "same_node": (
+                        topology.node_membership[member.src_rank]
+                        == topology.node_membership[member.dst_rank]
+                    ),
+                }
                 for member in resource.member_links
-                if member.src_rank in domain_set
-                and member.dst_rank in domain_set
             ]
             resources.append(
                 {
-                    "members": sorted(members),
+                    "members": sorted(
+                        members,
+                        key=lambda value: sha256_json(value),
+                    ),
                     "max_channels": resource.max_channels,
                     "performance": _performance(resource.performance),
                 }
@@ -89,3 +109,26 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
         "links": sorted(links, key=lambda item: (item["src"], item["dst"])),
     }
     return sha256_json(value)
+
+
+def _relative_endpoint(
+    topology: Topology,
+    rank: int,
+    relative_rank: dict,
+    relative_node: dict,
+    node_members: dict,
+) -> dict:
+    if rank in relative_rank:
+        return {
+            "scope": "domain",
+            "rank": relative_rank[rank],
+        }
+    node = topology.node_membership[rank]
+    members = node_members[node]
+    return {
+        "scope": "external",
+        "domain_node": relative_node.get(node),
+        "node_size": len(members),
+        "node_position": members.index(rank),
+        "gateway": rank in topology.gateways,
+    }
