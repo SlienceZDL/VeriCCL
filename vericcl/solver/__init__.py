@@ -3,6 +3,11 @@ from vericcl.solver.cache import candidate_cache_key
 from vericcl.solver.constructive import construct_candidate
 from vericcl.solver.demands import build_solver_problem
 from vericcl.solver.gurobi_api import GurobiAdapter
+from vericcl.solver.instantiate import (
+    InstantiationFailure,
+    InstantiationResult,
+    instantiate_route_patterns,
+)
 from vericcl.solver.lower_bounds import (
     LowerBound,
     throughput_time_lower_bound,
@@ -31,6 +36,8 @@ from vericcl.solver.templates import (
 __all__ = [
     "ModelBudget",
     "GurobiAdapter",
+    "InstantiationFailure",
+    "InstantiationResult",
     "LowerBound",
     "SolveBudget",
     "SolveCandidate",
@@ -48,6 +55,7 @@ __all__ = [
     "build_solver_templates",
     "candidate_cache_key",
     "construct_candidate",
+    "instantiate_route_patterns",
     "rank_candidates",
     "search_models",
     "solve",

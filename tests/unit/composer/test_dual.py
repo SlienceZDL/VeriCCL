@@ -167,6 +167,35 @@ def test_dual_serializes_multiple_values_on_one_lane_and_resource_slot():
     assert ordered[0].transfer_id in ordered[1].predecessor_ids
 
 
+def test_routing_only_dual_discards_placeholder_lane_and_resource_order():
+    target = StageInterface(
+        {
+            OutputSlot(0, 0): frozenset({0, 2}),
+            OutputSlot(0, 1): frozenset({1, 3}),
+        }
+    )
+    virtual = virtual_two_value_reduce()
+    metadata = dict(virtual.metadata)
+    metadata["routing_only"] = True
+
+    reduced = reverse_allgather_schedule(
+        replace(virtual, metadata=metadata),
+        reduce_spec(),
+        target,
+    )
+
+    assert {transfer.st_time for transfer in reduced.transfers} == {0.0}
+    assert all(transfer.channel == 0 for transfer in reduced.transfers)
+    assert all(
+        not slots for slots in reduced.metadata["resource_slots"].values()
+    )
+    assert reduced.metadata["routing_only"] is True
+    assert (
+        reduced.metadata["aggregate_consumptions"]
+        == reduced.metadata["final_dependencies"]
+    )
+
+
 def test_dual_tree_extraction_rejects_invalid_public_inputs_and_metadata():
     virtual = virtual_reduce_chain(3)
 

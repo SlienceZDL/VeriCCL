@@ -10,7 +10,7 @@ from vericcl.errors import (
 )
 from vericcl.input.json_codec import sha256_json
 from vericcl.input.models import ObjectiveMode
-from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import Schedule
 from vericcl.solver.budget import ModelBudget
 from vericcl.solver.demands import (
     RoutingUnitKey,
@@ -30,9 +30,12 @@ from vericcl.solver.objectives import (
 )
 from vericcl.solver.scheduling import (
     NUMERICAL_TOLERANCE,
+    RoutedOperation,
+    RoutedTree,
     available_channel_count,
     demand_batch_assignments,
     fixed_transfer_duration_us,
+    materialize_route_schedule,
     physical_link_key,
 )
 from vericcl.topology.model import LaneKey, LinkKey
@@ -920,178 +923,82 @@ def _build_schedule(
     channel_count: int,
 ) -> Schedule:
     _validate_extracted(problem, trees, operations, flows)
-    members_by_key = {}
-    for tree in trees:
-        for link in {
-            operation.link
-            for operation in operations
-            if operation.tree.index == tree.index
-        }:
-            members = set()
-            for demand in tree.demands:
-                if link in flows[demand.demand_id]:
-                    members.update(demand.member_slice_ids)
-            if not members:
-                raise SemanticError("MILP operation has no payload members")
-            members_by_key[(tree.index, link)] = frozenset(members)
-    operation_by_key = {operation.key: operation for operation in operations}
+    route_ids = {
+        tree.index: "tree-{:08d}".format(tree.index) for tree in trees
+    }
+
+    def ordered_path(
+        demand: TransferDemand,
+        selected: FrozenSet[LinkKey],
+    ) -> Tuple[LinkKey, ...]:
+        outgoing = {link.src_rank: link for link in selected}
+        path = []
+        rank = demand.root_rank
+        while rank != demand.required_leaf_rank:
+            link = outgoing[rank]
+            path.append(link)
+            rank = link.dst_rank
+        return tuple(path)
+
+    routed_trees = tuple(
+        RoutedTree(
+            route_id=route_ids[tree.index],
+            root_rank=tree.root_rank,
+            logical_position=tree.logical_position,
+            contributors=tree.contributors,
+            reduction_dual=tree.reduction_dual,
+            demands=tree.demands,
+            selected_paths=tuple(
+                (
+                    demand.demand_id,
+                    ordered_path(demand, flows[demand.demand_id]),
+                )
+                for demand in tree.demands
+            ),
+        )
+        for tree in trees
+    )
+    routed_operations = tuple(
+        RoutedOperation(
+            route_id=route_ids[operation.tree.index],
+            link=operation.link,
+            channel=operation.channel,
+            st_time=operation.start_time,
+            ed_time=operation.end_time,
+            resource_slots=tuple(sorted(operation.resource_slots.items())),
+        )
+        for operation in operations
+    )
     identifiers = {
-        operation.key: "{}-milp-t{:08d}".format(
-            problem.node.node_id,
-            index,
+        (route_ids[operation.tree.index], operation.link): (
+            "{}-milp-t{:08d}".format(
+                problem.node.node_id,
+                index,
+            )
         )
         for index, operation in enumerate(
             sorted(operations, key=lambda item: (item.key[0], item.key[1]))
         )
     }
-    parents = {}
-    for operation in operations:
-        parents[(operation.tree.index, operation.link.dst_rank)] = (
-            operation.link.src_rank
-        )
-    predecessors = {operation.key: set() for operation in operations}
-    for operation in operations:
-        parent_rank = parents.get(
-            (operation.tree.index, operation.link.src_rank)
-        )
-        if parent_rank is not None:
-            parent_key = (
-                operation.tree.index,
-                LinkKey(parent_rank, operation.link.src_rank),
-            )
-            predecessors[operation.key].add(identifiers[parent_key])
-    semantic_predecessors = {
-        key: set(values) for key, values in predecessors.items()
-    }
-    lane_groups = {}
-    resource_groups = {}
-    for operation in operations:
-        lane_groups.setdefault(
-            LaneKey(
-                operation.link.src_rank,
-                operation.link.dst_rank,
-                operation.channel,
-            ),
-            [],
-        ).append(operation)
-        for resource_id, slot in operation.resource_slots.items():
-            resource_groups.setdefault((resource_id, slot), []).append(operation)
-    for entries in tuple(lane_groups.values()) + tuple(resource_groups.values()):
-        ordered = sorted(entries, key=lambda item: (item.start_time, item.key))
-        for first, second in zip(ordered, ordered[1:]):
-            predecessors[second.key].add(identifiers[first.key])
-
-    def tree_path(operation: _OperationValue) -> Tuple[_OperationValue, ...]:
-        path = []
-        destination = operation.link.dst_rank
-        while destination != operation.tree.root_rank:
-            source = parents[(operation.tree.index, destination)]
-            parent_operation = operation_by_key[
-                (operation.tree.index, LinkKey(source, destination))
-            ]
-            path.append(parent_operation)
-            destination = source
-        return tuple(reversed(path))
-
-    transfers = []
-    for operation in sorted(operations, key=lambda item: (item.key[0], item.key[1])):
-        path = tree_path(operation)
-        symbols = []
-        for item in path:
-            parent_rank = parents.get((item.tree.index, item.link.src_rank))
-            ready = 0.0
-            if parent_rank is not None:
-                ready = operation_by_key[
-                    (item.tree.index, LinkKey(parent_rank, item.link.src_rank))
-                ].end_time
-            symbols.append(
-                Symbol(
-                    src_rank=item.link.src_rank,
-                    dst_rank=item.link.dst_rank,
-                    ready_time=ready,
-                )
-            )
-        atoms = tuple(
-            Atom(
-                slice_id=slice_id,
-                slice_size_bytes=problem.slice_size_bytes,
-                path=(
-                    PathStage(
-                        stage_id=problem.node.stage_id,
-                        operator="SEND",
-                        symbols=tuple(symbols),
-                    ),
-                ),
-                st_time=operation.start_time,
-                ed_time=operation.end_time,
-            )
-            for slice_id in sorted(members_by_key[operation.key])
-        )
-        transfers.append(
-            Transfer(
-                transfer_id=identifiers[operation.key],
-                kind="SEND",
-                src_rank=operation.link.src_rank,
-                dst_rank=operation.link.dst_rank,
-                channel=operation.channel,
-                stage_id=problem.node.stage_id,
-                member_slice_ids=members_by_key[operation.key],
-                atoms=atoms,
-                st_time=operation.start_time,
-                ed_time=operation.end_time,
-                predecessor_ids=frozenset(predecessors[operation.key]),
-            )
-        )
-    final_state_ids = tuple(
-        "{}-r{:08d}-o{:08d}".format(
-            problem.node.node_id,
-            slot.rank,
-            slot.offset,
-        )
-        for slot in problem.node.logical_output.values
-    )
-    return Schedule(
+    return materialize_route_schedule(
+        node=problem.node,
+        trees=routed_trees,
+        operations=routed_operations,
+        transfer_ids=identifiers,
         schedule_id="{}-milp-k{:02d}".format(
             problem.node.node_id,
             channel_count,
         ),
-        transfers=tuple(transfers),
-        final_state_ids=final_state_ids,
         rank_count=problem.topology.rank_count,
         slice_count=problem.slice_count,
         slice_size_bytes=problem.slice_size_bytes,
-        metadata={
-            "backend": "gurobi",
-            "channel_count": channel_count,
-            "path_scope": "stage_suffix",
-            "path_roots": {
-                identifiers[operation.key]: operation.tree.root_rank
-                for operation in operations
-            },
-            "reduction_dual": problem.reduction_dual,
-            "restrictions": problem.restrictions,
-            "semantic_contributors": {
-                identifiers[operation.key]: tuple(
-                    sorted(members_by_key[operation.key])
-                )
-                for operation in operations
-            },
-            "semantic_predecessors": {
-                identifiers[operation.key]: tuple(
-                    sorted(semantic_predecessors[operation.key])
-                )
-                for operation in operations
-            },
-            "tree_contributors": {
-                identifiers[operation.key]: tuple(
-                    sorted(operation.tree.contributors)
-                )
-                for operation in operations
-            },
-            "resource_slots": {
-                identifiers[operation.key]: dict(operation.resource_slots)
-                for operation in operations
-            },
+        backend="gurobi",
+        channel_count=channel_count,
+        restrictions=problem.restrictions,
+        routing_only=False,
+        include_resource_order=True,
+        include_final_metadata=False,
+        extra_metadata={
             "selected_flows": {
                 demand_id: tuple(
                     (link.src_rank, link.dst_rank)

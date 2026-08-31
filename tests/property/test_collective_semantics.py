@@ -25,6 +25,26 @@ def spec(kind):
     )
 
 
+@given(rank_count=st.integers(2, 4), slice_count=st.integers(1, 4))
+def test_allgather_offsets_preserve_global_slice_identity(
+    rank_count,
+    slice_count,
+):
+    outputs = required_outputs(
+        spec(CollectiveKind.ALL_GATHER),
+        rank_count,
+        slice_count,
+    )
+
+    for destination in range(rank_count):
+        for source in range(rank_count):
+            for logical_position in range(slice_count):
+                global_slice_id = source * slice_count + logical_position
+                assert outputs[
+                    OutputSlot(destination, global_slice_id)
+                ] == frozenset({global_slice_id})
+
+
 @given(rank_count=st.integers(2, 4), quotient=st.integers(1, 4))
 def test_allreduce_outputs_contain_every_source_once(rank_count, quotient):
     slice_count = rank_count * quotient

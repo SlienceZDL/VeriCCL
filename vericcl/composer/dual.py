@@ -48,7 +48,11 @@ def _resource_slots(schedule: Schedule, transfer_id: str) -> Mapping[str, int]:
     return dict(slots)
 
 
-def _drafts(schedule: Schedule, trees: Tuple[DualTree, ...]) -> Tuple[_Draft, ...]:
+def _drafts(
+    schedule: Schedule,
+    trees: Tuple[DualTree, ...],
+    routing_only: bool = False,
+) -> Tuple[_Draft, ...]:
     drafts = []
     for tree in trees:
         identifiers = {
@@ -68,7 +72,7 @@ def _drafts(schedule: Schedule, trees: Tuple[DualTree, ...]) -> Tuple[_Draft, ..
                     tree=tree,
                     src_rank=transfer.dst_rank,
                     dst_rank=transfer.src_rank,
-                    channel=transfer.channel,
+                    channel=0 if routing_only else transfer.channel,
                     stage_id=transfer.stage_id,
                     member_slice_ids=transfer.member_slice_ids,
                     duration=transfer.ed_time - transfer.st_time,
@@ -76,16 +80,23 @@ def _drafts(schedule: Schedule, trees: Tuple[DualTree, ...]) -> Tuple[_Draft, ..
                         identifiers[child.transfer_id]
                         for child in child_transfers
                     ),
-                    resource_slots=_resource_slots(
-                        schedule,
-                        transfer.transfer_id,
+                    resource_slots=(
+                        {}
+                        if routing_only
+                        else _resource_slots(
+                            schedule,
+                            transfer.transfer_id,
+                        )
                     ),
                 )
             )
     return tuple(sorted(drafts, key=lambda item: item.transfer_id))
 
 
-def _schedule_drafts(drafts: Tuple[_Draft, ...]) -> Tuple[_TimedDraft, ...]:
+def _schedule_drafts(
+    drafts: Tuple[_Draft, ...],
+    routing_only: bool = False,
+) -> Tuple[_TimedDraft, ...]:
     pending = {draft.transfer_id: draft for draft in drafts}
     timed = {}
     lane_ready = {}
@@ -110,22 +121,25 @@ def _schedule_drafts(drafts: Tuple[_Draft, ...]) -> Tuple[_TimedDraft, ...]:
                 default=0.0,
             )
             lane = LaneKey(draft.src_rank, draft.dst_rank, draft.channel)
-            start = max(
-                [semantic_ready, lane_ready.get(lane, 0.0)]
-                + [
-                    resource_ready.get((resource_id, slot), 0.0)
-                    for resource_id, slot in draft.resource_slots.items()
-                ]
-            )
+            start = semantic_ready
+            if not routing_only:
+                start = max(
+                    [semantic_ready, lane_ready.get(lane, 0.0)]
+                    + [
+                        resource_ready.get((resource_id, slot), 0.0)
+                        for resource_id, slot in draft.resource_slots.items()
+                    ]
+                )
             choices.append((start, draft.transfer_id, semantic_ready, lane, draft))
         start, _, semantic_ready, lane, draft = min(choices)
         predecessors = set(draft.semantic_predecessors)
-        if lane in lane_last:
-            predecessors.add(lane_last[lane])
-        for resource_id, slot in draft.resource_slots.items():
-            key = (resource_id, slot)
-            if key in resource_last:
-                predecessors.add(resource_last[key])
+        if not routing_only:
+            if lane in lane_last:
+                predecessors.add(lane_last[lane])
+            for resource_id, slot in draft.resource_slots.items():
+                key = (resource_id, slot)
+                if key in resource_last:
+                    predecessors.add(resource_last[key])
         result = _TimedDraft(
             draft=draft,
             st_time=start,
@@ -135,12 +149,13 @@ def _schedule_drafts(drafts: Tuple[_Draft, ...]) -> Tuple[_TimedDraft, ...]:
         )
         timed[draft.transfer_id] = result
         del pending[draft.transfer_id]
-        lane_ready[lane] = result.ed_time
-        lane_last[lane] = draft.transfer_id
-        for resource_id, slot in draft.resource_slots.items():
-            key = (resource_id, slot)
-            resource_ready[key] = result.ed_time
-            resource_last[key] = draft.transfer_id
+        if not routing_only:
+            lane_ready[lane] = result.ed_time
+            lane_last[lane] = draft.transfer_id
+            for resource_id, slot in draft.resource_slots.items():
+                key = (resource_id, slot)
+                resource_ready[key] = result.ed_time
+                resource_last[key] = draft.transfer_id
     return tuple(timed[key] for key in sorted(timed))
 
 
@@ -195,7 +210,11 @@ def reverse_allgather_schedule(
     if not isinstance(target_interface, StageInterface):
         raise SemanticError("target_interface must be a StageInterface")
     trees = extract_dual_trees(ag_schedule, target_interface)
-    timed = _schedule_drafts(_drafts(ag_schedule, trees))
+    routing_only = ag_schedule.metadata.get("routing_only") is True
+    timed = _schedule_drafts(
+        _drafts(ag_schedule, trees, routing_only=routing_only),
+        routing_only=routing_only,
+    )
     timed_by_tree_edge = {
         (
             item.draft.tree.root_rank,
@@ -211,6 +230,7 @@ def reverse_allgather_schedule(
     semantic_contributors = {}
     tree_contributors = {}
     resource_slots = {}
+    path_prefixes = {}
     for item in sorted(
         timed,
         key=lambda value: (value.st_time, value.draft.transfer_id),
@@ -266,12 +286,30 @@ def reverse_allgather_schedule(
             sorted(draft.tree.contributors)
         )
         resource_slots[draft.transfer_id] = dict(draft.resource_slots)
+        path_prefixes[draft.transfer_id] = {
+            atom.slice_id: tuple(
+                (symbol.src_rank, symbol.dst_rank)
+                for stage in atom.path
+                for symbol in stage.symbols
+            )
+            for atom in atoms
+        }
     final_outputs = {
         _final_output_key(slot.rank, slot.offset): tuple(sorted(contributors))
         for slot, contributors in target_interface.values.items()
     }
     final_ready_times = {}
+    final_dependencies = {}
     for tree in trees:
+        key = _final_output_key(tree.root_rank, tree.target_offset)
+        dependencies = tuple(
+            sorted(
+                item.draft.transfer_id
+                for item in timed
+                if item.draft.tree == tree
+                and item.draft.dst_rank == tree.root_rank
+            )
+        )
         ready = max(
             (
                 item.ed_time
@@ -281,9 +319,8 @@ def reverse_allgather_schedule(
             ),
             default=0.0,
         )
-        final_ready_times[
-            _final_output_key(tree.root_rank, tree.target_offset)
-        ] = ready
+        final_ready_times[key] = ready
+        final_dependencies[key] = dependencies
     return Schedule(
         schedule_id="{}-reduce".format(ag_schedule.schedule_id),
         transfers=tuple(transfers),
@@ -305,6 +342,16 @@ def reverse_allgather_schedule(
             "tree_contributors": tree_contributors,
             "resource_slots": resource_slots,
             "final_outputs": final_outputs,
+            "final_dependencies": final_dependencies,
             "final_ready_times": final_ready_times,
+            "aggregate_consumptions": final_dependencies,
+            **(
+                {
+                    "routing_only": True,
+                    "path_prefixes": path_prefixes,
+                }
+                if routing_only
+                else {}
+            ),
         },
     )
