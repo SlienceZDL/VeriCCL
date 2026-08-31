@@ -4,7 +4,6 @@ from collections import defaultdict
 from dataclasses import replace
 from typing import Dict, Mapping, Optional, Tuple
 
-from vericcl.composer import compose
 from vericcl.errors import (
     ConstructionInfeasibleError,
     SemanticError,
@@ -18,8 +17,9 @@ from vericcl.solver.cache import CandidateCache, candidate_cache_key
 from vericcl.solver.constructive import construct_candidate
 from vericcl.solver.demands import SolverProblem, build_solver_problem
 from vericcl.solver.gurobi_api import GurobiAdapter
-from vericcl.solver.lower_bounds import throughput_time_lower_bound
+from vericcl.solver.lower_bounds import global_throughput_time_lower_bound
 from vericcl.solver.model import (
+    SearchDiagnostics,
     SolveCandidate,
     SolveRequest,
     SolveResult,
@@ -28,11 +28,29 @@ from vericcl.solver.model import (
 )
 from vericcl.solver.objectives import rank_candidates
 from vericcl.solver.search import search_models
+from vericcl.solver.template_search import (
+    TemplateSearchResult,
+    search_route_models,
+)
 
 
 _CACHE_TTL_SECONDS = 3600.0
+_TEMPLATE_MODEL_VERSION = "template-route-v1"
+_LEGACY_MODEL_VERSION = "legacy-full-time-v1"
 _DEFAULT_CACHE = CandidateCache()
 _monotonic = time.monotonic
+
+
+def _backend_request(request: SolveRequest) -> SolveRequest:
+    suffix = (
+        _LEGACY_MODEL_VERSION
+        if request.inputs.solver.require_proven_optimal
+        else _TEMPLATE_MODEL_VERSION
+    )
+    return replace(
+        request,
+        model_version="{}:{}".format(request.model_version, suffix),
+    )
 
 
 def _makespan(schedule: Schedule) -> float:
@@ -146,6 +164,8 @@ def _combine_node_candidates(
     objective: ObjectiveMode,
     channel_count: int,
 ) -> SolveCandidate:
+    from vericcl.composer import compose
+
     expected = {node.node_id for node in request.plan.nodes}
     if set(candidates) != expected:
         raise SemanticError("one local candidate is required for every plan node")
@@ -272,6 +292,12 @@ def _constructive_channel_count(request: SolveRequest) -> int:
 
 
 def _effective_inputs(request: SolveRequest) -> ResolvedInput:
+    if (
+        request.overlay is not None
+        and request.overlay.channel_count is not None
+        and request.overlay.channel_count > request.inputs.solver.max_channels
+    ):
+        raise SemanticError("overlay channel_count exceeds the solver maximum")
     if request.overlay is None or not request.overlay.temporary_forbidden:
         return request.inputs
     forbidden = set(
@@ -297,16 +323,19 @@ def _effective_inputs(request: SolveRequest) -> ResolvedInput:
     )
 
 
-def _solve_objective(
+def _solve_legacy_objective(
     request: SolveRequest,
     problems: Tuple[SolverProblem, ...],
     objective: ObjectiveMode,
     deadline: float,
-) -> Tuple[SolveCandidate, ...]:
+) -> TemplateSearchResult:
     local_constructive: Dict[str, SolveCandidate] = {}
     warm_starts: Dict[str, Schedule] = {}
     channel_count = _constructive_channel_count(request)
-    if request.inputs.strategies.constructive_trees:
+    if (
+        request.inputs.strategies.constructive_trees
+        and not request.inputs.solver.require_proven_optimal
+    ):
         for problem in problems:
             if _monotonic() >= deadline:
                 break
@@ -346,6 +375,7 @@ def _solve_objective(
                 max_channels=request.overlay.channel_count,
             )
         models_by_node = {}
+        search_model_count_total = 0
         for problem_index, problem in enumerate(problems):
             remaining = deadline - _monotonic()
             if remaining < 1.0:
@@ -372,6 +402,17 @@ def _solve_objective(
                 )
             except SolverUnavailableError:
                 models = ()
+            search_model_count_total += getattr(
+                models,
+                "search_model_count_total",
+                max(
+                    (
+                        candidate.metrics.model_index + 1
+                        for candidate in models
+                    ),
+                    default=0,
+                ),
+            )
             if (
                 request.overlay is not None
                 and request.overlay.channel_count is not None
@@ -400,7 +441,74 @@ def _solve_objective(
                     model_channels,
                 )
             )
-    return rank_candidates(global_candidates)
+    else:
+        search_model_count_total = 0
+    return TemplateSearchResult(
+        rank_candidates(global_candidates),
+        SearchDiagnostics(
+            requested_problem_count=len(problems),
+            search_model_count_total=search_model_count_total,
+        ),
+    )
+
+
+def _solve_template_objective(
+    request: SolveRequest,
+    problems: Tuple[SolverProblem, ...],
+    objective: ObjectiveMode,
+    deadline: float,
+) -> TemplateSearchResult:
+    return search_route_models(
+        request,
+        problems,
+        objective,
+        deadline,
+    )
+
+
+def _merge_diagnostics(
+    values: Tuple[SearchDiagnostics, ...],
+) -> SearchDiagnostics:
+    if not values:
+        return SearchDiagnostics()
+    return SearchDiagnostics(
+        requested_problem_count=max(
+            value.requested_problem_count for value in values
+        ),
+        routing_unit_count=max(value.routing_unit_count for value in values),
+        template_count=max(value.template_count for value in values),
+        template_member_count=max(
+            value.template_member_count for value in values
+        ),
+        route_model_count=sum(value.route_model_count for value in values),
+        fallback_member_model_count=sum(
+            value.fallback_member_model_count for value in values
+        ),
+        search_model_count_total=sum(
+            value.search_model_count_total for value in values
+        ),
+        route_model_build_time_s=sum(
+            value.route_model_build_time_s for value in values
+        ),
+        route_model_optimize_time_s=sum(
+            value.route_model_optimize_time_s for value in values
+        ),
+        template_expansion_time_s=sum(
+            value.template_expansion_time_s for value in values
+        ),
+        global_scheduling_time_s=sum(
+            value.global_scheduling_time_s for value in values
+        ),
+        model_variables_max=max(
+            value.model_variables_max for value in values
+        ),
+        model_constraints_max=max(
+            value.model_constraints_max for value in values
+        ),
+        model_general_constraints_max=max(
+            value.model_general_constraints_max for value in values
+        ),
+    )
 
 
 def _relevant_calibration(
@@ -416,31 +524,29 @@ def _auto_lower_bound(
     max_channels: int,
     deadline: float,
 ) -> float:
-    bounds = []
-    for problem_index, problem in enumerate(problems):
-        remaining = deadline - _monotonic()
-        if remaining < 1.0:
-            break
-        remaining_nodes = len(problems) - problem_index
-        node_seconds = max(1, int(remaining / remaining_nodes))
+    remaining = deadline - _monotonic()
+    if remaining < 1.0:
+        return 0.0
+    timeout_s = max(1, int(remaining))
+    configured = []
+    for problem in problems:
         solver = replace(
             problem.inputs.solver,
             per_model_timeout_s=min(
                 problem.inputs.solver.per_model_timeout_s,
-                node_seconds,
+                timeout_s,
             ),
         )
-        configured = replace(
-            problem,
-            inputs=replace(problem.inputs, solver=solver),
+        configured.append(
+            replace(
+                problem,
+                inputs=replace(problem.inputs, solver=solver),
+            )
         )
-        bounds.append(
-            throughput_time_lower_bound(
-                configured,
-                max_channels,
-            ).total_us
-        )
-    return max(bounds, default=0.0)
+    return global_throughput_time_lower_bound(
+        tuple(configured),
+        max_channels,
+    ).total_us
 
 
 def _auto_ranking_key(candidate: SolveCandidate) -> tuple:
@@ -500,6 +606,7 @@ def solve(
             cache_hit=False,
             message="request plan does not match normalized hierarchy",
         )
+    request = _backend_request(request)
     cache_key = candidate_cache_key(request)
     if not request.inputs.solver.force_resolve:
         cached = selected_cache.get(cache_key)
@@ -527,8 +634,22 @@ def solve(
             message="constructive and MILP backends are disabled",
         )
     if (
+        request.inputs.solver.require_proven_optimal
+        and not request.inputs.strategies.milp
+    ):
+        return SolveResult(
+            status=SolveStatus.ERROR,
+            candidates=(),
+            selected_candidate_id=None,
+            cache_hit=False,
+            message="optimality proof requires the MILP backend",
+        )
+    if (
         request.inputs.strategies.milp
-        and not request.inputs.strategies.constructive_trees
+        and (
+            request.inputs.solver.require_proven_optimal
+            or not request.inputs.strategies.constructive_trees
+        )
         and not GurobiAdapter.available()
     ):
         return SolveResult(
@@ -538,6 +659,7 @@ def solve(
             cache_hit=False,
             message="MILP backend is unavailable",
         )
+    diagnostics = SearchDiagnostics()
     try:
         solve_budget = float(request.inputs.solver.total_solve_timeout_s)
         if request.wall_clock_budget_s is not None:
@@ -549,21 +671,30 @@ def solve(
             for node in request.plan.nodes
         )
         mode = request.inputs.hyperparameters.objective_mode
+        solve_objective = (
+            _solve_legacy_objective
+            if request.inputs.solver.require_proven_optimal
+            else _solve_template_objective
+        )
         if mode is not ObjectiveMode.AUTO:
-            candidates = _solve_objective(
+            search_result = solve_objective(
                 request,
                 problems,
                 mode,
                 deadline,
             )
+            candidates = search_result.candidates
+            diagnostics = search_result.diagnostics
             message = "complete; comparison=objective_ranking"
         else:
-            latency = _solve_objective(
+            latency_result = solve_objective(
                 request,
                 problems,
                 ObjectiveMode.LATENCY,
                 deadline,
             )
+            latency = latency_result.candidates
+            diagnostics = latency_result.diagnostics
             if not latency:
                 candidates = ()
                 message = "auto latency solve produced no complete candidate"
@@ -608,11 +739,18 @@ def solve(
                         "threshold={:g}"
                     ).format(gain_upper, threshold)
                 else:
-                    throughput = _solve_objective(
+                    throughput_result = solve_objective(
                         request,
                         problems,
                         ObjectiveMode.THROUGHPUT,
                         deadline,
+                    )
+                    throughput = throughput_result.candidates
+                    diagnostics = _merge_diagnostics(
+                        (
+                            latency_result.diagnostics,
+                            throughput_result.diagnostics,
+                        )
                     )
                     candidates = latency + throughput
                     reason = (
@@ -632,6 +770,7 @@ def solve(
             selected_candidate_id=None,
             cache_hit=False,
             message="solve failed: {}".format(error),
+            diagnostics=diagnostics,
         )
     if not candidates:
         return SolveResult(
@@ -640,6 +779,7 @@ def solve(
             selected_candidate_id=None,
             cache_hit=False,
             message=message,
+            diagnostics=diagnostics,
         )
     if request.inputs.solver.require_proven_optimal:
         eligible = tuple(
@@ -652,6 +792,7 @@ def solve(
                 selected_candidate_id=None,
                 cache_hit=False,
                 message="optimality proof was required but not obtained",
+                diagnostics=diagnostics,
             )
     else:
         eligible = candidates
@@ -677,4 +818,5 @@ def solve(
         selected_candidate_id=selected.candidate_id,
         cache_hit=False,
         message=message,
+        diagnostics=diagnostics,
     )

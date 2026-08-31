@@ -1,7 +1,7 @@
 import os
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Optional, Tuple
 
 from vericcl.errors import SemanticError, SolverUnavailableError
@@ -21,6 +21,35 @@ _COMPLETE_STATUSES = frozenset(
     }
 )
 _monotonic = time.monotonic
+
+
+@dataclass(frozen=True)
+class ModelSearchResult:
+    candidates: Tuple[SolveCandidate, ...]
+    search_model_count_total: int
+
+    def __post_init__(self) -> None:
+        candidates = tuple(self.candidates)
+        if not all(isinstance(item, SolveCandidate) for item in candidates):
+            raise SemanticError(
+                "model search candidates must contain SolveCandidate values"
+            )
+        if (
+            isinstance(self.search_model_count_total, bool)
+            or not isinstance(self.search_model_count_total, int)
+            or self.search_model_count_total < 0
+        ):
+            raise SemanticError(
+                "search_model_count_total must be a non-negative integer"
+            )
+        object.__setattr__(self, "candidates", candidates)
+
+
+class ModelCandidates(tuple):
+    def __new__(cls, values, search_model_count_total):
+        instance = super().__new__(cls, tuple(values))
+        instance.search_model_count_total = search_model_count_total
+        return instance
 
 
 def _positive_integer(value: object, field: str) -> int:
@@ -64,12 +93,12 @@ def _is_complete(candidate: SolveCandidate, problem: SolverProblem) -> bool:
     )
 
 
-def search_models(
+def _search_models_with_diagnostics(
     problem: SolverProblem,
     config: SolverConfig,
     objective: ObjectiveMode,
     warm_start: Optional[Schedule],
-) -> Tuple[SolveCandidate, ...]:
+) -> ModelSearchResult:
     if not isinstance(problem, SolverProblem):
         raise SemanticError("problem must be a SolverProblem")
     if not isinstance(config, SolverConfig):
@@ -176,12 +205,12 @@ def search_models(
                     completed.append((model_index, candidate))
             while len(running) < worker_count and submit_one(executor):
                 pass
-    return tuple(
+    candidates = tuple(
         replace(
             candidate,
             metrics=replace(
                 candidate.metrics,
-                model_count=launched_count,
+                model_count=1,
                 model_index=model_index,
             ),
         )
@@ -189,4 +218,37 @@ def search_models(
             completed,
             key=lambda item: item[1].channel_count,
         )
+    )
+    return ModelSearchResult(candidates, launched_count)
+
+
+def search_models_with_diagnostics(
+    problem: SolverProblem,
+    config: SolverConfig,
+    objective: ObjectiveMode,
+    warm_start: Optional[Schedule],
+) -> ModelSearchResult:
+    return _search_models_with_diagnostics(
+        problem,
+        config,
+        objective,
+        warm_start,
+    )
+
+
+def search_models(
+    problem: SolverProblem,
+    config: SolverConfig,
+    objective: ObjectiveMode,
+    warm_start: Optional[Schedule],
+) -> Tuple[SolveCandidate, ...]:
+    result = search_models_with_diagnostics(
+        problem,
+        config,
+        objective,
+        warm_start,
+    )
+    return ModelCandidates(
+        result.candidates,
+        result.search_model_count_total,
     )

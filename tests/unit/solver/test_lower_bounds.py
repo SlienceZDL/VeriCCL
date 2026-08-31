@@ -6,6 +6,7 @@ from vericcl.errors import SemanticError, SolverUnavailableError
 from vericcl.solver.lower_bounds import (
     LowerBound,
     dependency_time_lower_bound,
+    global_throughput_time_lower_bound,
     throughput_time_lower_bound,
 )
 
@@ -86,3 +87,23 @@ def test_lower_bound_api_rejects_invalid_problem_and_channel_count():
         dependency_time_lower_bound(problem, max_channels=0)
     with pytest.raises(SemanticError, match="problem"):
         throughput_time_lower_bound(object(), max_channels=1)
+
+
+def test_global_lower_bound_keeps_dependency_causality_without_lp(monkeypatch):
+    problem = multihop_problem(shared_resource=True)
+
+    def unavailable():
+        raise SolverUnavailableError("missing")
+
+    monkeypatch.setattr(
+        "vericcl.solver.lower_bounds.GurobiAdapter.require",
+        unavailable,
+    )
+
+    bound = global_throughput_time_lower_bound(
+        (problem, problem),
+        max_channels=2,
+    )
+
+    assert bound.resource_us == 0.0
+    assert bound.dependency_us == 4.0

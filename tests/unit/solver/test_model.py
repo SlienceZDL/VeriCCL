@@ -11,6 +11,7 @@ from vericcl.input.models import ForbiddenTransfer
 from vericcl.planner.build import build_plan
 from vericcl.semantics.atom import Schedule
 from vericcl.solver.model import (
+    SearchDiagnostics,
     SolveCandidate,
     SolveRequest,
     SolveResult,
@@ -151,6 +152,39 @@ def test_solve_result_identifies_selected_candidate():
     )
 
     assert result.selected_candidate == selected
+    assert result.diagnostics == SearchDiagnostics()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("requested_problem_count", -1),
+        ("route_model_count", True),
+        ("route_model_build_time_s", -1.0),
+        ("route_model_optimize_time_s", float("inf")),
+        ("template_expansion_time_s", float("nan")),
+    ],
+)
+def test_search_diagnostics_reject_invalid_measurements(field, value):
+    with pytest.raises(SemanticError, match="search_diagnostics"):
+        SearchDiagnostics(**{field: value})
+
+
+def test_search_diagnostics_total_includes_route_and_fallback_models():
+    with pytest.raises(SemanticError, match="search model total"):
+        SearchDiagnostics(
+            route_model_count=2,
+            fallback_member_model_count=1,
+            search_model_count_total=2,
+        )
+
+    value = SearchDiagnostics(
+        route_model_count=2,
+        fallback_member_model_count=1,
+        search_model_count_total=4,
+    )
+
+    assert value.search_model_count_total == 4
 
 
 def test_solve_result_rejects_unknown_selection():

@@ -1,5 +1,5 @@
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import Mapping, Optional, Tuple
@@ -119,6 +119,59 @@ class SolverMetrics:
             "solver_metrics.termination_reason",
         )
         _integer(self.model_index, "solver_metrics.model_index")
+
+
+@dataclass(frozen=True)
+class SearchDiagnostics:
+    requested_problem_count: int = 0
+    routing_unit_count: int = 0
+    template_count: int = 0
+    template_member_count: int = 0
+    route_model_count: int = 0
+    fallback_member_model_count: int = 0
+    search_model_count_total: int = 0
+    route_model_build_time_s: float = 0.0
+    route_model_optimize_time_s: float = 0.0
+    template_expansion_time_s: float = 0.0
+    global_scheduling_time_s: float = 0.0
+    model_variables_max: int = 0
+    model_constraints_max: int = 0
+    model_general_constraints_max: int = 0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "requested_problem_count",
+            "routing_unit_count",
+            "template_count",
+            "template_member_count",
+            "route_model_count",
+            "fallback_member_model_count",
+            "search_model_count_total",
+            "model_variables_max",
+            "model_constraints_max",
+            "model_general_constraints_max",
+        ):
+            _integer(getattr(self, name), "search_diagnostics.{}".format(name))
+        for name in (
+            "route_model_build_time_s",
+            "route_model_optimize_time_s",
+            "template_expansion_time_s",
+            "global_scheduling_time_s",
+        ):
+            object.__setattr__(
+                self,
+                name,
+                _number(
+                    getattr(self, name),
+                    "search_diagnostics.{}".format(name),
+                ),
+            )
+        if self.search_model_count_total < (
+            self.route_model_count + self.fallback_member_model_count
+        ):
+            raise SemanticError(
+                "search model total must include route and fallback model counts"
+            )
 
 
 @dataclass(frozen=True)
@@ -261,6 +314,7 @@ class SolveResult:
     selected_candidate_id: Optional[str]
     cache_hit: bool
     message: str
+    diagnostics: SearchDiagnostics = field(default_factory=SearchDiagnostics)
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, SolveStatus):
@@ -287,6 +341,10 @@ class SolveResult:
             raise SemanticError("solve_result.cache_hit must be a boolean")
         if not isinstance(self.message, str):
             raise SemanticError("solve_result.message must be a string")
+        if not isinstance(self.diagnostics, SearchDiagnostics):
+            raise SemanticError(
+                "solve_result.diagnostics must be SearchDiagnostics"
+            )
 
     @property
     def selected_candidate(self) -> Optional[SolveCandidate]:

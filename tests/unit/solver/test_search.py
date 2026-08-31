@@ -10,7 +10,11 @@ from vericcl.solver.model import (
     SolveStatus,
     SolverMetrics,
 )
-from vericcl.solver.search import allocate_model_threads, search_models
+from vericcl.solver.search import (
+    allocate_model_threads,
+    search_models,
+    search_models_with_diagnostics,
+)
 
 from tests.gurobi.helpers import broadcast_problem
 
@@ -81,6 +85,8 @@ def test_search_runs_each_k_and_assigns_bounded_threads(monkeypatch):
     assert {call[1] for call in calls} == {2}
     assert sum(sorted({call[0]: call[1] for call in calls}.values())[:2]) <= 4
     assert all(call[2] is ObjectiveMode.LATENCY for call in calls)
+    assert {item.metrics.model_count for item in candidates} == {1}
+    assert [item.metrics.model_index for item in candidates] == [0, 1, 2, 3]
 
 
 def test_search_discards_models_without_complete_incumbents(monkeypatch):
@@ -110,6 +116,34 @@ def test_search_discards_models_without_complete_incumbents(monkeypatch):
     )
 
     assert [item.channel_count for item in candidates] == [1]
+
+
+def test_search_diagnostics_count_discarded_models_once(monkeypatch):
+    problem = broadcast_problem(logical_positions=(0,))
+    config = replace(
+        problem.inputs.solver,
+        max_channels=2,
+        max_parallel_models=1,
+    )
+
+    def fake_solve(current, channel_count, objective, budget, warm_start):
+        candidate = _candidate_for_test(channel_count)
+        if channel_count == 2:
+            return replace(candidate, node_schedules={})
+        return candidate
+
+    monkeypatch.setattr("vericcl.solver.search.solve_milp", fake_solve)
+
+    result = search_models_with_diagnostics(
+        problem,
+        config,
+        ObjectiveMode.LATENCY,
+        warm_start=None,
+    )
+
+    assert [item.channel_count for item in result.candidates] == [1]
+    assert result.search_model_count_total == 2
+    assert result.candidates[0].metrics.model_count == 1
 
 
 def test_total_budget_stops_launching_new_models(monkeypatch):

@@ -1,9 +1,16 @@
-from dataclasses import dataclass
-from typing import Dict, FrozenSet, List, Tuple
+from dataclasses import dataclass, replace
+from typing import Dict, FrozenSet, List, Mapping, Tuple
 
 from vericcl.errors import ConstructionInfeasibleError, SemanticError
+from vericcl.input.models import ObjectiveMode, ResolvedInput
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
-from vericcl.solver.demands import SolverProblem, TransferDemand
+from vericcl.solver.demands import (
+    SolverProblem,
+    TransferDemand,
+    build_solver_problem,
+)
+from vericcl.solver.model import SolveStatus, SolverMetrics
+from vericcl.solver.routing import RoutePattern, RoutingModelStats
 from vericcl.solver.scheduling import (
     available_channel_count,
     demand_batch_assignments,
@@ -11,6 +18,7 @@ from vericcl.solver.scheduling import (
     physical_link_key,
 )
 from vericcl.topology.model import LaneKey, LinkKey
+from vericcl.topology.model import Topology
 
 
 TreeKey = Tuple[int, int, Tuple[int, ...], bool]
@@ -521,4 +529,113 @@ def construct_candidate(
                 for draft in drafts
             },
         },
+    )
+
+
+def _constructive_resource_load(schedule: Schedule) -> float:
+    raw_slots = schedule.metadata.get("resource_slots", {})
+    if not isinstance(raw_slots, Mapping):
+        raise SemanticError("resource_slots metadata must be a mapping")
+    loads = {}
+    for transfer in schedule.transfers:
+        duration = transfer.ed_time - transfer.st_time
+        link = ("link", transfer.src_rank, transfer.dst_rank)
+        loads[link] = loads.get(link, 0.0) + duration
+        slots = raw_slots.get(transfer.transfer_id, {})
+        if not isinstance(slots, Mapping):
+            raise SemanticError("transfer resource slots must be a mapping")
+        for resource_id in slots:
+            key = ("resource", resource_id)
+            loads[key] = loads.get(key, 0.0) + duration
+    return max(loads.values(), default=0.0)
+
+
+def construct_route_pattern(
+    template,
+    inputs: ResolvedInput,
+    topology: Topology,
+    channel_count: int,
+    objective: ObjectiveMode,
+) -> RoutePattern:
+    from vericcl.solver.templates import SolverTemplate
+
+    if not isinstance(template, SolverTemplate):
+        raise SemanticError("template must be a SolverTemplate")
+    if not isinstance(inputs, ResolvedInput):
+        raise SemanticError("inputs must be a ResolvedInput")
+    if not isinstance(topology, Topology):
+        raise SemanticError("topology must be a Topology")
+    channels = _positive_integer(channel_count, "channel_count")
+    if not isinstance(objective, ObjectiveMode):
+        raise SemanticError("objective must be an ObjectiveMode")
+    if objective is ObjectiveMode.AUTO:
+        raise SemanticError("AUTO must be resolved before route construction")
+    base = build_solver_problem(
+        template.representative.node,
+        inputs,
+        topology,
+    )
+    demand_ids = {
+        demand.demand_id for demand in template.representative.demands
+    }
+    problem = replace(
+        base,
+        demands=template.representative.demands,
+        infeasible_demand_ids=tuple(
+            demand_id
+            for demand_id in base.infeasible_demand_ids
+            if demand_id in demand_ids
+        ),
+    )
+    schedule = construct_candidate(problem, channels)
+    raw_paths = schedule.metadata.get("selected_paths")
+    if not isinstance(raw_paths, Mapping):
+        raise SemanticError("constructive schedule omits selected paths")
+    member_paths = tuple(
+        (
+            demand.demand_id,
+            tuple(zip(raw_paths[demand.demand_id], raw_paths[demand.demand_id][1:])),
+        )
+        for demand in template.representative.demands
+    )
+    selected_edges = tuple(
+        sorted({edge for _, path in member_paths for edge in path})
+    )
+    makespan = max(
+        (transfer.ed_time for transfer in schedule.transfers),
+        default=0.0,
+    )
+    resource_load = _constructive_resource_load(schedule)
+    operation_count = len(selected_edges)
+    hop_count = sum(len(path) for _, path in member_paths)
+    objective_values = (
+        (makespan, float(operation_count), float(hop_count))
+        if objective is ObjectiveMode.LATENCY
+        else (resource_load, makespan)
+    )
+    return RoutePattern(
+        template_id=template.template_id,
+        channel_count=channels,
+        objective_mode=objective,
+        selected_edges=selected_edges,
+        member_paths=member_paths,
+        metrics=SolverMetrics(
+            status=SolveStatus.FEASIBLE,
+            objective_values=objective_values,
+            best_bound=0.0,
+            mip_gap=0.0,
+            within_requested_gap=False,
+            solve_time_s=0.0,
+            model_count=0,
+            operation_count=operation_count,
+            hop_count=hop_count,
+            makespan_us=makespan,
+            maximum_normalized_resource_load=resource_load,
+            solver_name="constructive-route",
+            solver_version="1",
+            solver_seed=inputs.solver.solver_seed,
+            thread_count=1,
+            termination_reason="constructive_route_complete",
+        ),
+        model_stats=RoutingModelStats(0, 0, 0, 0.0, 0.0),
     )

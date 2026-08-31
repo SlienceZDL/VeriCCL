@@ -18,7 +18,7 @@ from vericcl.artifacts.writer import (
     write_resolved_input,
     write_run_summary,
 )
-from vericcl.composer import compose
+from vericcl.composer import compose, compose_routes
 from vericcl.errors import SemanticError
 from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import ResolvedInput
@@ -598,7 +598,17 @@ def _merge_applied_calibration(
     )
 
 
-def _global_schedule(plan, candidate: SolveCandidate) -> Schedule:
+def _global_schedule(plan, candidate: SolveCandidate, topology) -> Schedule:
+    if candidate.node_schedules and all(
+        schedule.metadata.get("routing_only") is True
+        for schedule in candidate.node_schedules.values()
+    ):
+        return compose_routes(
+            plan,
+            candidate.node_schedules,
+            topology,
+            candidate.channel_count,
+        )
     return compose(
         plan,
         {node.node_id: candidate for node in plan.nodes},
@@ -854,7 +864,8 @@ def execute_solve(context: RunContext) -> RunArtifacts:
     result = solve(request)
     deadline.check("solve")
     schedules = tuple(
-        _global_schedule(plan, candidate) for candidate in result.candidates
+        _global_schedule(plan, candidate, topology)
+        for candidate in result.candidates
     )
     outcomes = tuple(
         validate_and_lower_candidate(schedule, inputs, topology)
@@ -936,7 +947,7 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             )
             deadline.check("calibrated re-solve")
             schedules = tuple(
-                _global_schedule(plan, candidate)
+                _global_schedule(plan, candidate, topology)
                 for candidate in result.candidates
             )
             outcomes = tuple(

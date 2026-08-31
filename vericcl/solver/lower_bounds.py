@@ -209,8 +209,8 @@ def _maximum_capacity(
     )
 
 
-def _resource_time_lower_bound(
-    problem: SolverProblem,
+def _global_resource_time_lower_bound(
+    problems: Tuple[SolverProblem, ...],
     max_channels: int,
 ) -> float:
     try:
@@ -222,15 +222,22 @@ def _resource_time_lower_bound(
     except gp.GurobiError:
         return 0.0
     model.Params.OutputFlag = 0
-    model.Params.Seed = problem.inputs.solver.solver_seed
+    reference = problems[0]
+    model.Params.Seed = reference.inputs.solver.solver_seed
     model.Params.Threads = 1
-    model.Params.TimeLimit = problem.inputs.solver.per_model_timeout_s
-    trees: Dict[TreeKey, list] = {}
-    for demand in problem.demands:
-        trees.setdefault(_tree_key(demand), []).append(demand)
+    model.Params.TimeLimit = reference.inputs.solver.per_model_timeout_s
+    trees = []
+    for problem_index, problem in enumerate(problems):
+        grouped: Dict[TreeKey, list] = {}
+        for demand in problem.demands:
+            grouped.setdefault(_tree_key(demand), []).append(demand)
+        trees.extend(
+            (problem_index, key, problem, tuple(demands))
+            for key, demands in sorted(grouped.items())
+        )
     usage = {}
     flow = {}
-    for tree_index, (_, demands) in enumerate(sorted(trees.items())):
+    for tree_index, (_, _, problem, demands) in enumerate(trees):
         edges = tuple(
             sorted({link for demand in demands for link in demand.legal_links})
         )
@@ -259,16 +266,16 @@ def _resource_time_lower_bound(
                         link.dst_rank,
                     ),
                 )
-                flow[(demand.demand_id, link)] = variable
+                flow[(tree_index, demand_index, link)] = variable
                 model.addConstr(variable <= usage[(tree_index, link)])
             for rank in problem.node.communication_group:
                 outgoing = gp.quicksum(
-                    flow[(demand.demand_id, link)]
+                    flow[(tree_index, demand_index, link)]
                     for link in demand.legal_links
                     if link.src_rank == rank
                 )
                 incoming = gp.quicksum(
-                    flow[(demand.demand_id, link)]
+                    flow[(tree_index, demand_index, link)]
                     for link in demand.legal_links
                     if link.dst_rank == rank
                 )
@@ -281,7 +288,7 @@ def _resource_time_lower_bound(
     tau = model.addVar(lb=0.0, vtype=gp.GRB.CONTINUOUS, name="tau-us")
     link_terms: Dict[LinkKey, list] = {}
     resource_terms: Dict[str, list] = {}
-    for tree_index, (_, demands) in enumerate(sorted(trees.items())):
+    for tree_index, (_, _, problem, demands) in enumerate(trees):
         representative_by_link = {}
         for demand in demands:
             for link in demand.legal_links:
@@ -293,39 +300,46 @@ def _resource_time_lower_bound(
                 link.dst_rank,
             )
             variable = usage[(tree_index, link)]
-            link_terms.setdefault(physical, []).append(variable)
+            term = (variable, problem.slice_size_bytes)
+            link_terms.setdefault(physical, []).append(term)
             for resource_id in problem.topology.link(physical).resource_ids:
-                resource_terms.setdefault(resource_id, []).append(variable)
-    for physical, variables in link_terms.items():
-        edge = problem.topology.link(physical)
+                resource_terms.setdefault(resource_id, []).append(term)
+    for physical, terms in link_terms.items():
+        edge = reference.topology.link(physical)
         channel_limit = min(max_channels, edge.max_channels)
         channel_limit = min(
             [channel_limit]
             + [
-                problem.topology.shared_resources[resource_id].max_channels
+                reference.topology.shared_resources[resource_id].max_channels
                 for resource_id in edge.resource_ids
             ]
         )
         capacity = _maximum_capacity(
             edge.performance,
-            problem.slice_size_bytes,
+            reference.slice_size_bytes,
             channel_limit,
         )
         if math.isfinite(capacity):
             model.addConstr(
-                problem.slice_size_bytes * gp.quicksum(variables)
+                gp.quicksum(
+                    slice_size_bytes * variable
+                    for variable, slice_size_bytes in terms
+                )
                 <= capacity * tau
             )
-    for resource_id, variables in resource_terms.items():
-        resource = problem.topology.shared_resources[resource_id]
+    for resource_id, terms in resource_terms.items():
+        resource = reference.topology.shared_resources[resource_id]
         capacity = _maximum_capacity(
             resource.performance,
-            problem.slice_size_bytes,
+            reference.slice_size_bytes,
             min(max_channels, resource.max_channels),
         )
         if math.isfinite(capacity):
             model.addConstr(
-                problem.slice_size_bytes * gp.quicksum(variables)
+                gp.quicksum(
+                    slice_size_bytes * variable
+                    for variable, slice_size_bytes in terms
+                )
                 <= capacity * tau
             )
     model.setObjective(tau, gp.GRB.MINIMIZE)
@@ -333,6 +347,13 @@ def _resource_time_lower_bound(
     result = float(tau.X) if model.SolCount > 0 else 0.0
     model.dispose()
     return max(0.0, result)
+
+
+def _resource_time_lower_bound(
+    problem: SolverProblem,
+    max_channels: int,
+) -> float:
+    return _global_resource_time_lower_bound((problem,), max_channels)
 
 
 def throughput_time_lower_bound(
@@ -345,4 +366,35 @@ def throughput_time_lower_bound(
     return LowerBound(
         resource_us=_resource_time_lower_bound(problem, channels),
         dependency_us=dependency_time_lower_bound(problem, channels),
+    )
+
+
+def global_throughput_time_lower_bound(
+    problems: Tuple[SolverProblem, ...],
+    max_channels: int,
+) -> LowerBound:
+    try:
+        values = tuple(problems)
+    except TypeError as error:
+        raise SemanticError("problems must be iterable") from error
+    if not values or not all(
+        isinstance(problem, SolverProblem) for problem in values
+    ):
+        raise SemanticError("problems must contain SolverProblem values")
+    channels = _positive_integer(max_channels, "max_channels")
+    reference = values[0]
+    if any(
+        problem.topology != reference.topology
+        or problem.slice_size_bytes != reference.slice_size_bytes
+        for problem in values
+    ):
+        raise SemanticError(
+            "global lower bound problems must share topology and slice size"
+        )
+    return LowerBound(
+        resource_us=_global_resource_time_lower_bound(values, channels),
+        dependency_us=max(
+            dependency_time_lower_bound(problem, channels)
+            for problem in values
+        ),
     )

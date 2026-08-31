@@ -4,13 +4,22 @@ from pathlib import Path
 import pytest
 
 from vericcl.input.loader import resolve_inputs
-from vericcl.errors import SemanticError, SolverUnavailableError
+from vericcl.errors import (
+    ConstructionInfeasibleError,
+    SemanticError,
+    SolverUnavailableError,
+)
 from vericcl.input.models import ForbiddenTransfer, ObjectiveMode
 from vericcl.planner.build import build_plan
 from vericcl.solver.cache import CandidateCache
 from vericcl.solver.lower_bounds import LowerBound
-from vericcl.solver.model import SolveRequest, SolveStatus
+from vericcl.solver.model import (
+    SearchDiagnostics,
+    SolveRequest,
+    SolveStatus,
+)
 from vericcl.solver.orchestrator import solve
+from vericcl.solver.template_search import TemplateSearchResult
 import vericcl.solver.orchestrator as orchestrator_module
 from vericcl.topology.loader import load_topology
 from vericcl.tuning.model import TuningOverlay
@@ -80,7 +89,10 @@ def test_constructive_only_returns_complete_global_candidate():
     assert set(result.selected_candidate.node_schedules) == {
         node.node_id for node in request.plan.nodes
     }
-    assert result.selected_candidate.metrics.solver_name == "constructive"
+    assert result.selected_candidate.metrics.solver_name == "constructive-route"
+    assert "template_route_composition" in (
+        result.selected_candidate.restrictions
+    )
     assert "independent_node_composition" in (
         result.selected_candidate.restrictions
     )
@@ -95,12 +107,12 @@ def test_explicit_workflow_budget_bounds_solver_deadline(monkeypatch):
 
     def no_candidates(request_value, problems, objective, deadline):
         captured.append(deadline)
-        return ()
+        return TemplateSearchResult((), SearchDiagnostics())
 
     monkeypatch.setattr(orchestrator_module, "_monotonic", lambda: 100.0)
     monkeypatch.setattr(
         orchestrator_module,
-        "_solve_objective",
+        "_solve_template_objective",
         no_candidates,
     )
 
@@ -115,86 +127,112 @@ def test_milp_without_incumbent_falls_back_to_constructive(
     request = _request(constructive=True, milp=True)
     calls = []
 
-    def no_incumbent(problem, config, objective, warm_start):
-        calls.append((problem.node.node_id, objective, warm_start))
-        return ()
+    def no_incumbent(
+        template,
+        inputs,
+        topology,
+        channel_count,
+        objective,
+        budget,
+        warm_start,
+    ):
+        calls.append((template.template_id, objective, warm_start))
+        raise ConstructionInfeasibleError("no route incumbent")
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.search_models",
+        "vericcl.solver.template_search.solve_route_milp",
         no_incumbent,
     )
 
     result = solve(request, cache=CandidateCache())
 
-    assert len(calls) == len(request.plan.nodes)
-    assert all(call[2] is not None for call in calls)
+    assert calls
+    assert result.diagnostics.route_model_count == len(calls)
+    assert result.diagnostics.search_model_count_total == len(calls)
+    assert all(call[2] is None for call in calls)
     assert result.selected_candidate is not None
-    assert result.selected_candidate.metrics.solver_name == "constructive"
+    assert result.selected_candidate.metrics.solver_name == "constructive-route"
+    assert "template_route_composition" in (
+        result.selected_candidate.restrictions
+    )
 
 
 def test_unavailable_milp_search_falls_back_to_constructive(monkeypatch):
     request = _request(constructive=True, milp=True)
 
-    def unavailable(problem, config, objective, warm_start):
+    def unavailable(*args):
         raise SolverUnavailableError("unavailable")
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.search_models",
+        "vericcl.solver.template_search.solve_route_milp",
         unavailable,
     )
 
     result = solve(request, cache=CandidateCache())
 
     assert result.status is SolveStatus.FEASIBLE
-    assert result.selected_candidate.metrics.solver_name == "constructive"
+    assert result.selected_candidate.metrics.solver_name == "constructive-route"
+    assert result.diagnostics.route_model_count == 1
+    assert result.diagnostics.search_model_count_total == 1
 
 
 def test_complete_milp_incumbents_are_combined_by_channel(monkeypatch):
     request = _request(constructive=True, milp=True)
+    from vericcl.solver import template_search
 
-    from vericcl.solver import orchestrator
+    original = template_search.construct_route_pattern
+    calls = []
 
-    def time_limited(problem, config, objective, warm_start):
-        local = orchestrator._constructive_candidate(
-            problem,
-            warm_start,
+    def time_limited(
+        template,
+        inputs,
+        topology,
+        channel_count,
+        objective,
+        budget,
+        warm_start,
+    ):
+        del budget, warm_start
+        calls.append(template.template_id)
+        pattern = original(
+            template,
+            inputs,
+            topology,
+            channel_count,
             objective,
-            1,
-            None,
         )
-        return (
-            replace(
-                local,
-                candidate_id="{}-milp".format(problem.node.node_id),
-                metrics=replace(
-                    local.metrics,
-                    status=SolveStatus.TIME_LIMIT,
-                    solver_name="gurobi",
-                    model_count=1,
-                    termination_reason="time_limit",
-                ),
+        return replace(
+            pattern,
+            metrics=replace(
+                pattern.metrics,
+                status=SolveStatus.TIME_LIMIT,
+                solver_name="gurobi",
+                model_count=1,
+                termination_reason="time_limit",
             ),
         )
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.search_models",
+        "vericcl.solver.template_search.solve_route_milp",
         time_limited,
     )
 
     result = solve(request, cache=CandidateCache())
 
-    milp = next(
-        candidate
-        for candidate in result.candidates
-        if "-milp-" in candidate.candidate_id
+    assert result.selected_candidate is not None
+    assert result.selected_candidate.channel_count == 1
+    assert result.selected_candidate.metrics.status is SolveStatus.TIME_LIMIT
+    assert result.selected_candidate.metrics.solver_name == "gurobi"
+    assert result.selected_candidate.metrics.model_count == len(calls)
+    assert result.diagnostics.route_model_count == len(calls)
+
+
+def test_strict_total_budget_is_shared_across_plan_nodes(monkeypatch):
+    request = _request(
+        constructive=False,
+        milp=True,
+        require_proven_optimal=True,
     )
-    assert milp.channel_count == 1
-    assert milp.metrics.status is SolveStatus.TIME_LIMIT
-    assert milp.metrics.solver_name == "gurobi"
-
-
-def test_total_budget_is_shared_across_plan_nodes(monkeypatch):
-    request = _request(constructive=False, milp=True)
     request = replace(
         request,
         inputs=replace(
@@ -384,16 +422,22 @@ def test_force_resolve_bypasses_complete_candidate_cache(monkeypatch):
     assert cached.cache_hit
     assert cached.selected_candidate_id == first.selected_candidate_id
 
-    from vericcl.solver import orchestrator
+    from vericcl.solver import template_search
 
-    original = orchestrator.construct_candidate
+    original = template_search.construct_route_pattern
     calls = []
 
-    def counted(problem, channel_count):
-        calls.append((problem.node.node_id, channel_count))
-        return original(problem, channel_count)
+    def counted(template, inputs, topology, channel_count, objective):
+        calls.append((template.template_id, channel_count, objective))
+        return original(
+            template,
+            inputs,
+            topology,
+            channel_count,
+            objective,
+        )
 
-    monkeypatch.setattr(orchestrator, "construct_candidate", counted)
+    monkeypatch.setattr(template_search, "construct_route_pattern", counted)
     forced_inputs = replace(
         request.inputs,
         solver=replace(request.inputs.solver, force_resolve=True),
@@ -412,21 +456,33 @@ def test_auto_skips_throughput_when_cv_adjusted_gain_is_too_small(
     request = _request(
         objective=ObjectiveMode.AUTO,
         constructive=True,
-        milp=True,
+        milp=False,
+        force_resolve=True,
     )
     objectives = []
 
-    def no_incumbent(problem, config, objective, warm_start):
+    def template_pipeline(request_value, problems, objective, deadline):
+        del problems, deadline
         objectives.append(objective)
-        return ()
+        return TemplateSearchResult(
+            (_backend_candidate(request_value, objective, proven=False),),
+            SearchDiagnostics(
+                requested_problem_count=len(request_value.plan.nodes),
+                template_count=2,
+                route_model_count=2,
+                search_model_count_total=2,
+            ),
+        )
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.search_models",
-        no_incumbent,
+        orchestrator_module,
+        "_solve_template_objective",
+        template_pipeline,
     )
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.throughput_time_lower_bound",
-        lambda problem, max_channels: LowerBound(1e9, 1e9),
+        orchestrator_module,
+        "global_throughput_time_lower_bound",
+        lambda problems, max_channels: LowerBound(1e9, 1e9),
     )
     monkeypatch.setattr(
         "vericcl.solver.orchestrator._relevant_calibration",
@@ -437,6 +493,7 @@ def test_auto_skips_throughput_when_cv_adjusted_gain_is_too_small(
 
     assert objectives
     assert set(objectives) == {ObjectiveMode.LATENCY}
+    assert result.diagnostics.search_model_count_total == 2
     assert "auto_throughput=skipped" in result.message
     assert "threshold=0.2" in result.message
 
@@ -445,21 +502,35 @@ def test_auto_does_not_prune_with_unstable_calibration(monkeypatch):
     request = _request(
         objective=ObjectiveMode.AUTO,
         constructive=True,
-        milp=True,
+        milp=False,
+        force_resolve=True,
     )
     objectives = []
 
-    def no_incumbent(problem, config, objective, warm_start):
+    def template_pipeline(request_value, problems, objective, deadline):
+        del problems, deadline
         objectives.append(objective)
-        return ()
+        count = 2 if objective is ObjectiveMode.LATENCY else 3
+        return TemplateSearchResult(
+            (_backend_candidate(request_value, objective, proven=False),),
+            SearchDiagnostics(
+                requested_problem_count=len(request_value.plan.nodes),
+                template_count=2,
+                route_model_count=count,
+                search_model_count_total=count,
+                route_model_build_time_s=float(count),
+            ),
+        )
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.search_models",
-        no_incumbent,
+        orchestrator_module,
+        "_solve_template_objective",
+        template_pipeline,
     )
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.throughput_time_lower_bound",
-        lambda problem, max_channels: LowerBound(1e9, 1e9),
+        orchestrator_module,
+        "global_throughput_time_lower_bound",
+        lambda problems, max_channels: LowerBound(1e9, 1e9),
     )
     monkeypatch.setattr(
         "vericcl.solver.orchestrator._relevant_calibration",
@@ -472,6 +543,10 @@ def test_auto_does_not_prune_with_unstable_calibration(monkeypatch):
         ObjectiveMode.LATENCY,
         ObjectiveMode.THROUGHPUT,
     }
+    assert result.diagnostics.template_count == 2
+    assert result.diagnostics.route_model_count == 5
+    assert result.diagnostics.search_model_count_total == 5
+    assert result.diagnostics.route_model_build_time_s == 5.0
     assert "unstable_calibration" in result.message
 
 
@@ -482,15 +557,35 @@ def test_auto_keeps_latency_candidate_when_total_budget_expires(
         objective=ObjectiveMode.AUTO,
         constructive=True,
         milp=False,
+        force_resolve=True,
     )
-    times = iter((0.0, 0.0, 0.0, 0.0, 0.0, 11_000.0))
+    times = iter((0.0, 11_000.0))
+
+    def latency_only(request_value, problems, objective, deadline):
+        del problems, deadline
+        assert objective is ObjectiveMode.LATENCY
+        return TemplateSearchResult(
+            (_backend_candidate(request_value, objective, proven=False),),
+            SearchDiagnostics(
+                requested_problem_count=len(request_value.plan.nodes),
+                route_model_count=3,
+                search_model_count_total=3,
+            ),
+        )
 
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator._monotonic",
+        orchestrator_module,
+        "_monotonic",
         lambda: next(times),
     )
     monkeypatch.setattr(
-        "vericcl.solver.orchestrator.throughput_time_lower_bound",
+        orchestrator_module,
+        "_solve_template_objective",
+        latency_only,
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "global_throughput_time_lower_bound",
         lambda *args: pytest.fail("lower bound must respect the total budget"),
     )
 
@@ -498,6 +593,7 @@ def test_auto_keeps_latency_candidate_when_total_budget_expires(
 
     assert result.status is SolveStatus.FEASIBLE
     assert result.selected_candidate is not None
+    assert result.diagnostics.search_model_count_total == 3
     assert "budget_exhausted" in result.message
 
 
@@ -506,3 +602,130 @@ def test_invalid_solver_api_arguments_are_rejected():
         solve(object(), cache=CandidateCache())
     with pytest.raises(SemanticError, match="CandidateCache"):
         solve(_request(), cache=object())
+
+
+def _backend_candidate(request, objective, *, proven):
+    problems = tuple(
+        orchestrator_module.build_solver_problem(
+            node,
+            request.inputs,
+            request.topology,
+        )
+        for node in request.plan.nodes
+    )
+    local = {}
+    for problem in problems:
+        schedule = orchestrator_module.construct_candidate(problem, 1)
+        local[problem.node.node_id] = orchestrator_module._constructive_candidate(
+            problem,
+            schedule,
+            objective,
+            1,
+            None,
+        )
+    candidate = orchestrator_module._combine_node_candidates(
+        request,
+        local,
+        "test",
+        objective,
+        1,
+    )
+    if proven:
+        return replace(
+            candidate,
+            candidate_id="legacy-proven",
+            metrics=replace(candidate.metrics, status=SolveStatus.OPTIMAL),
+            proven_optimal=True,
+            search_space_restricted=False,
+            restrictions=(),
+        )
+    restrictions = tuple(
+        sorted(set(candidate.restrictions) | {"template_route_composition"})
+    )
+    return replace(
+        candidate,
+        candidate_id="template-{}-candidate".format(objective.value),
+        proven_optimal=False,
+        search_space_restricted=True,
+        restrictions=restrictions,
+    )
+
+
+def test_default_and_strict_requests_use_disjoint_solver_paths(monkeypatch):
+    default = _request(force_resolve=True)
+    strict = _request(
+        constructive=False,
+        milp=True,
+        force_resolve=True,
+        require_proven_optimal=True,
+    )
+    calls = []
+
+    def template_pipeline(request, problems, objective, deadline):
+        calls.append("template_route_pipeline")
+        return TemplateSearchResult(
+            (_backend_candidate(request, objective, proven=False),),
+            SearchDiagnostics(
+                requested_problem_count=len(problems),
+                route_model_count=1,
+                search_model_count_total=1,
+            ),
+        )
+
+    def legacy_pipeline(request, problems, objective, deadline):
+        calls.append("legacy_full_time_milp")
+        return TemplateSearchResult(
+            (_backend_candidate(request, objective, proven=True),),
+            SearchDiagnostics(
+                requested_problem_count=len(problems),
+                search_model_count_total=1,
+            ),
+        )
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_solve_template_objective",
+        template_pipeline,
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_solve_legacy_objective",
+        legacy_pipeline,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.GurobiAdapter,
+        "available",
+        lambda: True,
+    )
+
+    default_result = solve(default, cache=CandidateCache())
+
+    assert calls == ["template_route_pipeline"]
+    assert default_result.selected_candidate is not None
+    assert "template_route_composition" in (
+        default_result.selected_candidate.restrictions
+    )
+    assert not default_result.selected_candidate.proven_optimal
+    assert default_result.diagnostics.search_model_count_total == 1
+
+    calls.clear()
+    strict_result = solve(strict, cache=CandidateCache())
+
+    assert calls == ["legacy_full_time_milp"]
+    assert strict_result.selected_candidate is not None
+    assert strict_result.selected_candidate.proven_optimal
+    assert strict_result.selected_candidate.metrics.status is SolveStatus.OPTIMAL
+    assert strict_result.selected_candidate.restrictions == ()
+    assert strict_result.diagnostics.search_model_count_total == 1
+
+
+def test_solver_paths_use_distinct_cache_model_versions():
+    default = _request()
+    strict = _request(require_proven_optimal=True)
+
+    default_backend = orchestrator_module._backend_request(default)
+    strict_backend = orchestrator_module._backend_request(strict)
+
+    assert default_backend.model_version.endswith("template-route-v1")
+    assert strict_backend.model_version.endswith("legacy-full-time-v1")
+    assert default_backend.model_version != strict_backend.model_version
