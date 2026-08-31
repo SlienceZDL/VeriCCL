@@ -1,5 +1,8 @@
 from dataclasses import replace
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -8,12 +11,17 @@ from vericcl.input.loader import resolve_inputs
 from vericcl.planner.build import build_plan
 from vericcl.planner.model import PlanningMode
 from vericcl.solver.cache import (
+    CacheSignature,
     CandidateCache,
+    build_cache_signature,
     candidate_cache_key,
     performance_cache_key,
     structural_cache_key,
 )
+from vericcl.solver.demands import build_solver_problem
 from vericcl.solver.model import SolveRequest, SolveStatus
+from vericcl.solver.orchestrator import solve
+from vericcl.solver.templates import build_solver_templates
 from vericcl.topology.loader import load_topology
 from vericcl.topology.model import DirectedLink
 from vericcl.tuning.model import TuningOverlay
@@ -103,6 +111,180 @@ def test_cache_key_is_stable_for_equivalent_request():
     value = request()
 
     assert candidate_cache_key(value) == candidate_cache_key(replace(value))
+
+
+def test_cache_key_is_restart_stable_across_hash_seeds():
+    script = """
+from tests.unit.solver.test_cache import request
+from vericcl.solver.cache import build_cache_signature, candidate_cache_key
+from vericcl.solver.demands import build_solver_problem
+from vericcl.solver.templates import build_solver_templates
+
+value = request()
+problems = tuple(
+    build_solver_problem(node, value.inputs, value.topology)
+    for node in value.plan.nodes
+)
+templates = build_solver_templates(problems, value.plan.planning_mode)
+print(candidate_cache_key(
+    value,
+    build_cache_signature(value, problems, templates),
+))
+"""
+    keys = []
+    for hash_seed in ("1", "987654"):
+        environment = dict(os.environ, PYTHONHASHSEED=hash_seed)
+        keys.append(
+            subprocess.check_output(
+                (sys.executable, "-c", script),
+                cwd=Path(__file__).parents[3],
+                env=environment,
+                text=True,
+            ).strip()
+        )
+
+    assert keys[0] == keys[1]
+
+
+def test_cache_key_versions_are_explicit_and_independent():
+    value = request()
+    problems = tuple(
+        build_solver_problem(node, value.inputs, value.topology)
+        for node in value.plan.nodes
+    )
+    templates = build_solver_templates(problems, value.plan.planning_mode)
+    signature = build_cache_signature(value, problems, templates)
+
+    assert candidate_cache_key(value, signature) != candidate_cache_key(
+        value,
+        replace(signature, route_model_version="2"),
+    )
+    assert candidate_cache_key(value, signature) != candidate_cache_key(
+        value,
+        replace(signature, global_scheduler_version="2"),
+    )
+    assert signature.planning_mode == value.plan.planning_mode.value
+    assert candidate_cache_key(value, signature) != candidate_cache_key(
+        value,
+        replace(signature, planning_mode="manual"),
+    )
+    assert CacheSignature().backend_type == "template_route"
+    assert signature == CacheSignature(
+        backend_type="template_route",
+        planning_mode=value.plan.planning_mode.value,
+        problem_summaries=signature.problem_summaries,
+        template_exact_signatures=signature.template_exact_signatures,
+        template_member_mappings=signature.template_member_mappings,
+    )
+
+
+def test_cache_key_tracks_exact_templates_and_member_mappings_stably():
+    value = request()
+    problems = tuple(
+        build_solver_problem(node, value.inputs, value.topology)
+        for node in value.plan.nodes
+    )
+    templates = build_solver_templates(problems, value.plan.planning_mode)
+    original = build_cache_signature(value, problems, templates)
+    changed_exact = (
+        replace(templates[0], exact_signature="f" * 64),
+        *templates[1:],
+    )
+    member = templates[0].members[0]
+    changed_member = replace(
+        member,
+        rank_map=tuple(
+            (source, member.rank_map[-index - 1][1])
+            for index, (source, _) in enumerate(member.rank_map)
+        ),
+    )
+    changed_mapping = (
+        replace(
+            templates[0],
+            members=(changed_member, *templates[0].members[1:]),
+        ),
+        *templates[1:],
+    )
+
+    assert candidate_cache_key(value, original) != candidate_cache_key(
+        value,
+        build_cache_signature(value, problems, changed_exact),
+    )
+    assert candidate_cache_key(value, original) != candidate_cache_key(
+        value,
+        build_cache_signature(value, problems, changed_mapping),
+    )
+    assert original == build_cache_signature(
+        value,
+        tuple(reversed(problems)),
+        tuple(reversed(templates)),
+    )
+
+
+def test_solver_uses_actual_template_signature_for_cache_entries():
+    value = request()
+    inputs = replace(
+        value.inputs,
+        strategies=replace(value.inputs.strategies, milp=False),
+    )
+    value = replace(
+        value,
+        inputs=inputs,
+        plan=build_plan(inputs, value.topology),
+    )
+    problems = tuple(
+        build_solver_problem(node, value.inputs, value.topology)
+        for node in value.plan.nodes
+    )
+    templates = build_solver_templates(problems, value.plan.planning_mode)
+    signature = build_cache_signature(value, problems, templates)
+    cache = CandidateCache()
+
+    result = solve(value, cache=cache)
+
+    assert result.selected_candidate is not None
+    expected_key = candidate_cache_key(value, signature)
+    assert cache.get(expected_key) is not None
+    assert result.selected_candidate.candidate_id.endswith(expected_key[:12])
+
+
+def test_legacy_and_template_cache_signatures_are_isolated():
+    value = request()
+    problems = tuple(
+        build_solver_problem(node, value.inputs, value.topology)
+        for node in value.plan.nodes
+    )
+    templates = build_solver_templates(problems, value.plan.planning_mode)
+    template_signature = build_cache_signature(value, problems, templates)
+    strict_inputs = replace(
+        value.inputs,
+        solver=replace(value.inputs.solver, require_proven_optimal=True),
+    )
+    strict = replace(value, inputs=strict_inputs)
+    strict_problems = tuple(
+        build_solver_problem(node, strict.inputs, strict.topology)
+        for node in strict.plan.nodes
+    )
+    legacy_signature = build_cache_signature(strict, strict_problems, ())
+    cache = CandidateCache()
+    cache.put(
+        candidate_cache_key(strict, legacy_signature),
+        candidate(),
+        ttl_seconds=10,
+        complete=True,
+        now=0,
+    )
+
+    assert template_signature.backend_type == "template_route"
+    assert legacy_signature.backend_type == "legacy_full_time_milp"
+    assert candidate_cache_key(value, template_signature) != candidate_cache_key(
+        strict,
+        legacy_signature,
+    )
+    assert (
+        cache.get(candidate_cache_key(value, template_signature), now=1)
+        is None
+    )
 
 
 @pytest.mark.parametrize(

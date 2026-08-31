@@ -187,6 +187,23 @@ def test_search_diagnostics_total_includes_route_and_fallback_models():
     assert value.search_model_count_total == 4
 
 
+def test_search_diagnostics_reads_legacy_payload_with_zero_defaults():
+    assert SearchDiagnostics.from_mapping({}) == SearchDiagnostics()
+    assert SearchDiagnostics.from_mapping(
+        {
+            "schema_version": "1",
+            "solver_metrics": {"model_count": 3},
+            "validation": {"overall_status": "valid"},
+        }
+    ) == SearchDiagnostics()
+    assert SearchDiagnostics.from_mapping(
+        {"route_model_count": 2, "search_model_count_total": 2}
+    ) == SearchDiagnostics(
+        route_model_count=2,
+        search_model_count_total=2,
+    )
+
+
 def test_solve_result_rejects_unknown_selection():
     with pytest.raises(SemanticError, match="selected"):
         SolveResult(

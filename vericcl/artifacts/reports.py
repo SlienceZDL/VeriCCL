@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
+import math
 from typing import Mapping, Optional
 
 from vericcl.artifacts.hashing import (
@@ -12,7 +13,7 @@ from vericcl.errors import SemanticError
 from vericcl.input.json_codec import canonical_json
 from vericcl.input.models import ResolvedInput
 from vericcl.semantics.atom import Schedule
-from vericcl.solver.model import SolveCandidate
+from vericcl.solver.model import SearchDiagnostics, SolveCandidate
 from vericcl.topology.model import Topology
 from vericcl.tuning.model import TuningOverlay
 from vericcl.verification.model import ValidationReport
@@ -26,6 +27,15 @@ def _mapping(value: object, field: str) -> Mapping[str, object]:
     if not all(isinstance(key, str) and key for key in value):
         raise SemanticError("{} keys must be strings".format(field))
     return MappingProxyType(dict(value))
+
+
+def _non_negative_time(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SemanticError("{} must be numeric".format(field))
+    result = float(value)
+    if not math.isfinite(result) or result < 0.0:
+        raise SemanticError("{} must be finite and non-negative".format(field))
+    return result
 
 
 def _overlay(value: Optional[TuningOverlay]) -> Mapping[str, object]:
@@ -175,6 +185,22 @@ class CandidateReport:
     tuning_strategy: Mapping[str, object]
     runtime_recommendations: tuple
     reproducibility: Mapping[str, object]
+    planning_mode: str = "unknown"
+    requested_problem_count: int = 0
+    routing_unit_count: int = 0
+    template_count: int = 0
+    template_member_count: int = 0
+    route_model_count: int = 0
+    fallback_member_model_count: int = 0
+    search_model_count_total: int = 0
+    route_model_build_time_s: float = 0.0
+    route_model_optimize_time_s: float = 0.0
+    template_expansion_time_s: float = 0.0
+    global_scheduling_time_s: float = 0.0
+    model_variables_max: int = 0
+    model_constraints_max: int = 0
+    model_general_constraints_max: int = 0
+    verification_time_s: float = 0.0
 
     def __post_init__(self) -> None:
         for field in (
@@ -196,6 +222,37 @@ class CandidateReport:
             )
         if not isinstance(self.validation, ValidationReport):
             raise SemanticError("candidate report validation is invalid")
+        if not isinstance(self.planning_mode, str) or not self.planning_mode:
+            raise SemanticError("candidate report planning_mode is invalid")
+        SearchDiagnostics.from_mapping(
+            {
+                name: getattr(self, name)
+                for name in (
+                    "requested_problem_count",
+                    "routing_unit_count",
+                    "template_count",
+                    "template_member_count",
+                    "route_model_count",
+                    "fallback_member_model_count",
+                    "search_model_count_total",
+                    "route_model_build_time_s",
+                    "route_model_optimize_time_s",
+                    "template_expansion_time_s",
+                    "global_scheduling_time_s",
+                    "model_variables_max",
+                    "model_constraints_max",
+                    "model_general_constraints_max",
+                )
+            }
+        )
+        object.__setattr__(
+            self,
+            "verification_time_s",
+            _non_negative_time(
+                self.verification_time_s,
+                "candidate report verification_time_s",
+            ),
+        )
 
 
 def build_candidate_report(
@@ -211,6 +268,8 @@ def build_candidate_report(
     rejection_reason: Optional[str],
     selected_best: bool,
     tuning_strategy: Mapping[str, object],
+    diagnostics: Optional[SearchDiagnostics] = None,
+    verification_time_s: float = 0.0,
 ) -> CandidateReport:
     if not isinstance(candidate, SolveCandidate):
         raise SemanticError("candidate must be a SolveCandidate")
@@ -222,6 +281,11 @@ def build_candidate_report(
         raise SemanticError("outcome must be a VerificationOutcome")
     if outcome.artifact is None:
         raise SemanticError("candidate report requires an XML artifact")
+    diagnostics_value = (
+        SearchDiagnostics() if diagnostics is None else diagnostics
+    )
+    if not isinstance(diagnostics_value, SearchDiagnostics):
+        raise SemanticError("candidate report diagnostics are invalid")
     if global_schedule is not None and not isinstance(
         global_schedule,
         Schedule,
@@ -243,6 +307,7 @@ def build_candidate_report(
     )
     xml_sha256 = outcome.artifact.sha256
     requested = _strategies(inputs)
+    hierarchy_value = _mapping(hierarchy_plan, "hierarchy_plan")
     unknown_applied = set(applied_strategies) - set(requested)
     if unknown_applied:
         raise SemanticError("applied strategies contain an unknown field")
@@ -265,7 +330,7 @@ def build_candidate_report(
         applied_strategies=applied,
         strategy_parameters=_strategy_parameters(inputs),
         overlay=_overlay(overlay),
-        hierarchy_plan=hierarchy_plan,
+        hierarchy_plan=hierarchy_value,
         channel_count=(
             overlay.channel_count
             if overlay is not None and overlay.channel_count is not None
@@ -292,6 +357,34 @@ def build_candidate_report(
             outcome.artifact,
         ),
         reproducibility=_reproducibility(candidate),
+        planning_mode=hierarchy_value.get("planning_mode", "unknown"),
+        requested_problem_count=diagnostics_value.requested_problem_count,
+        routing_unit_count=diagnostics_value.routing_unit_count,
+        template_count=diagnostics_value.template_count,
+        template_member_count=diagnostics_value.template_member_count,
+        route_model_count=diagnostics_value.route_model_count,
+        fallback_member_model_count=(
+            diagnostics_value.fallback_member_model_count
+        ),
+        search_model_count_total=diagnostics_value.search_model_count_total,
+        route_model_build_time_s=(
+            diagnostics_value.route_model_build_time_s
+        ),
+        route_model_optimize_time_s=(
+            diagnostics_value.route_model_optimize_time_s
+        ),
+        template_expansion_time_s=(
+            diagnostics_value.template_expansion_time_s
+        ),
+        global_scheduling_time_s=(
+            diagnostics_value.global_scheduling_time_s
+        ),
+        model_variables_max=diagnostics_value.model_variables_max,
+        model_constraints_max=diagnostics_value.model_constraints_max,
+        model_general_constraints_max=(
+            diagnostics_value.model_general_constraints_max
+        ),
+        verification_time_s=verification_time_s,
     )
 
 

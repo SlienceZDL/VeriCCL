@@ -12,10 +12,13 @@ from vericcl.artifacts.reports import (
     build_candidate_report,
     build_validation_json,
 )
+from vericcl.artifacts.layout import create_run_layout
+from vericcl.artifacts.summary import build_run_summary
 from vericcl.errors import SemanticError
 from vericcl.verification.pipeline import VerificationOutcome
 from vericcl.input.models import ObjectiveMode
 from vericcl.solver.model import (
+    SearchDiagnostics,
     SolveCandidate,
     SolveStatus,
     SolverMetrics,
@@ -141,6 +144,101 @@ def test_report_contains_reproducibility_validation_and_xml_binding():
         value.candidate_signature,
         outcome.artifact.sha256,
     )
+
+
+def test_report_keeps_candidate_and_run_model_counts_distinct():
+    schedule = two_rank_allreduce_schedule()
+    input_value = inputs()
+    topology_value = topology()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology_value,
+    )
+    diagnostics = SearchDiagnostics(
+        requested_problem_count=3,
+        routing_unit_count=5,
+        template_count=2,
+        template_member_count=5,
+        route_model_count=7,
+        fallback_member_model_count=2,
+        search_model_count_total=11,
+        route_model_build_time_s=1.25,
+        route_model_optimize_time_s=2.5,
+        template_expansion_time_s=0.5,
+        global_scheduling_time_s=0.75,
+        model_variables_max=13,
+        model_constraints_max=17,
+        model_general_constraints_max=19,
+    )
+
+    report = build_candidate_report(
+        _candidate(schedule),
+        input_value,
+        topology_value,
+        outcome,
+        overlay=None,
+        applied_strategies={},
+        hierarchy_plan={"planning_mode": "gateway_allreduce"},
+        rejection_reason=None,
+        selected_best=False,
+        tuning_strategy={"kind": "template_route"},
+        diagnostics=diagnostics,
+        verification_time_s=3.5,
+    )
+    decoded = json.loads(build_validation_json(report))
+
+    assert decoded["planning_mode"] == "gateway_allreduce"
+    assert decoded["solver_metrics"]["model_count"] == 1
+    assert decoded["route_model_count"] == 7
+    assert decoded["fallback_member_model_count"] == 2
+    assert decoded["search_model_count_total"] == 11
+    assert decoded["route_model_build_time_s"] == 1.25
+    assert decoded["route_model_optimize_time_s"] == 2.5
+    assert decoded["template_expansion_time_s"] == 0.5
+    assert decoded["global_scheduling_time_s"] == 0.75
+    assert decoded["verification_time_s"] == 3.5
+    assert decoded["tuning_strategy"]["kind"] == "template_route"
+
+
+def test_run_summary_reports_measured_phase_and_total_wall_clock_times(tmp_path):
+    input_value = inputs()
+    layout = create_run_layout(tmp_path, input_value, run_id="summary")
+    diagnostics = SearchDiagnostics(
+        route_model_count=4,
+        fallback_member_model_count=1,
+        search_model_count_total=7,
+        route_model_build_time_s=1.0,
+        route_model_optimize_time_s=2.0,
+        template_expansion_time_s=3.0,
+        global_scheduling_time_s=4.0,
+    )
+
+    summary = build_run_summary(
+        mode="solve",
+        layout=layout,
+        inputs=input_value,
+        candidates=(),
+        final_candidate_id=None,
+        final_xml=None,
+        final_report=None,
+        status="feasible",
+        message="complete",
+        elapsed_s=12.0,
+        planning_mode="direct",
+        diagnostics=diagnostics,
+        verification_time_s=5.0,
+    )
+
+    assert summary["route_model_count"] == 4
+    assert summary["fallback_member_model_count"] == 1
+    assert summary["search_model_count_total"] == 7
+    assert summary["route_model_build_time_s"] == 1.0
+    assert summary["route_model_optimize_time_s"] == 2.0
+    assert summary["template_expansion_time_s"] == 3.0
+    assert summary["global_scheduling_time_s"] == 4.0
+    assert summary["verification_time_s"] == 5.0
+    assert summary["total_wall_clock_time_s"] == 12.0
 
 
 def test_report_preserves_requested_and_applied_hierarchy_separately():
@@ -272,6 +370,19 @@ def test_report_and_hashing_reject_invalid_boundaries():
             overlay=None,
             applied_strategies={"unknown": True},
             hierarchy_plan={},
+            rejection_reason=None,
+            selected_best=False,
+            tuning_strategy={},
+        )
+    with pytest.raises(SemanticError, match="hierarchy_plan"):
+        build_candidate_report(
+            candidate,
+            input_value,
+            topology_value,
+            outcome,
+            overlay=None,
+            applied_strategies={},
+            hierarchy_plan=object(),
             rejection_reason=None,
             selected_best=False,
             tuning_strategy={},

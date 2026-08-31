@@ -138,6 +138,37 @@ class SearchDiagnostics:
     model_constraints_max: int = 0
     model_general_constraints_max: int = 0
 
+    @classmethod
+    def from_mapping(cls, payload: object) -> "SearchDiagnostics":
+        if not isinstance(payload, Mapping):
+            raise SemanticError(
+                "search diagnostics payload must be a mapping"
+            )
+        integer_fields = (
+            "requested_problem_count",
+            "routing_unit_count",
+            "template_count",
+            "template_member_count",
+            "route_model_count",
+            "fallback_member_model_count",
+            "search_model_count_total",
+            "model_variables_max",
+            "model_constraints_max",
+            "model_general_constraints_max",
+        )
+        time_fields = (
+            "route_model_build_time_s",
+            "route_model_optimize_time_s",
+            "template_expansion_time_s",
+            "global_scheduling_time_s",
+        )
+        return cls(
+            **{
+                name: payload.get(name, 0 if name in integer_fields else 0.0)
+                for name in integer_fields + time_fields
+            }
+        )
+
     def __post_init__(self) -> None:
         for name in (
             "requested_problem_count",

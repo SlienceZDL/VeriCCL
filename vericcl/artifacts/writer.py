@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from types import MappingProxyType
@@ -20,6 +21,7 @@ from vericcl.input.json_codec import canonical_json
 from vericcl.input.models import ForbiddenTransfer, ObjectiveMode, ResolvedInput
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.solver.model import (
+    SearchDiagnostics,
     SolveCandidate,
     SolveStatus,
     SolverMetrics,
@@ -434,6 +436,9 @@ def _generic_report(
     inputs: ResolvedInput,
     outcome: VerificationOutcome,
     signature: str,
+    hierarchy_plan: Mapping[str, object],
+    diagnostics: SearchDiagnostics,
+    verification_time_s: float,
 ) -> Mapping[str, object]:
     return {
         "schema_version": "1",
@@ -452,6 +457,28 @@ def _generic_report(
         "restrictions": candidate.restrictions,
         "runtime_compatible": False,
         "xml_sha256": None,
+        "planning_mode": hierarchy_plan.get("planning_mode", "unknown"),
+        "requested_problem_count": diagnostics.requested_problem_count,
+        "routing_unit_count": diagnostics.routing_unit_count,
+        "template_count": diagnostics.template_count,
+        "template_member_count": diagnostics.template_member_count,
+        "route_model_count": diagnostics.route_model_count,
+        "fallback_member_model_count": (
+            diagnostics.fallback_member_model_count
+        ),
+        "search_model_count_total": diagnostics.search_model_count_total,
+        "route_model_build_time_s": diagnostics.route_model_build_time_s,
+        "route_model_optimize_time_s": (
+            diagnostics.route_model_optimize_time_s
+        ),
+        "template_expansion_time_s": diagnostics.template_expansion_time_s,
+        "global_scheduling_time_s": diagnostics.global_scheduling_time_s,
+        "model_variables_max": diagnostics.model_variables_max,
+        "model_constraints_max": diagnostics.model_constraints_max,
+        "model_general_constraints_max": (
+            diagnostics.model_general_constraints_max
+        ),
+        "verification_time_s": verification_time_s,
     }
 
 
@@ -471,6 +498,8 @@ def write_candidate_artifact(
     hierarchy_plan: Optional[Mapping[str, object]] = None,
     tuning_strategy: Optional[Mapping[str, object]] = None,
     overlay: Optional[TuningOverlay] = None,
+    diagnostics: Optional[SearchDiagnostics] = None,
+    verification_time_s: float = 0.0,
 ) -> CandidateArtifact:
     if not isinstance(layout, RunLayout):
         raise SemanticError("layout must be a RunLayout")
@@ -488,6 +517,22 @@ def write_candidate_artifact(
         raise SemanticError("overlay must be a TuningOverlay or None")
     if not isinstance(accepted, bool):
         raise SemanticError("accepted must be a boolean")
+    diagnostics_value = (
+        SearchDiagnostics() if diagnostics is None else diagnostics
+    )
+    if not isinstance(diagnostics_value, SearchDiagnostics):
+        raise SemanticError("candidate diagnostics are invalid")
+    if (
+        isinstance(verification_time_s, bool)
+        or not isinstance(verification_time_s, (int, float))
+        or not math.isfinite(float(verification_time_s))
+        or verification_time_s < 0.0
+    ):
+        raise SemanticError(
+            "candidate verification_time_s must be finite and non-negative"
+        )
+    verification_time_s = float(verification_time_s)
+    hierarchy_value = {} if hierarchy_plan is None else hierarchy_plan
     base = _candidate_base(layout, iteration, selected_best)
     report_path = layout.reports / "{}.validation.json".format(base)
     schedule_path = layout.schedules / "{}.schedule.json".format(base)
@@ -521,13 +566,15 @@ def write_candidate_artifact(
                 {} if applied_strategies is None else applied_strategies
             ),
             hierarchy_plan=(
-                {} if hierarchy_plan is None else hierarchy_plan
+                hierarchy_value
             ),
             rejection_reason=rejection_reason,
             selected_best=selected_best,
             tuning_strategy=(
                 {} if tuning_strategy is None else tuning_strategy
             ),
+            diagnostics=diagnostics_value,
+            verification_time_s=verification_time_s,
         )
         report_payload = json.loads(build_validation_json(report_object))
         binding = (
@@ -535,7 +582,15 @@ def write_candidate_artifact(
         )
     else:
         report_payload = dict(
-            _generic_report(candidate, inputs, outcome, signature)
+            _generic_report(
+                candidate,
+                inputs,
+                outcome,
+                signature,
+                hierarchy_value,
+                diagnostics_value,
+                verification_time_s,
+            )
         )
         binding = None
     report_payload.update(

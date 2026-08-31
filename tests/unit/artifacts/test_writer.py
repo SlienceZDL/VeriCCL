@@ -17,7 +17,12 @@ from vericcl.artifacts.writer import (
 )
 from vericcl.errors import SemanticError
 from vericcl.input.models import ObjectiveMode
-from vericcl.solver.model import SolveCandidate, SolveStatus, SolverMetrics
+from vericcl.solver.model import (
+    SearchDiagnostics,
+    SolveCandidate,
+    SolveStatus,
+    SolverMetrics,
+)
 from vericcl.verification.model import CheckResult, ValidationStatus
 from vericcl.verification.pipeline import validate_and_lower_candidate
 from vericcl.verification.online.pipeline import (
@@ -153,6 +158,48 @@ def test_writer_emits_bound_xml_report_and_schedule_sidecar(tmp_path):
     assert json.loads(layout.resolved_input.read_text(encoding="utf-8"))[
         "input_sha256"
     ] == input_value.input_sha256
+
+
+def test_writer_reports_diagnostics_without_changing_stable_sidecar(tmp_path):
+    input_value = inputs()
+    topology_value = topology()
+    schedule = two_rank_allreduce_schedule()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology_value,
+    )
+    layout = create_run_layout(tmp_path, input_value, run_id="diagnostics")
+    diagnostics = SearchDiagnostics(
+        route_model_count=4,
+        fallback_member_model_count=1,
+        search_model_count_total=6,
+    )
+
+    artifact = write_candidate_artifact(
+        layout,
+        input_value,
+        topology_value,
+        _candidate(schedule),
+        schedule,
+        outcome,
+        iteration=0,
+        selected_best=True,
+        accepted=True,
+        rejection_reason=None,
+        hierarchy_plan={"planning_mode": "direct"},
+        diagnostics=diagnostics,
+        verification_time_s=0.75,
+    )
+    report = json.loads(artifact.report_path.read_text(encoding="utf-8"))
+    sidecar = json.loads(artifact.schedule_path.read_text(encoding="utf-8"))
+
+    assert report["route_model_count"] == 4
+    assert report["fallback_member_model_count"] == 1
+    assert report["search_model_count_total"] == 6
+    assert report["verification_time_s"] == 0.75
+    assert "diagnostics" not in sidecar
+    assert "global_schedule" not in sidecar["candidate"]
 
 
 def test_writer_uses_candidate_suffix_and_final_alias_is_exact(tmp_path):
@@ -519,6 +566,12 @@ def test_tuning_record_adapter_assesses_and_serializes_derived_candidate(
         )
 
     monkeypatch.setattr(workflow_module, "tune", fake_tune)
+    clock = iter((0.0, 2.0, 2.0, 5.0))
+    monkeypatch.setattr(
+        workflow_module,
+        "_verification_monotonic",
+        lambda: next(clock),
+    )
     result, records = _tuning_records(
         initial,
         schedule,
@@ -533,6 +586,7 @@ def test_tuning_record_adapter_assesses_and_serializes_derived_candidate(
     assert records[0].candidate.candidate_id == "candidate-derived"
     assert records[0].overlay == value
     assert records[0].rejection_reason == "no_improvement"
+    assert records[0].verification_time_s == 5.0
 
 
 def test_tuning_record_adapter_attaches_stable_online_evidence(

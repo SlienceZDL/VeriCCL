@@ -13,7 +13,11 @@ from vericcl.errors import (
 from vericcl.input.models import ObjectiveMode, ResolvedInput
 from vericcl.planner.build import build_plan
 from vericcl.semantics.atom import Schedule
-from vericcl.solver.cache import CandidateCache, candidate_cache_key
+from vericcl.solver.cache import (
+    CandidateCache,
+    build_cache_signature,
+    candidate_cache_key,
+)
 from vericcl.solver.constructive import construct_candidate
 from vericcl.solver.demands import SolverProblem, build_solver_problem
 from vericcl.solver.gurobi_api import GurobiAdapter
@@ -32,25 +36,12 @@ from vericcl.solver.template_search import (
     TemplateSearchResult,
     search_route_models,
 )
+from vericcl.solver.templates import build_solver_templates
 
 
 _CACHE_TTL_SECONDS = 3600.0
-_TEMPLATE_MODEL_VERSION = "template-route-v1"
-_LEGACY_MODEL_VERSION = "legacy-full-time-v1"
 _DEFAULT_CACHE = CandidateCache()
 _monotonic = time.monotonic
-
-
-def _backend_request(request: SolveRequest) -> SolveRequest:
-    suffix = (
-        _LEGACY_MODEL_VERSION
-        if request.inputs.solver.require_proven_optimal
-        else _TEMPLATE_MODEL_VERSION
-    )
-    return replace(
-        request,
-        model_version="{}:{}".format(request.model_version, suffix),
-    )
 
 
 def _makespan(schedule: Schedule) -> float:
@@ -606,8 +597,34 @@ def solve(
             cache_hit=False,
             message="request plan does not match normalized hierarchy",
         )
-    request = _backend_request(request)
-    cache_key = candidate_cache_key(request)
+    try:
+        effective_inputs = _effective_inputs(request)
+        problems = tuple(
+            build_solver_problem(node, effective_inputs, request.topology)
+            for node in request.plan.nodes
+        )
+        templates = (
+            ()
+            if request.inputs.solver.require_proven_optimal
+            else build_solver_templates(
+                problems,
+                request.plan.planning_mode,
+            )
+        )
+        cache_signature = build_cache_signature(
+            request,
+            problems,
+            templates,
+        )
+    except (ConstructionInfeasibleError, SemanticError) as error:
+        return SolveResult(
+            status=SolveStatus.ERROR,
+            candidates=(),
+            selected_candidate_id=None,
+            cache_hit=False,
+            message="solve failed: {}".format(error),
+        )
+    cache_key = candidate_cache_key(request, cache_signature)
     if not request.inputs.solver.force_resolve:
         cached = selected_cache.get(cache_key)
         if cached is not None and (
@@ -665,11 +682,6 @@ def solve(
         if request.wall_clock_budget_s is not None:
             solve_budget = min(solve_budget, request.wall_clock_budget_s)
         deadline = _monotonic() + solve_budget
-        effective_inputs = _effective_inputs(request)
-        problems = tuple(
-            build_solver_problem(node, effective_inputs, request.topology)
-            for node in request.plan.nodes
-        )
         mode = request.inputs.hyperparameters.objective_mode
         solve_objective = (
             _solve_legacy_objective

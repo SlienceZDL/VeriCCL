@@ -5,7 +5,7 @@ from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from queue import Queue
-from typing import Dict, Mapping, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 from vericcl.errors import (
     ConstructionInfeasibleError,
@@ -15,7 +15,7 @@ from vericcl.errors import (
 from vericcl.input.models import ObjectiveMode, ResolvedInput
 from vericcl.semantics.atom import Schedule
 from vericcl.solver.budget import ModelBudget
-from vericcl.solver.cache import candidate_cache_key
+from vericcl.solver.cache import build_cache_signature, candidate_cache_key
 from vericcl.solver.constructive import construct_route_pattern
 from vericcl.solver.demands import SolverProblem
 from vericcl.solver.gurobi_api import GurobiAdapter
@@ -287,6 +287,7 @@ def _candidate(
     node_schedules: Mapping[str, Schedule],
     global_schedule: Schedule,
     model_count: int,
+    cache_key: Optional[str] = None,
 ) -> SolveCandidate:
     makespan_us = _makespan(global_schedule)
     resource_load_us = _maximum_resource_load(
@@ -315,11 +316,14 @@ def _candidate(
         if request.overlay is not None
         else None
     )
+    identity_key = (
+        candidate_cache_key(request) if cache_key is None else cache_key
+    )
     return SolveCandidate(
         candidate_id="vericcl-{}-template-k{:02d}-{}".format(
             objective.value,
             channel_count,
-            candidate_cache_key(request)[:12],
+            identity_key[:12],
         ),
         node_schedules=node_schedules,
         objective_mode=objective,
@@ -398,6 +402,10 @@ def search_route_models(
     templates = build_solver_templates(
         problems,
         request.plan.planning_mode,
+    )
+    cache_key = candidate_cache_key(
+        request,
+        build_cache_signature(request, problems, templates),
     )
     units = tuple(
         unit for problem in problems for unit in split_routing_units(problem)
@@ -785,6 +793,7 @@ def search_route_models(
                     pattern.metrics.model_count
                     for pattern in candidate_pattern_values
                 ),
+                cache_key,
             )
         )
         measurements.expansion_time_s += expansion_time

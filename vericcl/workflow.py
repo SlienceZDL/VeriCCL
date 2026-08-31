@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 from pathlib import Path
 import time
@@ -29,7 +29,11 @@ from vericcl.input.models import ResolvedInput
 from vericcl.planner.build import build_plan
 from vericcl.planner.model import PlanningMode
 from vericcl.semantics.atom import Schedule
-from vericcl.solver.model import SolveCandidate, SolveRequest
+from vericcl.solver.model import (
+    SearchDiagnostics,
+    SolveCandidate,
+    SolveRequest,
+)
 from vericcl.solver.orchestrator import solve
 from vericcl.topology.loader import load_topology
 from vericcl.tuning.engine import (
@@ -64,6 +68,7 @@ from vericcl.xml.lower import XmlArtifact
 
 
 _monotonic = time.monotonic
+_verification_monotonic = time.monotonic
 
 
 OnlineContextFactory = Callable[
@@ -189,6 +194,82 @@ class _CandidateRecord:
     tuning_strategy: dict
     accepted: bool
     rejection_reason: Optional[str]
+    diagnostics: SearchDiagnostics = field(default_factory=SearchDiagnostics)
+    verification_time_s: float = 0.0
+
+
+def _validate_schedules(
+    schedules: Tuple[Schedule, ...],
+    inputs: ResolvedInput,
+    topology,
+) -> tuple:
+    outcomes = []
+    durations = []
+    for schedule in schedules:
+        started = _verification_monotonic()
+        outcomes.append(
+            validate_and_lower_candidate(schedule, inputs, topology)
+        )
+        durations.append(
+            max(0.0, _verification_monotonic() - started)
+        )
+    return tuple(outcomes), tuple(durations)
+
+
+def _merge_search_diagnostics(
+    left: SearchDiagnostics,
+    right: SearchDiagnostics,
+) -> SearchDiagnostics:
+    return SearchDiagnostics(
+        requested_problem_count=max(
+            left.requested_problem_count,
+            right.requested_problem_count,
+        ),
+        routing_unit_count=max(
+            left.routing_unit_count,
+            right.routing_unit_count,
+        ),
+        template_count=max(left.template_count, right.template_count),
+        template_member_count=max(
+            left.template_member_count,
+            right.template_member_count,
+        ),
+        route_model_count=left.route_model_count + right.route_model_count,
+        fallback_member_model_count=(
+            left.fallback_member_model_count
+            + right.fallback_member_model_count
+        ),
+        search_model_count_total=(
+            left.search_model_count_total + right.search_model_count_total
+        ),
+        route_model_build_time_s=(
+            left.route_model_build_time_s + right.route_model_build_time_s
+        ),
+        route_model_optimize_time_s=(
+            left.route_model_optimize_time_s
+            + right.route_model_optimize_time_s
+        ),
+        template_expansion_time_s=(
+            left.template_expansion_time_s
+            + right.template_expansion_time_s
+        ),
+        global_scheduling_time_s=(
+            left.global_scheduling_time_s
+            + right.global_scheduling_time_s
+        ),
+        model_variables_max=max(
+            left.model_variables_max,
+            right.model_variables_max,
+        ),
+        model_constraints_max=max(
+            left.model_constraints_max,
+            right.model_constraints_max,
+        ),
+        model_general_constraints_max=max(
+            left.model_general_constraints_max,
+            right.model_general_constraints_max,
+        ),
+    )
 
 
 def _timeout(context: RunContext, configured: int) -> float:
@@ -778,16 +859,25 @@ def _tuning_records(
         max_iterations=inputs.hyperparameters.max_tuning_iterations,
         timeout_s=remaining,
     )
+    verification_times = {}
 
     def assessment(proposal) -> CandidateAssessment:
         if proposal.candidate_id == initial.candidate_id:
             outcome = initial_outcome
             candidate_online_result = online_result
         else:
+            verification_started = _verification_monotonic()
             outcome = validate_and_lower_candidate(
                 proposal.schedule,
                 inputs,
                 topology,
+            )
+            verification_times[proposal.candidate_id] = (
+                verification_times.get(proposal.candidate_id, 0.0)
+                + max(
+                    0.0,
+                    _verification_monotonic() - verification_started,
+                )
             )
             candidate_online_result = None
             if online_result is not None:
@@ -837,11 +927,22 @@ def _tuning_records(
     result = tune(initial, tuning_context)
     records = []
     for entry in result.history[1:]:
-        outcome = entry.outcome or validate_and_lower_candidate(
-            entry.schedule,
-            inputs,
-            topology,
-        )
+        if entry.outcome is None:
+            verification_started = _verification_monotonic()
+            outcome = validate_and_lower_candidate(
+                entry.schedule,
+                inputs,
+                topology,
+            )
+            verification_times[entry.candidate_id] = (
+                verification_times.get(entry.candidate_id, 0.0)
+                + max(
+                    0.0,
+                    _verification_monotonic() - verification_started,
+                )
+            )
+        else:
+            outcome = entry.outcome
         records.append(
             _CandidateRecord(
                 candidate=_tuned_candidate(initial, entry),
@@ -853,6 +954,10 @@ def _tuning_records(
                 accepted=entry.accepted and _offline_valid(outcome),
                 rejection_reason=(
                     entry.rejection_reason or _rejection_reason(outcome)
+                ),
+                verification_time_s=verification_times.get(
+                    entry.candidate_id,
+                    0.0,
                 ),
             )
         )
@@ -869,6 +974,9 @@ def _finalize(
     status: str,
     message: str,
     started: float,
+    planning_mode: str = "unknown",
+    diagnostics: Optional[SearchDiagnostics] = None,
+    verification_time_s: float = 0.0,
 ) -> RunArtifacts:
     final_xml = None
     final_report = None
@@ -889,6 +997,11 @@ def _finalize(
         status=status,
         message=message,
         elapsed_s=elapsed,
+        planning_mode=planning_mode,
+        diagnostics=(
+            SearchDiagnostics() if diagnostics is None else diagnostics
+        ),
+        verification_time_s=verification_time_s,
     )
     write_run_summary(layout, summary)
     return RunArtifacts(
@@ -936,15 +1049,19 @@ def execute_solve(context: RunContext) -> RunArtifacts:
         wall_clock_budget_s=deadline.remaining(),
     )
     result = solve(request)
+    run_diagnostics = result.diagnostics
+    phase_diagnostics = result.diagnostics
     deadline.check("solve")
     schedules = tuple(
         _global_schedule(plan, candidate, topology)
         for candidate in result.candidates
     )
-    outcomes = tuple(
-        validate_and_lower_candidate(schedule, inputs, topology)
-        for schedule in schedules
+    outcomes, verification_times = _validate_schedules(
+        schedules,
+        inputs,
+        topology,
     )
+    verification_time_s = sum(verification_times)
     deadline.check("validation")
     final_candidate_id = _select_final(
         result.candidates,
@@ -987,11 +1104,14 @@ def execute_solve(context: RunContext) -> RunArtifacts:
                     tuning_strategy={"kind": "initial_solve"},
                     accepted=_offline_valid(outcome),
                     rejection_reason=_rejection_reason(outcome),
+                    diagnostics=phase_diagnostics,
+                    verification_time_s=candidate_verification_time_s,
                 )
-                for candidate, schedule, outcome in zip(
+                for candidate, schedule, outcome, candidate_verification_time_s in zip(
                     result.candidates,
                     schedules,
                     outcomes,
+                    verification_times,
                 )
             )
             topology = apply_calibration_to_topology(
@@ -1009,6 +1129,11 @@ def execute_solve(context: RunContext) -> RunArtifacts:
                 wall_clock_budget_s=deadline.remaining(),
             )
             result = solve(request)
+            run_diagnostics = _merge_search_diagnostics(
+                run_diagnostics,
+                result.diagnostics,
+            )
+            phase_diagnostics = result.diagnostics
             result = replace(
                 result,
                 candidates=tuple(
@@ -1024,10 +1149,12 @@ def execute_solve(context: RunContext) -> RunArtifacts:
                 _global_schedule(plan, candidate, topology)
                 for candidate in result.candidates
             )
-            outcomes = tuple(
-                validate_and_lower_candidate(schedule, inputs, topology)
-                for schedule in schedules
+            outcomes, verification_times = _validate_schedules(
+                schedules,
+                inputs,
+                topology,
             )
+            verification_time_s += sum(verification_times)
             deadline.check("calibrated validation")
             final_candidate_id = _select_final(
                 result.candidates,
@@ -1086,11 +1213,14 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             },
             accepted=_offline_valid(outcome),
             rejection_reason=_rejection_reason(outcome),
+            diagnostics=phase_diagnostics,
+            verification_time_s=candidate_verification_time_s,
         )
-        for candidate, schedule, outcome in zip(
+        for candidate, schedule, outcome, candidate_verification_time_s in zip(
             result.candidates,
             schedules,
             outcomes,
+            verification_times,
         )
     ]
     tuning_message = None
@@ -1118,6 +1248,9 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             layout=layout,
         )
         records.extend(tuned)
+        verification_time_s += sum(
+            record.verification_time_s for record in tuned
+        )
         if tuning_result.selected_candidate_id is not None:
             final_candidate_id = tuning_result.selected_candidate_id
         tuning_message = tuning_result.stop_reason
@@ -1139,6 +1272,8 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             hierarchy_plan=hierarchy,
             tuning_strategy=record.tuning_strategy,
             overlay=record.overlay,
+            diagnostics=record.diagnostics,
+            verification_time_s=record.verification_time_s,
         )
         for index, record in enumerate(records)
     )
@@ -1173,6 +1308,9 @@ def execute_solve(context: RunContext) -> RunArtifacts:
             )
         ),
         started=started,
+        planning_mode=plan.planning_mode.value,
+        diagnostics=run_diagnostics,
+        verification_time_s=verification_time_s,
     )
 
 
@@ -1244,6 +1382,7 @@ def execute_verify(context: RunContext) -> RunArtifacts:
     if signature != sidecar.candidate_signature:
         raise SemanticError("schedule sidecar candidate signature does not match")
     deadline.check("sidecar reconstruction")
+    verification_started = _verification_monotonic()
     generated = validate_and_lower_candidate(
         sidecar.schedule,
         inputs,
@@ -1255,6 +1394,10 @@ def execute_verify(context: RunContext) -> RunArtifacts:
         generated,
         inputs,
         topology,
+    )
+    verification_time_s = max(
+        0.0,
+        _verification_monotonic() - verification_started,
     )
     deadline.check("verification")
     accepted = _offline_valid(outcome)
@@ -1302,6 +1445,7 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             tuning_strategy={"kind": "verify_existing"},
             accepted=accepted,
             rejection_reason=_rejection_reason(outcome),
+            verification_time_s=verification_time_s,
         )
     ]
     final_candidate_id = sidecar.candidate.candidate_id if accepted else None
@@ -1325,6 +1469,9 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             layout=layout,
         )
         records.extend(tuned)
+        verification_time_s += sum(
+            record.verification_time_s for record in tuned
+        )
         if tuning_result.selected_candidate_id is not None:
             final_candidate_id = tuning_result.selected_candidate_id
         tuning_message = tuning_result.stop_reason
@@ -1347,6 +1494,8 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             hierarchy_plan=_hierarchy_plan(plan),
             tuning_strategy=record.tuning_strategy,
             overlay=record.overlay,
+            diagnostics=record.diagnostics,
+            verification_time_s=record.verification_time_s,
         )
         for index, record in enumerate(records)
     )
@@ -1370,4 +1519,7 @@ def execute_verify(context: RunContext) -> RunArtifacts:
             else "verification produced no semantic-valid candidate"
         ),
         started=started,
+        planning_mode=plan.planning_mode.value,
+        diagnostics=SearchDiagnostics(),
+        verification_time_s=verification_time_s,
     )

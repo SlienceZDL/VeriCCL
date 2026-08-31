@@ -11,7 +11,8 @@ from vericcl.errors import (
 )
 from vericcl.input.models import ForbiddenTransfer, ObjectiveMode
 from vericcl.planner.build import build_plan
-from vericcl.solver.cache import CandidateCache
+from vericcl.solver.cache import CandidateCache, build_cache_signature
+from vericcl.solver.demands import build_solver_problem
 from vericcl.solver.lower_bounds import LowerBound
 from vericcl.solver.model import (
     SearchDiagnostics,
@@ -20,6 +21,7 @@ from vericcl.solver.model import (
 )
 from vericcl.solver.orchestrator import solve
 from vericcl.solver.template_search import TemplateSearchResult
+from vericcl.solver.templates import build_solver_templates
 import vericcl.solver.orchestrator as orchestrator_module
 from vericcl.topology.loader import load_topology
 from vericcl.tuning.model import TuningOverlay
@@ -719,13 +721,27 @@ def test_default_and_strict_requests_use_disjoint_solver_paths(monkeypatch):
     assert strict_result.diagnostics.search_model_count_total == 1
 
 
-def test_solver_paths_use_distinct_cache_model_versions():
+def test_solver_paths_use_distinct_cache_backend_signatures():
     default = _request()
     strict = _request(require_proven_optimal=True)
+    default_problems = tuple(
+        build_solver_problem(node, default.inputs, default.topology)
+        for node in default.plan.nodes
+    )
+    strict_problems = tuple(
+        build_solver_problem(node, strict.inputs, strict.topology)
+        for node in strict.plan.nodes
+    )
+    default_signature = build_cache_signature(
+        default,
+        default_problems,
+        build_solver_templates(
+            default_problems,
+            default.plan.planning_mode,
+        ),
+    )
+    strict_signature = build_cache_signature(strict, strict_problems, ())
 
-    default_backend = orchestrator_module._backend_request(default)
-    strict_backend = orchestrator_module._backend_request(strict)
-
-    assert default_backend.model_version.endswith("template-route-v1")
-    assert strict_backend.model_version.endswith("legacy-full-time-v1")
-    assert default_backend.model_version != strict_backend.model_version
+    assert default_signature.backend_type == "template_route"
+    assert strict_signature.backend_type == "legacy_full_time_milp"
+    assert default_signature != strict_signature

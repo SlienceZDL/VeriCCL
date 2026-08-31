@@ -69,6 +69,11 @@ def test_public_cli_solves_then_verifies_final_xml(tmp_path, capsys):
     assert solve_output.err == ""
     assert final_xml.is_file()
     assert final_sidecar.is_file()
+    solve_summary = json.loads((solve_root / "run-summary.json").read_text())
+    assert solve_summary["planning_mode"] == "direct"
+    assert solve_summary["search_model_count_total"] >= 0
+    assert solve_summary["verification_time_s"] > 0.0
+    assert solve_summary["total_wall_clock_time_s"] == solve_summary["elapsed_s"]
 
     verify_code = main(
         [
@@ -91,6 +96,9 @@ def test_public_cli_solves_then_verifies_final_xml(tmp_path, capsys):
     )
     assert summary["mode"] == "verify"
     assert summary["final_selection"] is not None
+    assert summary["route_model_count"] == 0
+    assert summary["search_model_count_total"] == 0
+    assert summary["verification_time_s"] > 0.0
 
     tune_code = main(
         [
@@ -114,6 +122,24 @@ def test_public_cli_solves_then_verifies_final_xml(tmp_path, capsys):
     )
     assert "tuning=" in tuned_summary["message"]
     assert tuned_summary["final_selection"] is not None
+    tuned_reports = tuple(
+        json.loads(
+            (
+                output_dir
+                / "vericcl_allreduce_2MiB_verify-tune"
+                / item["report_path"]
+            ).read_text(encoding="utf-8")
+        )
+        for item in tuned_summary["candidates"]
+    )
+    assert all(report["verification_time_s"] > 0.0 for report in tuned_reports)
+    assert tuned_summary["verification_time_s"] >= sum(
+        report["verification_time_s"] for report in tuned_reports
+    )
+    assert all(
+        isinstance(report["tuning_strategy"]["kind"], str)
+        for report in tuned_reports
+    )
 
 
 def test_cli_explicit_override_changes_resolved_snapshot_only(tmp_path, capsys):

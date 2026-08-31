@@ -10,6 +10,7 @@ import pytest
 import vericcl.workflow as workflow_module
 from vericcl.workflow import RunContext, execute_solve, execute_verify
 from vericcl.errors import SemanticError
+from vericcl.solver.model import SearchDiagnostics
 from vericcl.verification.model import CheckResult, ValidationStatus
 from vericcl.verification.online.pipeline import (
     OnlineCalibrationOutcome,
@@ -142,6 +143,60 @@ def test_solve_workflow_writes_complete_lineage_and_final_alias(tmp_path):
         ]
 
 
+def test_workflow_propagates_run_diagnostics_and_measured_times(
+    tmp_path,
+    monkeypatch,
+):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+    diagnostics = SearchDiagnostics(
+        requested_problem_count=3,
+        routing_unit_count=9,
+        template_count=4,
+        template_member_count=9,
+        route_model_count=73,
+        fallback_member_model_count=5,
+        search_model_count_total=90,
+        route_model_build_time_s=1.0,
+        route_model_optimize_time_s=2.0,
+        template_expansion_time_s=3.0,
+        global_scheduling_time_s=4.0,
+        model_variables_max=101,
+        model_constraints_max=103,
+        model_general_constraints_max=107,
+    )
+    original_solve = workflow_module.solve
+
+    def solve_with_diagnostics(request):
+        return replace(original_solve(request), diagnostics=diagnostics)
+
+    monkeypatch.setattr(workflow_module, "solve", solve_with_diagnostics)
+    result = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="diagnostics",
+        )
+    )
+    summary = json.loads(result.layout.summary.read_text(encoding="utf-8"))
+    report = json.loads(result.final_report.read_text(encoding="utf-8"))
+
+    assert summary["planning_mode"] == "direct"
+    assert summary["route_model_count"] == 73
+    assert summary["fallback_member_model_count"] == 5
+    assert summary["search_model_count_total"] == 90
+    assert report["route_model_count"] == 73
+    assert report["solver_metrics"]["model_count"] != 73
+    assert report["route_model_build_time_s"] == 1.0
+    assert report["route_model_optimize_time_s"] == 2.0
+    assert report["template_expansion_time_s"] == 3.0
+    assert report["global_scheduling_time_s"] == 4.0
+    assert report["verification_time_s"] > 0.0
+    assert summary["verification_time_s"] >= report["verification_time_s"]
+    assert summary["total_wall_clock_time_s"] == summary["elapsed_s"]
+
+
 def test_solve_reports_direct_fallback_for_requested_hierarchy(tmp_path):
     topology, sketch, atom = _write_constructive_inputs(tmp_path, hierarchy=True)
     result = execute_solve(
@@ -200,6 +255,73 @@ def test_verify_workflow_reconstructs_schedule_and_uses_same_validation(tmp_path
     assert summary["mode"] == "verify"
     assert summary["candidates"][0]["validation"]["semantic"] == "valid"
     assert summary["candidates"][0]["validation"]["xml"] == "valid"
+
+
+def test_verify_workflow_times_the_complete_verification_pipeline(
+    tmp_path,
+    monkeypatch,
+):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path)
+    solved = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="timed-source",
+        )
+    )
+    selected = next(
+        item
+        for item in solved.candidates
+        if item.candidate_id == solved.final_candidate_id
+    )
+    current = [0.0]
+    original_validate = workflow_module.validate_and_lower_candidate
+    original_verify = workflow_module._verify_source_artifact
+
+    def timed_validate(*args):
+        outcome = original_validate(*args)
+        current[0] = 2.0
+        return outcome
+
+    def timed_verify(*args):
+        outcome = original_verify(*args)
+        current[0] = 5.0
+        return outcome
+
+    monkeypatch.setattr(
+        workflow_module,
+        "_verification_monotonic",
+        lambda: current[0],
+    )
+    monkeypatch.setattr(
+        workflow_module,
+        "validate_and_lower_candidate",
+        timed_validate,
+    )
+    monkeypatch.setattr(
+        workflow_module,
+        "_verify_source_artifact",
+        timed_verify,
+    )
+
+    verified = execute_verify(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="timed-verify",
+            xml_path=selected.xml_path,
+            sidecar_path=selected.schedule_path,
+        )
+    )
+    report = json.loads(verified.final_report.read_text(encoding="utf-8"))
+    summary = json.loads(verified.layout.summary.read_text(encoding="utf-8"))
+
+    assert report["verification_time_s"] == 5.0
+    assert summary["verification_time_s"] == 5.0
 
 
 def test_workflow_refuses_to_overwrite_a_previous_run(tmp_path):

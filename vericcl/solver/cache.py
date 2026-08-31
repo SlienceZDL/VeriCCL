@@ -2,12 +2,193 @@ import math
 import time
 from dataclasses import dataclass, replace
 from threading import RLock
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from vericcl.errors import SemanticError
-from vericcl.input.json_codec import sha256_json
+from vericcl.input.json_codec import canonical_json, sha256_json
 from vericcl.planner.model import StageInterface
+from vericcl.solver.demands import SolverProblem
+from vericcl.solver.global_scheduler import GLOBAL_SCHEDULER_VERSION
 from vericcl.solver.model import SolveCandidate, SolveRequest
+from vericcl.solver.templates import SolverTemplate
+
+
+_ROUTE_MODEL_VERSION = "1"
+_TEMPLATE_ROUTE_BACKEND = "template_route"
+_LEGACY_FULL_TIME_BACKEND = "legacy_full_time_milp"
+_CACHE_BACKENDS = frozenset(
+    {_TEMPLATE_ROUTE_BACKEND, _LEGACY_FULL_TIME_BACKEND}
+)
+
+
+def _stable_tuple(values: object, field: str) -> tuple:
+    try:
+        result = tuple(values)
+    except TypeError as error:
+        raise SemanticError("{} must be iterable".format(field)) from error
+    return tuple(sorted(result, key=canonical_json))
+
+
+@dataclass(frozen=True)
+class CacheSignature:
+    backend_type: str = _TEMPLATE_ROUTE_BACKEND
+    planning_mode: str = "unknown"
+    problem_summaries: Tuple[object, ...] = ()
+    template_exact_signatures: Tuple[str, ...] = ()
+    template_member_mappings: Tuple[object, ...] = ()
+    route_model_version: str = _ROUTE_MODEL_VERSION
+    global_scheduler_version: str = GLOBAL_SCHEDULER_VERSION
+
+    def __post_init__(self) -> None:
+        if self.backend_type not in _CACHE_BACKENDS:
+            raise SemanticError("cache backend type is unsupported")
+        if not isinstance(self.planning_mode, str) or not self.planning_mode:
+            raise SemanticError("cache planning_mode must be a non-empty string")
+        for field in ("route_model_version", "global_scheduler_version"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value:
+                raise SemanticError(
+                    "cache {} must be a non-empty string".format(field)
+                )
+        object.__setattr__(
+            self,
+            "problem_summaries",
+            _stable_tuple(self.problem_summaries, "cache problem summaries"),
+        )
+        signatures = _stable_tuple(
+            self.template_exact_signatures,
+            "cache template exact signatures",
+        )
+        if not all(isinstance(value, str) and value for value in signatures):
+            raise SemanticError(
+                "cache template exact signatures must contain strings"
+            )
+        object.__setattr__(self, "template_exact_signatures", signatures)
+        object.__setattr__(
+            self,
+            "template_member_mappings",
+            _stable_tuple(
+                self.template_member_mappings,
+                "cache template member mappings",
+            ),
+        )
+
+
+def _problem_summary(problem: SolverProblem) -> tuple:
+    return (
+        problem.node.node_id,
+        tuple(
+            sorted(
+                (
+                    demand.demand_id,
+                    demand.stage_id,
+                    demand.root_rank,
+                    demand.required_leaf_rank,
+                    demand.logical_position,
+                    tuple(sorted(demand.contributors)),
+                    tuple(sorted(demand.member_slice_ids)),
+                    tuple(
+                        sorted(
+                            (link.src_rank, link.dst_rank)
+                            for link in demand.allowed_links
+                        )
+                    ),
+                    tuple(
+                        sorted(
+                            (link.src_rank, link.dst_rank)
+                            for link in demand.legal_links
+                        )
+                    ),
+                    tuple(
+                        sorted(
+                            (
+                                item.slice_id,
+                                item.src_rank,
+                                item.dst_rank,
+                                item.stage_id,
+                            )
+                            for item in demand.forbidden_members
+                        )
+                    ),
+                    tuple(sorted(demand.candidate_paths)),
+                    demand.reduction_dual,
+                )
+                for demand in problem.demands
+            )
+        ),
+        tuple(
+            sorted(
+                (edge.src_rank, edge.dst_rank, edge.channel)
+                for edge in problem.candidate_edges
+            )
+        ),
+        problem.infeasible_demand_ids,
+        problem.restrictions,
+    )
+
+
+def _template_member_summary(template: SolverTemplate) -> tuple:
+    return (
+        template.exact_signature,
+        template.representative.node.node_id,
+        template.representative.unit_id,
+        tuple(
+            sorted(
+                (
+                    member.node_id,
+                    member.unit_id,
+                    tuple(sorted(member.rank_map)),
+                    tuple(sorted(member.contributor_map)),
+                    tuple(sorted(member.logical_position_map)),
+                )
+                for member in template.members
+            )
+        ),
+    )
+
+
+def build_cache_signature(
+    request: SolveRequest,
+    problems: Tuple[SolverProblem, ...],
+    templates: Tuple[SolverTemplate, ...],
+) -> CacheSignature:
+    if not isinstance(request, SolveRequest):
+        raise SemanticError("cache signature requires a SolveRequest")
+    try:
+        problems = tuple(problems)
+        templates = tuple(templates)
+    except TypeError as error:
+        raise SemanticError(
+            "cache signature problems and templates must be iterable"
+        ) from error
+    if not all(isinstance(value, SolverProblem) for value in problems):
+        raise SemanticError(
+            "cache signature problems must contain SolverProblem values"
+        )
+    if not all(isinstance(value, SolverTemplate) for value in templates):
+        raise SemanticError(
+            "cache signature templates must contain SolverTemplate values"
+        )
+    backend_type = (
+        _LEGACY_FULL_TIME_BACKEND
+        if request.inputs.solver.require_proven_optimal
+        else _TEMPLATE_ROUTE_BACKEND
+    )
+    if backend_type == _TEMPLATE_ROUTE_BACKEND and problems and not templates:
+        raise SemanticError("template route cache signature requires templates")
+    if backend_type == _LEGACY_FULL_TIME_BACKEND and templates:
+        raise SemanticError("legacy cache signature must not contain templates")
+    return CacheSignature(
+        backend_type=backend_type,
+        planning_mode=request.plan.planning_mode.value,
+        problem_summaries=tuple(_problem_summary(value) for value in problems),
+        template_exact_signatures=tuple(
+            value.exact_signature for value in templates
+        ),
+        template_member_mappings=tuple(
+            _template_member_summary(value) for value in templates
+        ),
+    )
 
 
 def _collective(spec):
@@ -214,18 +395,47 @@ def _structural_payload(request: SolveRequest):
     }
 
 
-def structural_cache_key(request: SolveRequest) -> str:
+def _default_cache_signature(request: SolveRequest) -> CacheSignature:
+    return CacheSignature(
+        backend_type=(
+            _LEGACY_FULL_TIME_BACKEND
+            if request.inputs.solver.require_proven_optimal
+            else _TEMPLATE_ROUTE_BACKEND
+        ),
+        planning_mode=request.plan.planning_mode.value,
+    )
+
+
+def structural_cache_key(
+    request: SolveRequest,
+    cache_signature: Optional[CacheSignature] = None,
+) -> str:
     if not isinstance(request, SolveRequest):
         raise SemanticError("cache key requires a SolveRequest")
-    return sha256_json(_structural_payload(request))
+    signature = (
+        _default_cache_signature(request)
+        if cache_signature is None
+        else cache_signature
+    )
+    if not isinstance(signature, CacheSignature):
+        raise SemanticError("cache key signature must be a CacheSignature")
+    payload = _structural_payload(request)
+    payload["cache_signature"] = signature
+    return sha256_json(payload)
 
 
-def performance_cache_key(request: SolveRequest) -> str:
+def performance_cache_key(
+    request: SolveRequest,
+    cache_signature: Optional[CacheSignature] = None,
+) -> str:
     if not isinstance(request, SolveRequest):
         raise SemanticError("cache key requires a SolveRequest")
     return sha256_json(
         {
-            "structural_cache_key": structural_cache_key(request),
+            "structural_cache_key": structural_cache_key(
+                request,
+                cache_signature,
+            ),
             "topology_performance": _topology_performance(request.topology),
             "slice_size_bytes": request.inputs.hyperparameters.slice_size_bytes,
             "environment_signature": request.environment_signature,
@@ -233,8 +443,11 @@ def performance_cache_key(request: SolveRequest) -> str:
     )
 
 
-def candidate_cache_key(request: SolveRequest) -> str:
-    return performance_cache_key(request)
+def candidate_cache_key(
+    request: SolveRequest,
+    cache_signature: Optional[CacheSignature] = None,
+) -> str:
+    return performance_cache_key(request, cache_signature)
 
 
 @dataclass(frozen=True)

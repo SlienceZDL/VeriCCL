@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
@@ -7,6 +8,7 @@ from vericcl.artifacts.layout import RunLayout
 from vericcl.artifacts.writer import CandidateArtifact
 from vericcl.errors import SemanticError
 from vericcl.input.models import ResolvedInput
+from vericcl.solver.model import SearchDiagnostics
 
 
 def _relative(layout: RunLayout, path: Optional[Path]) -> Optional[str]:
@@ -59,6 +61,9 @@ def build_run_summary(
     status: str,
     message: str,
     elapsed_s: float,
+    planning_mode: str = "unknown",
+    diagnostics: Optional[SearchDiagnostics] = None,
+    verification_time_s: float = 0.0,
 ) -> Mapping[str, object]:
     if mode not in {"solve", "verify"}:
         raise SemanticError("run summary mode must be solve or verify")
@@ -69,8 +74,26 @@ def build_run_summary(
         raise SemanticError("run summary candidates are invalid")
     if isinstance(elapsed_s, bool) or not isinstance(elapsed_s, (int, float)):
         raise SemanticError("run summary elapsed_s must be numeric")
-    if elapsed_s < 0.0:
-        raise SemanticError("run summary elapsed_s must be non-negative")
+    if not math.isfinite(float(elapsed_s)) or elapsed_s < 0.0:
+        raise SemanticError(
+            "run summary elapsed_s must be finite and non-negative"
+        )
+    if not isinstance(planning_mode, str) or not planning_mode:
+        raise SemanticError("run summary planning_mode is invalid")
+    diagnostics_value = (
+        SearchDiagnostics() if diagnostics is None else diagnostics
+    )
+    if not isinstance(diagnostics_value, SearchDiagnostics):
+        raise SemanticError("run summary diagnostics are invalid")
+    if (
+        isinstance(verification_time_s, bool)
+        or not isinstance(verification_time_s, (int, float))
+        or not math.isfinite(float(verification_time_s))
+        or verification_time_s < 0.0
+    ):
+        raise SemanticError(
+            "run summary verification_time_s must be finite and non-negative"
+        )
     final_selection = None
     if final_candidate_id is not None:
         selected = tuple(
@@ -94,6 +117,39 @@ def build_run_summary(
         "status": status,
         "message": message,
         "elapsed_s": float(elapsed_s),
+        "total_wall_clock_time_s": float(elapsed_s),
+        "planning_mode": planning_mode,
+        "requested_problem_count": (
+            diagnostics_value.requested_problem_count
+        ),
+        "routing_unit_count": diagnostics_value.routing_unit_count,
+        "template_count": diagnostics_value.template_count,
+        "template_member_count": diagnostics_value.template_member_count,
+        "route_model_count": diagnostics_value.route_model_count,
+        "fallback_member_model_count": (
+            diagnostics_value.fallback_member_model_count
+        ),
+        "search_model_count_total": (
+            diagnostics_value.search_model_count_total
+        ),
+        "route_model_build_time_s": (
+            diagnostics_value.route_model_build_time_s
+        ),
+        "route_model_optimize_time_s": (
+            diagnostics_value.route_model_optimize_time_s
+        ),
+        "template_expansion_time_s": (
+            diagnostics_value.template_expansion_time_s
+        ),
+        "global_scheduling_time_s": (
+            diagnostics_value.global_scheduling_time_s
+        ),
+        "model_variables_max": diagnostics_value.model_variables_max,
+        "model_constraints_max": diagnostics_value.model_constraints_max,
+        "model_general_constraints_max": (
+            diagnostics_value.model_general_constraints_max
+        ),
+        "verification_time_s": float(verification_time_s),
         "candidates": tuple(candidate_summary(layout, item) for item in values),
         "final_selection": final_selection,
     }
