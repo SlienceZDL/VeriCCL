@@ -1,7 +1,7 @@
 from typing import Tuple
 
 from vericcl.errors import SemanticError
-from vericcl.input.json_codec import sha256_json
+from vericcl.input.json_codec import canonical_json, sha256_json
 from vericcl.topology.model import PerformanceCurve, Topology
 
 
@@ -29,6 +29,90 @@ def _performance(curve: PerformanceCurve) -> dict:
     }
 
 
+def _endpoint_shape(
+    topology: Topology,
+    rank: int,
+    relative_rank: dict,
+    relative_node: dict,
+    node_members: dict,
+) -> dict:
+    if rank in relative_rank:
+        return {
+            "scope": "domain",
+            "rank": relative_rank[rank],
+        }
+    node = topology.node_membership[rank]
+    members = node_members[node]
+    return {
+        "scope": "external",
+        "domain_node": relative_node.get(node),
+        "node_size": len(members),
+        "node_position": members.index(rank),
+        "gateway": rank in topology.gateways,
+    }
+
+
+def _external_node_labels(
+    topology: Topology,
+    domain_set: set,
+    relative_rank: dict,
+    relative_node: dict,
+    node_members: dict,
+) -> dict:
+    occurrences = {}
+    for key, edge in topology.links.items():
+        if key.src_rank not in domain_set or key.dst_rank not in domain_set:
+            continue
+        link_shape = {
+            "src": relative_rank[key.src_rank],
+            "dst": relative_rank[key.dst_rank],
+        }
+        for resource_id in edge.resource_ids:
+            resource = topology.shared_resources[resource_id]
+            resource_shape = {
+                "max_channels": resource.max_channels,
+                "performance": _performance(resource.performance),
+            }
+            for member in resource.member_links:
+                endpoints = (
+                    ("src", member.src_rank, member.dst_rank),
+                    ("dst", member.dst_rank, member.src_rank),
+                )
+                for side, rank, peer in endpoints:
+                    node = topology.node_membership[rank]
+                    if rank in relative_rank or node in relative_node:
+                        continue
+                    occurrences.setdefault(node, []).append(
+                        {
+                            "link": link_shape,
+                            "resource": resource_shape,
+                            "side": side,
+                            "endpoint": _endpoint_shape(
+                                topology,
+                                rank,
+                                relative_rank,
+                                relative_node,
+                                node_members,
+                            ),
+                            "peer": _endpoint_shape(
+                                topology,
+                                peer,
+                                relative_rank,
+                                relative_node,
+                                node_members,
+                            ),
+                            "same_node": (
+                                topology.node_membership[rank]
+                                == topology.node_membership[peer]
+                            ),
+                        }
+                    )
+    return {
+        node: sha256_json(sorted(values, key=canonical_json))
+        for node, values in occurrences.items()
+    }
+
+
 def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
     if not isinstance(topology, Topology):
         raise SemanticError("topology must be a Topology")
@@ -50,6 +134,13 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
                 "gateway": rank in topology.gateways,
             }
         )
+    external_node_labels = _external_node_labels(
+        topology,
+        domain_set,
+        relative_rank,
+        relative_node,
+        node_members,
+    )
 
     links = []
     for key, edge in topology.links.items():
@@ -66,6 +157,7 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
                         relative_rank,
                         relative_node,
                         node_members,
+                        external_node_labels,
                     ),
                     "dst": _relative_endpoint(
                         topology,
@@ -73,6 +165,7 @@ def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
                         relative_rank,
                         relative_node,
                         node_members,
+                        external_node_labels,
                     ),
                     "same_node": (
                         topology.node_membership[member.src_rank]
@@ -117,18 +210,18 @@ def _relative_endpoint(
     relative_rank: dict,
     relative_node: dict,
     node_members: dict,
+    external_node_labels: dict,
 ) -> dict:
+    value = _endpoint_shape(
+        topology,
+        rank,
+        relative_rank,
+        relative_node,
+        node_members,
+    )
     if rank in relative_rank:
-        return {
-            "scope": "domain",
-            "rank": relative_rank[rank],
-        }
+        return value
     node = topology.node_membership[rank]
-    members = node_members[node]
-    return {
-        "scope": "external",
-        "domain_node": relative_node.get(node),
-        "node_size": len(members),
-        "node_position": members.index(rank),
-        "gateway": rank in topology.gateways,
-    }
+    if node not in relative_node:
+        value["external_node"] = external_node_labels[node]
+    return value
