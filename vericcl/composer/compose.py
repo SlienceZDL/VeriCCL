@@ -469,7 +469,10 @@ def compose_routes(
     topology: Topology,
     channel_count: int,
 ) -> Schedule:
-    from vericcl.solver.global_scheduler import assign_global_resources
+    from vericcl.solver.global_scheduler import (
+        _validate_channel_count,
+        assign_global_resources,
+    )
 
     if not isinstance(plan, PlanDAG):
         raise SemanticError("plan must be a PlanDAG")
@@ -477,6 +480,7 @@ def compose_routes(
         raise SemanticError("topology must be a Topology")
     if topology.rank_count != plan.rank_count:
         raise SemanticError("plan and topology rank counts must agree")
+    channels = _validate_channel_count(channel_count)
     provisional = _compose_schedules(
         plan,
         _route_node_schedules(plan, node_schedules),
@@ -484,5 +488,5 @@ def compose_routes(
     return assign_global_resources(
         provisional,
         topology,
-        channel_count,
+        channels,
     )

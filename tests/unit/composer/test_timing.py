@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from vericcl.composer import compose, recompute_earliest_times
+from vericcl.composer.timing import _retime
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.topology.model import (
@@ -124,6 +125,114 @@ def test_recompute_rejects_invalid_semantic_dependencies(
         recompute_earliest_times(
             invalid,
             _topology((0, 1), (1, 2)),
+        )
+
+
+@pytest.mark.parametrize(
+    ("predecessors", "message"),
+    (
+        (7, "iterable"),
+        ((1,), "non-empty strings"),
+        (("unknown",), "missing from the schedule"),
+    ),
+)
+def test_recompute_types_malformed_semantic_predecessors(
+    predecessors,
+    message,
+):
+    schedule = compose(_pipeline_plan(), _pipeline_candidates())
+    first = schedule.transfers[0].transfer_id
+    metadata = dict(schedule.metadata)
+    metadata["semantic_predecessors"] = {
+        transfer.transfer_id: (
+            predecessors if transfer.transfer_id == first else ()
+        )
+        for transfer in schedule.transfers
+    }
+    invalid = replace(schedule, metadata=metadata)
+
+    with pytest.raises(SemanticError, match=message):
+        recompute_earliest_times(
+            invalid,
+            _topology((0, 1), (1, 2)),
+        )
+
+
+def test_fixed_predecessor_retime_rejects_lane_overlap():
+    schedule = compose(_pipeline_plan(), _pipeline_candidates())
+    transfers = tuple(
+        replace(transfer, predecessor_ids=frozenset())
+        for transfer in schedule.transfers
+        if transfer.transfer_id.startswith("pipeline-first")
+    )
+    metadata = {
+        "path_scope": "global",
+        "semantic_predecessors": {
+            transfer.transfer_id: () for transfer in transfers
+        },
+        "resource_slots": {
+            transfer.transfer_id: {} for transfer in transfers
+        },
+    }
+    invalid = replace(
+        schedule,
+        transfers=transfers,
+        final_state_ids=(),
+        metadata=metadata,
+    )
+
+    with pytest.raises(SemanticError, match="fixed resource intervals"):
+        _retime(
+            invalid,
+            _topology((0, 1)),
+            preserve_predecessor_order=True,
+        )
+
+
+def test_fixed_predecessor_retime_rejects_shared_slot_overlap():
+    schedule = compose(_pipeline_plan(), _pipeline_candidates())
+    selected_ids = {"pipeline-first-t0", "pipeline-second-t0"}
+    transfers = tuple(
+        replace(transfer, predecessor_ids=frozenset())
+        for transfer in schedule.transfers
+        if transfer.transfer_id in selected_ids
+    )
+    keys = (LinkKey(0, 1), LinkKey(1, 2))
+    performance = PerformanceCurve(1.0, 2.0, {})
+    topology = Topology(
+        rank_count=3,
+        links={
+            key: DirectedLink(key, 1, performance, ("nic",))
+            for key in keys
+        },
+        shared_resources={
+            "nic": SharedResource("nic", keys, 1, performance)
+        },
+        node_membership={0: 0, 1: 0, 2: 0},
+        gateways=frozenset(),
+        warnings=(),
+    )
+    metadata = {
+        "path_scope": "global",
+        "semantic_predecessors": {
+            transfer.transfer_id: () for transfer in transfers
+        },
+        "resource_slots": {
+            transfer.transfer_id: {"nic": 0} for transfer in transfers
+        },
+    }
+    invalid = replace(
+        schedule,
+        transfers=transfers,
+        final_state_ids=(),
+        metadata=metadata,
+    )
+
+    with pytest.raises(SemanticError, match="fixed resource intervals"):
+        _retime(
+            invalid,
+            topology,
+            preserve_predecessor_order=True,
         )
 
 

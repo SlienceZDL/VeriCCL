@@ -1,4 +1,4 @@
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Tuple
 
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
@@ -18,10 +18,30 @@ def _semantic_predecessors(schedule: Schedule) -> Mapping[str, frozenset]:
         raise SemanticError(
             "semantic_predecessors must cover every transfer exactly"
         )
-    result = {key: frozenset(value) for key, value in raw.items()}
-    transfer_ids = set(result)
-    if any(not values <= transfer_ids for values in result.values()):
-        raise SemanticError("semantic predecessor is missing from the schedule")
+    transfer_ids = {transfer.transfer_id for transfer in schedule.transfers}
+    result = {}
+    for transfer_id in sorted(transfer_ids):
+        values = raw[transfer_id]
+        if isinstance(values, (str, bytes)):
+            raise SemanticError("semantic predecessors must be iterable")
+        try:
+            predecessors = tuple(values)
+        except TypeError as error:
+            raise SemanticError(
+                "semantic predecessors must be iterable"
+            ) from error
+        if any(
+            not isinstance(predecessor, str) or not predecessor
+            for predecessor in predecessors
+        ):
+            raise SemanticError(
+                "semantic predecessor IDs must be non-empty strings"
+            )
+        if not set(predecessors) <= transfer_ids:
+            raise SemanticError(
+                "semantic predecessor is missing from the schedule"
+            )
+        result[transfer_id] = frozenset(predecessors)
     return result
 
 
@@ -94,9 +114,45 @@ def _validate_topology(
             raise SemanticError("schedule resource slot exceeds its limit")
 
 
+def _validate_fixed_resource_intervals(
+    schedule: Schedule,
+    times: Mapping[str, Tuple[float, float, float]],
+    resource_slots: Mapping[str, Mapping[str, int]],
+) -> None:
+    lanes = {}
+    resources = {}
+    for transfer in schedule.transfers:
+        start, end, _ = times[transfer.transfer_id]
+        if end <= start:
+            continue
+        lane = LaneKey(
+            transfer.src_rank,
+            transfer.dst_rank,
+            transfer.channel,
+        )
+        lanes.setdefault(lane, []).append(
+            (start, end, transfer.transfer_id)
+        )
+        for resource_id, slot in resource_slots[transfer.transfer_id].items():
+            resources.setdefault((resource_id, slot), []).append(
+                (start, end, transfer.transfer_id)
+            )
+    for groups in (lanes, resources):
+        for intervals in groups.values():
+            previous_end = 0.0
+            for start, end, _ in sorted(intervals):
+                if start < previous_end:
+                    raise SemanticError(
+                        "fixed resource intervals must not overlap"
+                    )
+                previous_end = end
+
+
 def _retime(
     schedule: Schedule,
     topology: Optional[Topology],
+    *,
+    preserve_predecessor_order: bool = False,
 ) -> Schedule:
     if not isinstance(schedule, Schedule):
         raise SemanticError("schedule must be a Schedule")
@@ -122,14 +178,55 @@ def _retime(
     lane_last = {}
     resource_ready = {}
     resource_last = {}
+    if preserve_predecessor_order:
+        for transfer in schedule.transfers:
+            if not semantic[transfer.transfer_id] <= transfer.predecessor_ids:
+                raise SemanticError(
+                    "fixed predecessor order must include semantic predecessors"
+                )
     while pending:
         ready = [
             transfer
             for transfer in pending.values()
-            if semantic[transfer.transfer_id] <= set(times)
+            if (
+                transfer.predecessor_ids
+                if preserve_predecessor_order
+                else semantic[transfer.transfer_id]
+            )
+            <= set(times)
         ]
         if not ready:
+            if preserve_predecessor_order:
+                raise SemanticError(
+                    "schedule predecessor dependencies contain a cycle"
+                )
             raise SemanticError("schedule semantic dependencies contain a cycle")
+        if preserve_predecessor_order:
+            transfer = min(ready, key=lambda item: item.transfer_id)
+            transfer_id = transfer.transfer_id
+            semantic_ready = max(
+                (
+                    times[predecessor][1]
+                    for predecessor in semantic[transfer_id]
+                ),
+                default=0.0,
+            )
+            start = max(
+                (
+                    times[predecessor][1]
+                    for predecessor in transfer.predecessor_ids
+                ),
+                default=0.0,
+            )
+            duration = transfer.ed_time - transfer.st_time
+            times[transfer_id] = (
+                start,
+                start + duration,
+                semantic_ready,
+            )
+            all_predecessors[transfer_id] = transfer.predecessor_ids
+            del pending[transfer_id]
+            continue
         choices = []
         for transfer in ready:
             transfer_id = transfer.transfer_id
@@ -183,6 +280,12 @@ def _retime(
             key = (resource_id, slot)
             resource_ready[key] = end
             resource_last[key] = transfer_id
+    if preserve_predecessor_order:
+        _validate_fixed_resource_intervals(
+            schedule,
+            times,
+            resource_slots,
+        )
     operation_ids = {}
     for transfer in schedule.transfers:
         for member in transfer.member_slice_ids:

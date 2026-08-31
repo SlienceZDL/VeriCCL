@@ -1,6 +1,5 @@
 import math
 from dataclasses import dataclass
-from itertools import product
 from typing import Mapping, Tuple
 
 from vericcl.composer.timing import _retime, _semantic_predecessors
@@ -11,6 +10,7 @@ from vericcl.topology.model import LaneKey, LinkKey, Topology
 
 
 GLOBAL_SCHEDULER_VERSION = "1"
+MAX_GLOBAL_CHANNEL_COUNT = 32
 
 
 class GlobalSchedulingError(SemanticError):
@@ -26,9 +26,18 @@ class _Assignment:
     predecessor_ids: frozenset
 
 
-def _positive_integer(value: object, field: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise GlobalSchedulingError("{} must be a positive integer".format(field))
+def _validate_channel_count(value: object) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 1
+        or value > MAX_GLOBAL_CHANNEL_COUNT
+    ):
+        raise GlobalSchedulingError(
+            "channel_count must be an integer between 1 and {}".format(
+                MAX_GLOBAL_CHANNEL_COUNT
+            )
+        )
     return value
 
 
@@ -63,14 +72,13 @@ def _logical_position(transfer: Transfer, slice_count: int) -> int:
     return next(iter(positions))
 
 
-def _resource_slot_options(
+def _resource_slot_counts(
     topology: Topology,
     edge,
     channel_count: int,
-) -> Tuple[Tuple[Tuple[str, int], ...], ...]:
-    resource_ids = tuple(sorted(edge.resource_ids))
-    ranges = []
-    for resource_id in resource_ids:
+) -> Tuple[Tuple[str, int], ...]:
+    counts = []
+    for resource_id in sorted(edge.resource_ids):
         resource = topology.shared_resources.get(resource_id)
         if resource is None:
             raise GlobalSchedulingError(
@@ -81,13 +89,39 @@ def _resource_slot_options(
             raise GlobalSchedulingError(
                 "no shared resource slot is available"
             )
-        ranges.append(range(slot_count))
-    if not ranges:
-        return ((),)
-    return tuple(
-        tuple(zip(resource_ids, slots))
-        for slots in product(*ranges)
-    )
+        counts.append((resource_id, slot_count))
+    return tuple(counts)
+
+
+def _earliest_resource_slots(
+    slot_counts: Tuple[Tuple[str, int], ...],
+    resource_ready: Mapping[Tuple[str, int], float],
+    base_ready: float,
+) -> Tuple[float, Tuple[Tuple[str, int], ...]]:
+    start = base_ready
+    for resource_id, slot_count in slot_counts:
+        if slot_count < 1:
+            raise GlobalSchedulingError(
+                "no shared resource slot is available"
+            )
+        start = max(
+            start,
+            min(
+                resource_ready.get((resource_id, slot), 0.0)
+                for slot in range(slot_count)
+            ),
+        )
+    slots = []
+    for resource_id, slot_count in slot_counts:
+        for slot in range(slot_count):
+            if resource_ready.get((resource_id, slot), 0.0) <= start:
+                slots.append((resource_id, slot))
+                break
+        else:
+            raise GlobalSchedulingError(
+                "no shared resource slot is available"
+            )
+    return start, tuple(slots)
 
 
 def _zero_ready_path(atom: Atom) -> Tuple[PathStage, ...]:
@@ -142,7 +176,7 @@ def _validate_inputs(
         raise GlobalSchedulingError("schedule must be a Schedule")
     if not isinstance(topology, Topology):
         raise GlobalSchedulingError("topology must be a Topology")
-    channels = _positive_integer(channel_count, "channel_count")
+    channels = _validate_channel_count(channel_count)
     if schedule.rank_count != topology.rank_count:
         raise GlobalSchedulingError(
             "schedule and topology rank counts must agree"
@@ -161,14 +195,17 @@ def assign_global_resources(
 ) -> Schedule:
     """Assign fixed-K lanes, shared-resource slots, and global times."""
     channels = _validate_inputs(schedule, topology, channel_count)
-    semantic = _semantic_predecessors(schedule)
+    try:
+        semantic = _semantic_predecessors(schedule)
+    except SemanticError as error:
+        raise GlobalSchedulingError(str(error)) from error
     priorities = _route_priorities(schedule)
     by_id = {
         transfer.transfer_id: transfer for transfer in schedule.transfers
     }
     links = {}
     durations = {}
-    slot_options = {}
+    slot_counts = {}
     logical_positions = {}
     for transfer_id in sorted(by_id):
         transfer = by_id[transfer_id]
@@ -188,7 +225,7 @@ def assign_global_resources(
             transfer.physical_bytes,
             channels,
         )
-        slot_options[transfer_id] = _resource_slot_options(
+        slot_counts[transfer_id] = _resource_slot_counts(
             topology,
             edge,
             channels,
@@ -214,7 +251,7 @@ def assign_global_resources(
             raise GlobalSchedulingError(
                 "schedule semantic dependencies contain a cycle"
             )
-        choices = []
+        best_choice = None
         for transfer_id in ready:
             transfer = by_id[transfer_id]
             semantic_ready = max(
@@ -231,29 +268,28 @@ def assign_global_resources(
                     transfer.dst_rank,
                     channel,
                 )
-                for slots in slot_options[transfer_id]:
-                    start = max(
-                        [semantic_ready, lane_ready.get(lane, 0.0)]
-                        + [
-                            resource_ready.get(item, 0.0)
-                            for item in slots
-                        ]
-                    )
-                    end = start + durations[transfer_id]
-                    key = (
-                        end,
-                        semantic_ready,
-                        priorities[transfer_id],
-                        transfer.stage_id,
-                        logical_positions[transfer_id],
-                        transfer.src_rank,
-                        transfer.dst_rank,
-                        transfer_id,
-                        channel,
-                        slots,
-                    )
-                    choices.append((key, lane, slots, start, end))
-        if not choices:
+                start, slots = _earliest_resource_slots(
+                    slot_counts[transfer_id],
+                    resource_ready,
+                    max(semantic_ready, lane_ready.get(lane, 0.0)),
+                )
+                end = start + durations[transfer_id]
+                key = (
+                    end,
+                    semantic_ready,
+                    priorities[transfer_id],
+                    transfer.stage_id,
+                    logical_positions[transfer_id],
+                    transfer.src_rank,
+                    transfer.dst_rank,
+                    transfer_id,
+                    channel,
+                    slots,
+                )
+                choice = (key, lane, slots, start, end)
+                if best_choice is None or key < best_choice[0]:
+                    best_choice = choice
+        if best_choice is None:
             raise GlobalSchedulingError(
                 "no legal global resource assignment is available"
             )
@@ -263,7 +299,7 @@ def assign_global_resources(
             slots,
             start,
             end,
-        ) = min(choices, key=lambda item: item[0])
+        ) = best_choice
         transfer_id = key[7]
         predecessors = set(semantic[transfer_id])
         if lane in lane_last:
@@ -323,7 +359,11 @@ def assign_global_resources(
         slice_size_bytes=schedule.slice_size_bytes,
         metadata=metadata,
     )
-    result = _retime(provisional, topology)
+    result = _retime(
+        provisional,
+        topology,
+        preserve_predecessor_order=True,
+    )
     result_by_id = {
         transfer.transfer_id: transfer for transfer in result.transfers
     }

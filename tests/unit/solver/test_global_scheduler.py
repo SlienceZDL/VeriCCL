@@ -1,10 +1,22 @@
 from dataclasses import replace
+from itertools import product
+from random import Random
 
 import pytest
 
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
-from vericcl.solver.global_scheduler import assign_global_resources
+from vericcl.solver import global_scheduler
+from vericcl.solver.global_scheduler import (
+    GlobalSchedulingError,
+    assign_global_resources,
+)
+from vericcl.topology.model import (
+    DirectedLink,
+    LinkKey,
+    SharedResource,
+    Topology,
+)
 
 from tests.unit.verification.simulator_helpers import (
     curve,
@@ -141,6 +153,47 @@ def _pipeline_schedule(*, reverse=False, shifted=False):
     )
 
 
+def _multi_resource_topology(resource_count, slot_count):
+    link = LinkKey(0, 1)
+    resource_ids = tuple(
+        "resource-{:02d}".format(index) for index in range(resource_count)
+    )
+    performance = curve()
+    return Topology(
+        rank_count=2,
+        links={
+            link: DirectedLink(
+                link,
+                slot_count,
+                performance,
+                resource_ids,
+            )
+        },
+        shared_resources={
+            resource_id: SharedResource(
+                resource_id,
+                (link,),
+                slot_count,
+                performance,
+            )
+            for resource_id in resource_ids
+        },
+        node_membership={0: 0, 1: 0},
+        gateways=frozenset(),
+        warnings=(),
+    )
+
+
+class _CountingReady(dict):
+    def __init__(self, values):
+        super().__init__(values)
+        self.read_count = 0
+
+    def get(self, key, default=None):
+        self.read_count += 1
+        return super().get(key, default)
+
+
 def test_opposite_directed_links_can_run_in_parallel():
     topology = simulation_topology(
         2,
@@ -190,6 +243,9 @@ def test_same_directed_link_uses_parallel_channels_without_lane_overlap():
     assert (by_id["send-0"].channel, by_id["send-0"].st_time) == (0, 0.0)
     assert (by_id["send-1"].channel, by_id["send-1"].st_time) == (1, 0.0)
     assert (by_id["send-2"].channel, by_id["send-2"].st_time) == (0, 3.0)
+    assert by_id["send-0"].predecessor_ids == frozenset()
+    assert by_id["send-1"].predecessor_ids == frozenset()
+    assert by_id["send-2"].predecessor_ids == frozenset({"send-0"})
     for channel in (0, 1):
         intervals = sorted(
             (transfer.st_time, transfer.ed_time)
@@ -243,6 +299,118 @@ def test_shared_resource_slots_are_independent_from_logical_links():
         0,
         1,
     }
+    assert all(
+        not transfer.predecessor_ids for transfer in result.transfers
+    )
+
+
+@pytest.mark.parametrize("resource_count", (3, 5))
+def test_scheduler_does_not_materialize_shared_resource_slot_products(
+    monkeypatch,
+    resource_count,
+):
+    transfer = _transfer(
+        "wide-resource-transfer",
+        slice_id=0,
+        slice_count=1,
+        path=((0, "SEND", ((0, 1, 0.0),)),),
+    )
+    schedule = _schedule(
+        (transfer,),
+        rank_count=2,
+        slice_count=1,
+    )
+    topology = _multi_resource_topology(resource_count, 32)
+
+    def reject_product(*args, **kwargs):
+        raise AssertionError("slot Cartesian product must not be materialized")
+
+    monkeypatch.setattr(global_scheduler, "product", reject_product, raising=False)
+
+    result = assign_global_resources(schedule, topology, 32)
+
+    assert result.transfers[0].channel == 0
+    assert result.metadata["resource_slots"][transfer.transfer_id] == {
+        "resource-{:02d}".format(index): 0
+        for index in range(resource_count)
+    }
+
+
+def test_linear_slot_selector_matches_small_bruteforce_choices():
+    selector = getattr(global_scheduler, "_earliest_resource_slots", None)
+    assert callable(selector)
+    random = Random(20260901)
+
+    for resource_count in range(1, 4):
+        slot_counts = tuple(
+            ("resource-{:02d}".format(index), 3)
+            for index in range(resource_count)
+        )
+        for _ in range(20):
+            resource_ready = {
+                (resource_id, slot): float(random.randrange(6))
+                for resource_id, count in slot_counts
+                for slot in range(count)
+            }
+            semantic_ready = float(random.randrange(4))
+            lane_ready = tuple(float(random.randrange(6)) for _ in range(3))
+            duration = float(random.randrange(4))
+            optimized = []
+            brute_force = []
+            for channel, lane_time in enumerate(lane_ready):
+                base = max(semantic_ready, lane_time)
+                start, slots = selector(
+                    slot_counts,
+                    resource_ready,
+                    base,
+                )
+                optimized.append((start + duration, start, channel, slots))
+                resource_ids = tuple(item[0] for item in slot_counts)
+                for slot_values in product(
+                    *(range(item[1]) for item in slot_counts)
+                ):
+                    candidate_slots = tuple(zip(resource_ids, slot_values))
+                    candidate_start = max(
+                        [base]
+                        + [
+                            resource_ready[item]
+                            for item in candidate_slots
+                        ]
+                    )
+                    brute_force.append(
+                        (
+                            candidate_start + duration,
+                            candidate_start,
+                            channel,
+                            candidate_slots,
+                        )
+                    )
+            assert min(optimized) == min(brute_force)
+
+
+def test_slot_selector_reads_five_resources_linearly():
+    selector = getattr(global_scheduler, "_earliest_resource_slots", None)
+    assert callable(selector)
+    slot_counts = tuple(
+        ("resource-{:02d}".format(index), 32) for index in range(5)
+    )
+    targets = (4, 8, 12, 16, 20)
+    ready = _CountingReady(
+        {
+            (resource_id, slot): float(abs(slot - targets[index]))
+            for index, (resource_id, count) in enumerate(slot_counts)
+            for slot in range(count)
+        }
+    )
+
+    start, slots = selector(slot_counts, ready, 1.0)
+
+    assert start == 1.0
+    assert slots == tuple(
+        (resource_id, target - 1)
+        for (resource_id, _), target in zip(slot_counts, targets)
+    )
+    assert ready.read_count <= 2 * sum(count for _, count in slot_counts)
 
 
 def test_fixed_channel_count_duration_does_not_speed_up_sparse_ready_set():
@@ -389,6 +557,42 @@ def test_route_priority_precedes_stage_and_logical_position_ties():
 
     assert by_id["logical-one"].st_time == 0.0
     assert by_id["logical-zero"].st_time == 2.0
+    assert by_id["logical-one"].predecessor_ids == frozenset()
+    assert by_id["logical-zero"].predecessor_ids == frozenset({"logical-one"})
+
+
+def test_zero_duration_route_priority_order_survives_global_retime():
+    send_zero = _transfer(
+        "send-0",
+        slice_id=0,
+        slice_count=2,
+        path=((0, "SEND", ((0, 1, 0.0),)),),
+    )
+    send_one = _transfer(
+        "send-1",
+        slice_id=1,
+        slice_count=2,
+        path=((0, "SEND", ((0, 1, 0.0),)),),
+    )
+    schedule = _schedule(
+        (send_zero, send_one),
+        rank_count=2,
+        slice_count=2,
+        metadata={"route_priorities": {"send-0": 1, "send-1": 0}},
+    )
+    topology = simulation_topology(
+        2,
+        {(0, 1): curve(alpha=0.0, invbw=0.0)},
+        max_channels=1,
+    )
+
+    result = assign_global_resources(schedule, topology, 1)
+    by_id = {transfer.transfer_id: transfer for transfer in result.transfers}
+
+    assert (by_id["send-1"].st_time, by_id["send-1"].ed_time) == (0.0, 0.0)
+    assert (by_id["send-0"].st_time, by_id["send-0"].ed_time) == (0.0, 0.0)
+    assert by_id["send-1"].predecessor_ids == frozenset()
+    assert by_id["send-0"].predecessor_ids == frozenset({"send-1"})
 
 
 def test_default_route_priority_defers_to_logical_position():
@@ -449,7 +653,7 @@ def test_scheduler_rejects_invalid_route_priorities(priorities, message):
         assign_global_resources(schedule, topology, 1)
 
 
-@pytest.mark.parametrize("channel_count", (0, -1, True, 1.0))
+@pytest.mark.parametrize("channel_count", (0, -1, True, 1.0, 33))
 def test_scheduler_rejects_invalid_channel_count(channel_count):
     topology = simulation_topology(
         2,
@@ -465,6 +669,24 @@ def test_scheduler_rejects_invalid_channel_count(channel_count):
             topology,
             channel_count,
         )
+
+
+def test_scheduler_accepts_maximum_channel_count():
+    topology = simulation_topology(
+        2,
+        {
+            (0, 1): curve(),
+            (1, 0): curve(),
+        },
+    )
+
+    result = assign_global_resources(
+        opposite_direction_schedule(),
+        topology,
+        32,
+    )
+
+    assert result.metadata["channel_count"] == 32
 
 
 @pytest.mark.parametrize(
@@ -496,6 +718,37 @@ def test_scheduler_rejects_invalid_semantic_dag(semantic, message):
     )
 
     with pytest.raises(SemanticError, match=message):
+        assign_global_resources(schedule, topology, 1)
+
+
+@pytest.mark.parametrize(
+    ("predecessors", "message"),
+    (
+        (7, "iterable"),
+        ((1,), "non-empty strings"),
+        (("unknown",), "missing from the schedule"),
+    ),
+)
+def test_scheduler_types_all_malformed_semantic_predecessors(
+    predecessors,
+    message,
+):
+    schedule = opposite_direction_schedule()
+    metadata = dict(schedule.metadata)
+    metadata["semantic_predecessors"] = {
+        "forward": predecessors,
+        "reverse": (),
+    }
+    schedule = replace(schedule, metadata=metadata)
+    topology = simulation_topology(
+        2,
+        {
+            (0, 1): curve(),
+            (1, 0): curve(),
+        },
+    )
+
+    with pytest.raises(GlobalSchedulingError, match=message):
         assign_global_resources(schedule, topology, 1)
 
 

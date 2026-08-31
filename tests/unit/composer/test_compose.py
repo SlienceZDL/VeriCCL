@@ -222,32 +222,10 @@ def _pipeline_candidates():
     }
 
 
-def test_composer_pipelines_ready_slice_without_stage_barrier():
-    schedule = compose(_pipeline_plan(), _pipeline_candidates())
-    by_id = {transfer.transfer_id: transfer for transfer in schedule.transfers}
-
-    assert (
-        by_id["pipeline-second-t0"].st_time
-        < by_id["pipeline-first-t1"].ed_time
-    )
-    assert by_id["pipeline-second-t0"].st_time == 2.0
-    assert by_id["pipeline-first-t1"].ed_time == 4.0
-    atom = by_id["pipeline-second-t0"].atoms[0]
-    assert [stage.stage_id for stage in atom.path] == [0, 1]
-    assert [
-        symbol.ready_time
-        for stage in atom.path
-        for symbol in stage.symbols
-    ] == [0.0, 2.0]
-    assert schedule.metadata["path_scope"] == "global"
-
-
-def test_compose_routes_assigns_resources_after_cross_node_semantics():
-    plan = _pipeline_plan()
+def _pipeline_route_schedules(plan):
     nodes = {node.node_id: node for node in plan.nodes}
-    candidates = _pipeline_candidates()
     schedules = {}
-    for node_id, candidate in candidates.items():
+    for node_id, candidate in _pipeline_candidates().items():
         schedule = candidate.node_schedules[node_id]
         metadata = dict(schedule.metadata)
         final_outputs = {}
@@ -274,6 +252,32 @@ def test_compose_routes_assigns_resources_after_cross_node_semantics():
             }
         )
         schedules[node_id] = replace(schedule, metadata=metadata)
+    return schedules
+
+
+def test_composer_pipelines_ready_slice_without_stage_barrier():
+    schedule = compose(_pipeline_plan(), _pipeline_candidates())
+    by_id = {transfer.transfer_id: transfer for transfer in schedule.transfers}
+
+    assert (
+        by_id["pipeline-second-t0"].st_time
+        < by_id["pipeline-first-t1"].ed_time
+    )
+    assert by_id["pipeline-second-t0"].st_time == 2.0
+    assert by_id["pipeline-first-t1"].ed_time == 4.0
+    atom = by_id["pipeline-second-t0"].atoms[0]
+    assert [stage.stage_id for stage in atom.path] == [0, 1]
+    assert [
+        symbol.ready_time
+        for stage in atom.path
+        for symbol in stage.symbols
+    ] == [0.0, 2.0]
+    assert schedule.metadata["path_scope"] == "global"
+
+
+def test_compose_routes_assigns_resources_after_cross_node_semantics():
+    plan = _pipeline_plan()
+    schedules = _pipeline_route_schedules(plan)
     topology = simulation_topology(
         3,
         {
@@ -297,6 +301,48 @@ def test_compose_routes_assigns_resources_after_cross_node_semantics():
     ].ed_time
     assert schedule.metadata["global_resources_assigned"] is True
     assert "routing_only" not in schedule.metadata
+
+
+@pytest.mark.parametrize("channel_count", (0, -1, True, 1.0, 33))
+def test_compose_routes_rejects_invalid_channel_count(channel_count):
+    plan = _pipeline_plan()
+    topology = simulation_topology(
+        3,
+        {
+            (0, 1): curve(),
+            (1, 2): curve(),
+        },
+        max_channels=1,
+    )
+
+    with pytest.raises(SemanticError, match="channel_count"):
+        compose_routes(
+            plan,
+            _pipeline_route_schedules(plan),
+            topology,
+            channel_count,
+        )
+
+
+def test_compose_routes_accepts_maximum_channel_count():
+    plan = _pipeline_plan()
+    topology = simulation_topology(
+        3,
+        {
+            (0, 1): curve(),
+            (1, 2): curve(),
+        },
+        max_channels=1,
+    )
+
+    schedule = compose_routes(
+        plan,
+        _pipeline_route_schedules(plan),
+        topology,
+        32,
+    )
+
+    assert schedule.metadata["channel_count"] == 32
 
 
 def test_composer_requires_one_complete_candidate_per_plan_node():
