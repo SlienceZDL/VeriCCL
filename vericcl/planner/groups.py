@@ -118,10 +118,15 @@ def eligible_gateway_groups(
     if len(gateway_counts) != 1 or not gateway_counts or 0 in gateway_counts:
         return ()
 
-    signatures = {
-        exact_domain_signature(topology, local_groups[node_id])
-        for node_id in ordered_nodes
-    }
+    try:
+        signatures = {
+            exact_domain_signature(topology, local_groups[node_id])
+            for node_id in ordered_nodes
+        }
+    except SemanticError as error:
+        if str(error) != "domain isomorphism canonicalization limit exceeded":
+            raise
+        return ()
     if len(signatures) != 1:
         return ()
 

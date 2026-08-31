@@ -722,6 +722,33 @@ def test_signature_canonicalization_limit_is_an_error(monkeypatch):
         exact_domain_signature(domain_topology(), (0, 1))
 
 
+def test_signature_canonicalization_limit_falls_back_to_direct_allgather(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "vericcl.topology.isomorphism._MAX_CANONICAL_STATES",
+        0,
+    )
+    inputs = resolve_inputs(
+        EXAMPLES / "topo" / "two_node_gateway.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    inputs = replace(
+        inputs,
+        collective=CollectiveSpec(
+            kind=CollectiveKind.ALL_GATHER,
+            datatype="float32",
+        ),
+        strategies=replace(inputs.strategies, hierarchy=True),
+    )
+
+    plan = build_plan(inputs, gateway_topology())
+
+    assert plan.planning_mode is PlanningMode.DIRECT
+    assert plan.planning_reason == "no_eligible_gateway_domain"
+
+
 def test_signature_is_deterministic():
     topology = gateway_topology()
 
