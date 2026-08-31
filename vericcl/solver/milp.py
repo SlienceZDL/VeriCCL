@@ -12,7 +12,12 @@ from vericcl.input.json_codec import sha256_json
 from vericcl.input.models import ObjectiveMode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.solver.budget import ModelBudget
-from vericcl.solver.demands import SolverProblem, TransferDemand
+from vericcl.solver.demands import (
+    RoutingUnitKey,
+    SolverProblem,
+    TransferDemand,
+    routing_unit_key,
+)
 from vericcl.solver.gurobi_api import GurobiAdapter
 from vericcl.solver.model import (
     SolveCandidate,
@@ -33,14 +38,13 @@ from vericcl.solver.scheduling import (
 from vericcl.topology.model import LaneKey, LinkKey
 
 
-TreeKey = Tuple[int, int, Tuple[int, ...], bool]
 OperationKey = Tuple[int, LinkKey]
 
 
 @dataclass(frozen=True)
 class _Tree:
     index: int
-    key: TreeKey
+    key: RoutingUnitKey
     root_rank: int
     logical_position: int
     contributors: FrozenSet[int]
@@ -113,19 +117,10 @@ def _positive_integer(value: object, field: str) -> int:
     return value
 
 
-def _tree_key(demand: TransferDemand) -> TreeKey:
-    return (
-        demand.root_rank,
-        demand.logical_position,
-        tuple(sorted(demand.contributors)),
-        demand.reduction_dual,
-    )
-
-
 def _trees(problem: SolverProblem) -> Tuple[_Tree, ...]:
-    grouped: Dict[TreeKey, list] = {}
+    grouped: Dict[RoutingUnitKey, list] = {}
     for demand in problem.demands:
-        grouped.setdefault(_tree_key(demand), []).append(demand)
+        grouped.setdefault(routing_unit_key(demand), []).append(demand)
     trees = []
     for index, key in enumerate(sorted(grouped)):
         demands = tuple(sorted(grouped[key], key=lambda item: item.demand_id))

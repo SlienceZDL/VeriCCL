@@ -2,6 +2,7 @@ import pytest
 
 from vericcl.input.models import ObjectiveMode
 from vericcl.solver.budget import ModelBudget
+from vericcl.solver.demands import routing_unit_key
 from vericcl.solver.milp import _build_model, _trees, solve_milp
 from vericcl.topology.model import LinkKey
 
@@ -15,6 +16,14 @@ from tests.gurobi.helpers import (
 
 
 pytestmark = [pytest.mark.phase03, pytest.mark.gurobi]
+
+
+def test_milp_tree_grouping_matches_the_stable_routing_unit_key():
+    problem = batching_problem()
+
+    assert tuple(tree.key for tree in _trees(problem)) == tuple(
+        sorted({routing_unit_key(demand) for demand in problem.demands})
+    )
 
 
 @pytest.mark.parametrize("shared_resource", [False, True])

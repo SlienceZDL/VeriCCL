@@ -250,11 +250,8 @@ def _contributor_map(
         if candidate in target and candidate not in used:
             mapped[contributor] = candidate
             used.add(candidate)
-    remaining_source = sorted(source - set(mapped))
-    remaining_target = sorted(target - used)
-    if len(remaining_source) != len(remaining_target):
+    if set(mapped) != set(source) or used != set(target):
         return None
-    mapped.update(zip(remaining_source, remaining_target))
     return mapped
 
 

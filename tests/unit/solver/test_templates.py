@@ -219,6 +219,38 @@ def _domain_problem(
     return problem
 
 
+def _replace_problem_contributors(problem, contributors):
+    contributors = frozenset(contributors)
+    node_id = "{}-contributors".format(problem.node.node_id)
+    node = replace(
+        problem.node,
+        node_id=node_id,
+        logical_input=StageInterface(
+            {
+                slot: contributors
+                for slot in problem.node.logical_input.values
+            }
+        ),
+        logical_output=StageInterface(
+            {
+                slot: contributors
+                for slot in problem.node.logical_output.values
+            }
+        ),
+    )
+    demands = tuple(
+        replace(
+            demand,
+            demand_id="{}-contributors".format(demand.demand_id),
+            node_id=node_id,
+            contributors=contributors,
+            member_slice_ids=contributors,
+        )
+        for demand in problem.demands
+    )
+    return replace(problem, node=node, demands=demands)
+
+
 def test_direct_allgather_units_deduplicate_by_root_not_logical_position():
     inputs = _inputs(
         CollectiveKind.ALL_GATHER,
@@ -290,6 +322,45 @@ def test_slice_specific_forbidden_transfer_splits_only_the_affected_unit():
     assert len(affected) == 1
     assert len(affected[0].members) == 1
     assert sum(len(template.members) for template in templates) == 4
+
+
+def test_same_group_contributor_change_is_not_a_logical_position_mapping():
+    topology = _paired_topology()
+    first = _domain_problem(topology, (0, 1))
+    second = _replace_problem_contributors(first, {1})
+
+    templates = build_solver_templates(
+        (first, second),
+        PlanningMode.DIRECT,
+    )
+
+    assert len(templates) == 2
+
+
+def test_cross_group_contributor_must_follow_verified_rank_bijection():
+    topology = _paired_topology()
+    first = _domain_problem(topology, (0, 1))
+    second = _domain_problem(topology, (2, 3), contributors={3})
+
+    templates = build_solver_templates(
+        (first, second),
+        PlanningMode.DIRECT,
+    )
+
+    assert len(templates) == 2
+
+
+def test_same_group_owner_change_cannot_reuse_identity_rank_mapping():
+    topology = _paired_topology()
+    first = _domain_problem(topology, (0, 1))
+    second = _domain_problem(topology, (0, 1), root=1)
+
+    templates = build_solver_templates(
+        (first, second),
+        PlanningMode.DIRECT,
+    )
+
+    assert len(templates) == 2
 
 
 @pytest.mark.parametrize(
