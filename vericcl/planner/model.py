@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from types import MappingProxyType
 from typing import FrozenSet, Mapping, Optional, Tuple
 
@@ -9,6 +10,13 @@ from vericcl.semantics.collective import (
     required_outputs,
 )
 from vericcl.topology.model import LinkKey
+
+
+class PlanningMode(str, Enum):
+    DIRECT = "direct"
+    MANUAL = "manual"
+    GATEWAY_ALLREDUCE = "gateway_allreduce"
+    GATEWAY_ALLGATHER = "gateway_allgather"
 
 
 def _integer(value: object, field: str, minimum: int = 0) -> int:
@@ -176,10 +184,25 @@ class PlanDAG:
     nodes: Tuple[PlanNode, ...]
     edges: Tuple[PlanEdge, ...]
     final_outputs: StageInterface
+    planning_mode: PlanningMode = PlanningMode.DIRECT
+    planning_reason: str = "direct_request"
 
     def __post_init__(self) -> None:
         if not isinstance(self.collective, CollectiveSpec):
             raise SemanticError("plan collective must be a CollectiveSpec")
+        if not isinstance(self.planning_mode, PlanningMode):
+            raise SemanticError("plan.planning_mode must be a PlanningMode")
+        planning_reason = _identifier(
+            self.planning_reason,
+            "plan.planning_reason",
+        )
+        if not planning_reason.isascii() or any(
+            not (character.islower() or character.isdigit() or character == "_")
+            for character in planning_reason
+        ):
+            raise SemanticError(
+                "plan.planning_reason must be a lowercase ASCII identifier"
+            )
         rank_count = _integer(self.rank_count, "plan.rank_count", minimum=1)
         slice_count = _integer(self.slice_count, "plan.slice_count", minimum=1)
         if not isinstance(self.initial_inputs, StageInterface):

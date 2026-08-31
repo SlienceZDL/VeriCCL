@@ -15,6 +15,7 @@ from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
     PlanNode,
+    PlanningMode,
     StageInterface,
 )
 from vericcl.semantics.collective import (
@@ -122,6 +123,15 @@ def test_allreduce_has_reduce_scatter_dependencies_before_allgather():
     assert len(plan.edges) == 2
     assert all(edge.producer_id.startswith("allreduce-rs") for edge in plan.edges)
     assert all(edge.consumer_id.startswith("allreduce-ag") for edge in plan.edges)
+
+
+def test_direct_plan_records_direct_request_metadata():
+    inputs = resolved_input(CollectiveKind.ALL_REDUCE)
+
+    plan = build_direct_plan(inputs, topology_for(inputs))
+
+    assert plan.planning_mode is PlanningMode.DIRECT
+    assert plan.planning_reason == "direct_request"
 
 
 def test_alltoall_creates_one_source_destination_demand_per_slice():
@@ -244,6 +254,18 @@ def test_plan_rejects_incorrect_final_interface():
 
     with pytest.raises(SemanticError, match="final outputs"):
         replace(plan, final_outputs=incorrect)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("planning_mode", "direct"),
+        ("planning_reason", ""),
+    ],
+)
+def test_plan_rejects_invalid_planning_metadata(field, value):
+    with pytest.raises(SemanticError):
+        replace(simple_plan((simple_node("node"),)), **{field: value})
 
 
 def test_direct_plan_rejects_topology_rank_mismatch():

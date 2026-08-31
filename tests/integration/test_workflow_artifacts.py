@@ -43,12 +43,13 @@ def _documented_solve_run_id():
     return arguments[arguments.index("--run-id") + 1]
 
 
-def _write_constructive_inputs(tmp_path):
+def _write_constructive_inputs(tmp_path, hierarchy=False):
     topology = EXAMPLES / "topo" / "two_rank.json"
     atom_payload = json.loads(
         (EXAMPLES / "atom" / "default.json").read_text(encoding="utf-8")
     )
     atom_payload["strategies"]["milp"] = False
+    atom_payload["strategies"]["hierarchy"] = hierarchy
     atom = tmp_path / "atom.json"
     atom.write_text(json.dumps(atom_payload), encoding="utf-8")
     sketch_payload = json.loads(
@@ -139,6 +140,29 @@ def test_solve_workflow_writes_complete_lineage_and_final_alias(tmp_path):
         assert hashlib.sha256(report_path.read_bytes()).hexdigest() == item[
             "report_sha256"
         ]
+
+
+def test_solve_reports_direct_fallback_for_requested_hierarchy(tmp_path):
+    topology, sketch, atom = _write_constructive_inputs(tmp_path, hierarchy=True)
+    result = execute_solve(
+        RunContext(
+            topology_path=topology,
+            sketch_path=sketch,
+            atom_path=atom,
+            output_base=tmp_path / "runs",
+            run_id="hierarchy-fallback",
+        )
+    )
+
+    report = json.loads(result.final_report.read_text(encoding="utf-8"))
+
+    assert report["requested_strategies"]["hierarchy"] is True
+    assert report["applied_strategies"]["hierarchy"] is False
+    assert report["hierarchy_plan"]["planning_mode"] == "direct"
+    assert (
+        report["hierarchy_plan"]["planning_reason"]
+        == "no_eligible_gateway_domain"
+    )
 
 
 def test_verify_workflow_reconstructs_schedule_and_uses_same_validation(tmp_path):

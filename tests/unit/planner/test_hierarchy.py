@@ -11,6 +11,7 @@ from vericcl.planner.hierarchy import (
     validate_manual_hierarchy,
 )
 from vericcl.planner.groups import CommunicationGroups
+from vericcl.planner.model import PlanningMode
 from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 from vericcl.topology.loader import load_topology
 
@@ -98,6 +99,8 @@ def test_manual_hierarchy_takes_precedence_and_builds_exact_plan():
         CollectiveKind.REDUCE_SCATTER,
         CollectiveKind.ALL_GATHER,
     ]
+    assert plan.planning_mode is PlanningMode.MANUAL
+    assert plan.planning_reason == "manual_hierarchy"
 
 
 def test_manual_hierarchy_rejects_nonexistent_communication_domain():
@@ -202,6 +205,25 @@ def test_hierarchy_without_cross_node_group_falls_back_to_direct_plan():
     plan = build_plan(inputs, load_topology(inputs))
 
     assert plan.nodes[0].node_id.startswith("allreduce-rs")
+    assert plan.planning_mode is PlanningMode.DIRECT
+    assert plan.planning_reason == "no_eligible_gateway_domain"
+
+
+def test_hierarchy_with_gateway_domain_records_gateway_allreduce_metadata():
+    inputs = resolve_inputs(
+        EXAMPLES / "topo" / "two_node_gateway.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    inputs = replace(
+        inputs,
+        strategies=replace(inputs.strategies, hierarchy=True),
+    )
+
+    plan = build_plan(inputs, load_topology(inputs))
+
+    assert plan.planning_mode is PlanningMode.GATEWAY_ALLREDUCE
+    assert plan.planning_reason == "eligible_gateway_domain"
 
 
 def test_build_plan_rejects_invalid_arguments_and_rank_mismatch():

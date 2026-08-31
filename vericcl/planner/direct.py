@@ -9,6 +9,7 @@ from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
     PlanNode,
+    PlanningMode,
     StageInterface,
 )
 from vericcl.semantics.collective import (
@@ -277,6 +278,7 @@ def _allreduce_plan(
     inputs: ResolvedInput,
     topology: Topology,
     initial_inputs: StageInterface,
+    planning_reason: str,
 ) -> PlanDAG:
     rank_count = inputs.rank_count
     slice_count = inputs.hyperparameters.slice_count
@@ -355,6 +357,8 @@ def _allreduce_plan(
         final_outputs=StageInterface(
             required_outputs(inputs.collective, rank_count, slice_count)
         ),
+        planning_mode=PlanningMode.DIRECT,
+        planning_reason=planning_reason,
     )
 
 
@@ -404,7 +408,11 @@ def _alltoall_nodes(
     return tuple(nodes)
 
 
-def build_direct_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
+def build_direct_plan(
+    inputs: ResolvedInput,
+    topology: Topology,
+    planning_reason: str = "direct_request",
+) -> PlanDAG:
     if not isinstance(inputs, ResolvedInput):
         raise InputValidationError("inputs must be a ResolvedInput")
     if not isinstance(topology, Topology):
@@ -435,7 +443,12 @@ def build_direct_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
     slice_count = inputs.hyperparameters.slice_count
     initial_inputs = _initial_inputs(rank_count, slice_count)
     if inputs.collective.kind is CollectiveKind.ALL_REDUCE:
-        return _allreduce_plan(inputs, topology, initial_inputs)
+        return _allreduce_plan(
+            inputs,
+            topology,
+            initial_inputs,
+            planning_reason,
+        )
     group = tuple(range(rank_count))
     links, resources = _group_resources(topology, group)
     builders = {
@@ -463,6 +476,8 @@ def build_direct_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
         final_outputs=StageInterface(
             required_outputs(inputs.collective, rank_count, slice_count)
         ),
+        planning_mode=PlanningMode.DIRECT,
+        planning_reason=planning_reason,
     )
 
 

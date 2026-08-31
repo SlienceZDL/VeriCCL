@@ -8,6 +8,7 @@ from vericcl.planner.model import (
     PlanDAG,
     PlanEdge,
     PlanNode,
+    PlanningMode,
     StageInterface,
 )
 from vericcl.semantics.collective import (
@@ -484,6 +485,8 @@ def build_manual_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
                 slice_count,
             )
         ),
+        planning_mode=PlanningMode.MANUAL,
+        planning_reason="manual_hierarchy",
     )
 
 
@@ -707,4 +710,6 @@ def build_gateway_allreduce_plan(
                 slice_count,
             )
         ),
+        planning_mode=PlanningMode.GATEWAY_ALLREDUCE,
+        planning_reason="eligible_gateway_domain",
     )

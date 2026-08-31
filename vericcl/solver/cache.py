@@ -36,6 +36,8 @@ def _plan(plan):
         "collective": _collective(plan.collective),
         "rank_count": plan.rank_count,
         "slice_count": plan.slice_count,
+        "planning_mode": plan.planning_mode.value,
+        "planning_reason": plan.planning_reason,
         "initial_inputs": _interface(plan.initial_inputs),
         "nodes": [
             {

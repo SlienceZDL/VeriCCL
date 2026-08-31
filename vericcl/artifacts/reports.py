@@ -242,11 +242,14 @@ def build_candidate_report(
         overlay,
     )
     xml_sha256 = outcome.artifact.sha256
-    applied = dict(_strategies(inputs))
-    unknown_applied = set(applied_strategies) - set(applied)
+    requested = _strategies(inputs)
+    unknown_applied = set(applied_strategies) - set(requested)
     if unknown_applied:
         raise SemanticError("applied strategies contain an unknown field")
-    applied.update(applied_strategies)
+    applied = {
+        name: applied_strategies.get(name, requested_value)
+        for name, requested_value in requested.items()
+    }
     return CandidateReport(
         schema_version="1",
         candidate_id=candidate.candidate_id,
@@ -258,7 +261,7 @@ def build_candidate_report(
             signature,
             xml_sha256,
         ),
-        requested_strategies=_strategies(inputs),
+        requested_strategies=requested,
         applied_strategies=applied,
         strategy_parameters=_strategy_parameters(inputs),
         overlay=_overlay(overlay),
