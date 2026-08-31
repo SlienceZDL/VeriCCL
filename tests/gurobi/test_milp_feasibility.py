@@ -3,6 +3,7 @@ from dataclasses import replace
 import pytest
 
 from vericcl.input.models import ObjectiveMode
+from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
 from vericcl.solver.budget import ModelBudget
 from vericcl.solver.constructive import construct_candidate
 from vericcl.solver.milp import solve_milp
@@ -55,6 +56,79 @@ def test_two_rank_broadcast_satisfies_flow_causality_and_lane_order():
     assert candidate.metrics.maximum_normalized_resource_load > 0.0
     assert candidate.metrics.within_requested_gap
     assert not candidate.proven_optimal
+
+
+def test_noncolliding_real_problem_preserves_the_legacy_schedule_object():
+    require_gurobi_license()
+    problem = broadcast_problem(logical_positions=(0,))
+
+    candidate = solve_milp(
+        problem,
+        channel_count=1,
+        objective=ObjectiveMode.LATENCY,
+        budget=ModelBudget(seconds=30, started_at=0, deadline=30),
+        warm_start=None,
+    )
+
+    transfer_id = "milp-broadcast-milp-t00000000"
+    demand_id = "milp-broadcast-a00000000-r00000000-l00000001"
+    expected = Schedule(
+        schedule_id="milp-broadcast-milp-k01",
+        transfers=(
+            Transfer(
+                transfer_id=transfer_id,
+                kind="SEND",
+                src_rank=0,
+                dst_rank=1,
+                channel=0,
+                stage_id=0,
+                member_slice_ids=frozenset({0}),
+                atoms=(
+                    Atom(
+                        slice_id=0,
+                        slice_size_bytes=1048576,
+                        path=(
+                            PathStage(
+                                stage_id=0,
+                                operator="SEND",
+                                symbols=(Symbol(0, 1, 0.0),),
+                            ),
+                        ),
+                        st_time=0.0,
+                        ed_time=2.0,
+                    ),
+                ),
+                st_time=0.0,
+                ed_time=2.0,
+                predecessor_ids=frozenset(),
+            ),
+        ),
+        final_state_ids=(
+            "milp-broadcast-r00000000-o00000000",
+            "milp-broadcast-r00000001-o00000000",
+        ),
+        rank_count=2,
+        slice_count=8,
+        slice_size_bytes=1048576,
+        metadata={
+            "backend": "gurobi",
+            "channel_count": 1,
+            "path_scope": "stage_suffix",
+            "path_roots": {transfer_id: 0},
+            "reduction_dual": False,
+            "restrictions": (),
+            "semantic_contributors": {transfer_id: (0,)},
+            "semantic_predecessors": {transfer_id: ()},
+            "tree_contributors": {transfer_id: (0,)},
+            "resource_slots": {transfer_id: {}},
+            "selected_flows": {demand_id: ((0, 1),)},
+            "numerical_tolerance": 1e-6,
+        },
+    )
+    actual = candidate.node_schedules[problem.node.node_id]
+
+    assert actual == expected
+    assert actual.metadata == expected.metadata
 
 
 def test_zero_gap_optimal_model_retains_global_proof():

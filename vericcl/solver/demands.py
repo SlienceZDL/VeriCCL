@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import FrozenSet, Tuple
 
 from vericcl.errors import SemanticError
@@ -216,8 +216,83 @@ def _logical_position(contributors: FrozenSet[int], slice_count: int) -> int:
     return next(iter(positions))
 
 
-def _value_identity(values: FrozenSet[int]) -> str:
-    return ".".join("{:08d}".format(value) for value in sorted(values))
+def _canonical_demand_identity(demand: TransferDemand) -> tuple:
+    return (
+        demand.node_id,
+        demand.stage_id,
+        demand.root_rank,
+        demand.required_leaf_rank,
+        demand.logical_position,
+        tuple(sorted(demand.contributors)),
+        tuple(sorted(demand.member_slice_ids)),
+        tuple(
+            sorted(
+                (link.src_rank, link.dst_rank)
+                for link in demand.allowed_links
+            )
+        ),
+        tuple(
+            sorted(
+                (link.src_rank, link.dst_rank)
+                for link in demand.legal_links
+            )
+        ),
+        tuple(
+            sorted(
+                (
+                    item.slice_id,
+                    item.src_rank,
+                    item.dst_rank,
+                    item.stage_id,
+                )
+                for item in demand.forbidden_members
+            )
+        ),
+        demand.candidate_paths,
+        demand.reduction_dual,
+    )
+
+
+def _assign_demand_ids(
+    demands: Tuple[TransferDemand, ...],
+) -> Tuple[TransferDemand, ...]:
+    try:
+        demands = tuple(demands)
+    except TypeError as error:
+        raise SemanticError("demands must be iterable") from error
+    if not all(isinstance(demand, TransferDemand) for demand in demands):
+        raise SemanticError("demands must contain TransferDemand values")
+    groups = {}
+    for demand in demands:
+        groups.setdefault(demand.demand_id, []).append(demand)
+    assigned = []
+    for base_id in sorted(groups):
+        group = groups[base_id]
+        if len(group) == 1:
+            assigned.append(group[0])
+            continue
+        identified = tuple(
+            (_canonical_demand_identity(demand), demand)
+            for demand in group
+        )
+        identified = tuple(sorted(identified, key=lambda item: item[0]))
+        identities = tuple(identity for identity, _ in identified)
+        if len(identities) != len(set(identities)):
+            raise SemanticError(
+                "canonical demand identity is duplicated for {}".format(
+                    base_id
+                )
+            )
+        if len(identified) > 100000000:
+            raise SemanticError("demand collision group exceeds ordinal capacity")
+        assigned.extend(
+            replace(
+                demand,
+                demand_id="{}-v{:08d}".format(base_id, ordinal),
+            )
+            for ordinal, (_, demand) in enumerate(identified)
+        )
+    return tuple(sorted(assigned, key=lambda demand: demand.demand_id))
 
 
 def _virtual_links(node: PlanNode, reduction_dual: bool) -> FrozenSet[LinkKey]:
@@ -306,13 +381,11 @@ def _demand(
         contributors,
         inputs.hyperparameters.slice_count,
     )
-    demand_id = "{}-a{:08d}-r{:08d}-l{:08d}-c{}-m{}".format(
+    demand_id = "{}-a{:08d}-r{:08d}-l{:08d}".format(
         node.node_id,
         logical_position,
         root,
         leaf,
-        _value_identity(contributors),
-        _value_identity(members),
     )
     forbidden = _matching_forbidden(inputs, members, node.stage_id)
     legal_links, candidate_paths = _candidate_paths(
@@ -489,6 +562,7 @@ def build_solver_problem(
         raise SemanticError(
             "{} must be decomposed before solving".format(kind.value)
         )
+    demands = _assign_demand_ids(demands)
     candidate_edges = set()
     for demand in demands:
         for virtual in demand.legal_links:

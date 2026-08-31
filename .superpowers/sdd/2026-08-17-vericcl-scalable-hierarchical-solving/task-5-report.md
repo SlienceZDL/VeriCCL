@@ -2,7 +2,7 @@
 
 ## 状态
 
-已完成路由模板实例化、真实 slice 语义重建、归约对偶状态汇合，以及旧 MILP schedule 语义构造逻辑的纯函数复用。实现保持 `solve_milp` 的外部行为不变，并将 provisional schedule 明确标记为 `routing_only=True`。审查修复轮次 1 已处理真实网关 AllGather demand ID 冲突、routing-only 归约状态版本链，以及非 routing-only dual metadata 兼容性。
+已完成路由模板实例化、真实 slice 语义重建、归约对偶状态汇合，以及旧 MILP schedule 语义构造逻辑的纯函数复用。实现保持 `solve_milp` 的外部行为不变，并将 provisional schedule 明确标记为 `routing_only=True`。审查修复轮次 1 已处理真实网关 AllGather demand ID 冲突、routing-only 归约状态版本链，以及非 routing-only dual metadata 兼容性；轮次 2 在保留碰撞修复的同时恢复了非碰撞 demand 的 legacy ID 与真实 Gurobi 输出兼容性。
 
 ## RED 证据
 
@@ -103,6 +103,45 @@ changed production/test Han-character scan: no matches
 ```text
 python -m compileall -q vericcl tests: passed
 git diff --check: passed
+changed production/test Han-character scan: no matches
+```
+
+## 审查修复轮次 2
+
+### RED 证据
+
+- 真实 singleton demand 的 legacy ID 测试和禁用项 ID 测试均失败：当前 ID 在旧 `node-a...-r...-l...` 后无条件追加完整 `-c...-m...`。
+- 真实 `solve_milp` 兼容测试使用单-demand Broadcast 和 Gurobi 求解器。硬编码的 a3d6b5f 基线完整 `Schedule` 与实际对象仅在 metadata 上不等，差异是 `selected_flows` 使用了新的长 demand ID；3 个兼容测试首次运行均失败。
+- 新增集合级性质测试首次运行有 4 个失败：缺少集合级 ID 分配函数；真实 gateway ID 长度随 contributor 数线性增长，超过 `len(node_id)+40` 上界。
+
+### 最终 ID 规则
+
+- `_demand` 恢复旧 base ID：`node-a%08d-r%08d-l%08d`。
+- 在一个 `SolverProblem` 的全部 demand 构造完成后，`_assign_demand_ids` 按 base ID 分组。singleton 保持 base ID 完全不变，因此旧 `selected_flows`、candidate 和 cache 身份不漂移。
+- collision 组按排除 `demand_id` 的完整 canonical identity 排序。identity 包含 node/stage/root/leaf/logical position、contributors、member slice IDs、allowed/legal links、forbidden transfers、candidate paths 和 reduction-dual 标记。
+- 每个 collision member 仅追加固定宽度 `-v%08d` ordinal；ordinal 来自 canonical identity 排序，不使用哈希，也不依赖 demand 输入遍历顺序。ID 长度上界为 `len(node_id)+40`，与 contributor 数无关。
+- 同一 base ID 下若 canonical identity 完全重复，稳定抛出 `SemanticError`，不使用遍历序号掩盖上游构造错误。
+- candidate path 生成、路由域、模板签名及轮次 1 accumulator/final dependency/verifier/legacy dual 逻辑均未修改。
+
+### GREEN 与回归
+
+```text
+legacy ID + real Gurobi object + ID properties：7 passed in 0.26s
+轮次 1 gateway/dual/verifier 定向链：7 passed in 2.45s
+Task 5 计划集及 demand-ID property：31 passed in 2.53s
+tests/unit/solver + tests/unit/composer + tests/property：257 passed in 21.28s
+tests/unit/verification + tests/unit/xml：249 passed in 0.33s
+完整非硬件测试：1228 passed, 1 skipped in 30.07s
+tests/gurobi：31 passed in 0.24s
+文档命令回归：29 passed in 2.53s
+```
+
+最终静态门禁：
+
+```text
+.venv/bin/python -m compileall -q vericcl tests: passed
+git diff --check: passed
+.venv/bin/python -m vericcl --help: passed
 changed production/test Han-character scan: no matches
 ```
 

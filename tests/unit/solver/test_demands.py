@@ -116,6 +116,14 @@ def test_broadcast_demand_excludes_local_root_output():
     assert demand.member_slice_ids == frozenset({0, 8})
 
 
+def test_noncolliding_demand_keeps_the_legacy_identity():
+    problem = allreduce_problem("allreduce-ag-a00000000")
+
+    assert problem.demands[0].demand_id == (
+        "allreduce-ag-a00000000-a00000000-r00000000-l00000001"
+    )
+
+
 def test_routing_unit_key_is_the_complete_semantic_tree_boundary():
     demand = allreduce_problem("allreduce-ag-a00000000").demands[0]
 
@@ -141,8 +149,7 @@ def test_shared_transfer_is_removed_if_any_member_is_forbidden():
 
     assert CandidateEdge(0, 1, 0) not in problem.candidate_edges
     assert problem.infeasible_demand_ids == (
-        "allreduce-ag-a00000000-a00000000-r00000000-l00000001-"
-        "c00000000.00000008-m00000000.00000008",
+        "allreduce-ag-a00000000-a00000000-r00000000-l00000001",
     )
 
 
@@ -249,6 +256,56 @@ def test_allgather_and_alltoall_expand_to_source_leaf_chains():
         remote.demands[0].root_rank,
         remote.demands[0].required_leaf_rank,
     ) == (0, 1)
+
+
+def test_gateway_allgather_collision_ids_are_unique_stable_and_bounded():
+    inputs = resolve_inputs(
+        EXAMPLES / "topo" / "two_node_gateway.json",
+        EXAMPLES / "sketch" / "allreduce_8m_1m.json",
+        EXAMPLES / "atom" / "default.json",
+    )
+    inputs = replace(
+        inputs,
+        collective=CollectiveSpec(
+            kind=CollectiveKind.ALL_GATHER,
+            datatype="float32",
+        ),
+        strategies=replace(inputs.strategies, hierarchy=True),
+    )
+    topology = load_topology(inputs)
+    plan = build_plan(inputs, topology)
+
+    def snapshot(nodes):
+        result = {}
+        for node in nodes:
+            problem = build_solver_problem(node, inputs, topology)
+            identifiers = tuple(
+                demand.demand_id for demand in problem.demands
+            )
+            assert len(identifiers) == len(set(identifiers))
+            assert all(
+                len(identifier) <= len(node.node_id) + 40
+                for identifier in identifiers
+            )
+            result[node.node_id] = identifiers
+        return result
+
+    forward = snapshot(plan.nodes)
+    reverse = snapshot(tuple(reversed(plan.nodes)))
+    versioned = [
+        identifier
+        for identifiers in forward.values()
+        for identifier in identifiers
+        if "-v" in identifier
+    ]
+
+    assert forward == reverse
+    assert versioned
+    assert all(
+        len(identifier.rsplit("-v", 1)[1]) == 8
+        and identifier.rsplit("-v", 1)[1].isdigit()
+        for identifier in versioned
+    )
 
 
 def test_reduce_forbidden_item_uses_physical_reverse_direction():
