@@ -158,6 +158,7 @@ def solve_public_cli(
         "xml_path": final_xmls[0],
         "report_path": final_reports[0],
         "sidecar_path": final_sidecars[0],
+        "input_paths": (topology, sketch, atom),
         "summary": json.loads(
             (root / "run-summary.json").read_text(encoding="utf-8")
         ),

@@ -119,6 +119,47 @@ def test_ready_wait_with_earlier_idle_route_produces_replacement_hint():
     assert set(hint.candidate_paths.values()) == {(1, 2, 3)}
 
 
+def test_bdd_flow_identity_comes_from_instantiated_schedule_not_template():
+    schedule = crossing_flows_with_ready_wait()
+    schedule = replace(
+        schedule,
+        metadata={
+            **schedule.metadata,
+            "template_id": "template-abstract-route",
+            "template_member_id": "unit-abstract-member",
+        },
+    )
+
+    result = analyze_flow_congestion(
+        schedule,
+        crossing_topology(),
+        crossing_inputs(),
+    )
+
+    hint = next(
+        value
+        for value in result.hints
+        if value.waiting_transfer_id == "wait-middle"
+    )
+    assert hint.source_flow_id == (
+        "flow-s00000000-a00000000-m00000000-r00000000-l00000003-p0000"
+    )
+    assert hint.demand_id == (
+        "demand-s00000000-send-a00000000-r00000000-l00000003"
+    )
+    assert hint.divergence_rank == 1
+    assert hint.bottleneck_lane == LaneKey(1, 3, 0)
+    assert hint.wait_interval_us == pytest.approx((1.0, 5.0))
+    assert all(
+        "template" not in value
+        for value in (
+            hint.source_flow_id,
+            hint.demand_id,
+            *hint.candidate_flow_ids,
+        )
+    )
+
+
 def test_forbidden_member_filters_the_alternative_route():
     result = analyze_flow_congestion(
         crossing_flows_with_ready_wait(),

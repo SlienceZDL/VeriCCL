@@ -185,6 +185,7 @@ class CandidateReport:
     tuning_strategy: Mapping[str, object]
     runtime_recommendations: tuple
     reproducibility: Mapping[str, object]
+    restrictions: tuple = ()
     planning_mode: str = "unknown"
     requested_problem_count: int = 0
     routing_unit_count: int = 0
@@ -225,6 +226,16 @@ class CandidateReport:
             raise SemanticError("candidate report validation is invalid")
         if not isinstance(self.planning_mode, str) or not self.planning_mode:
             raise SemanticError("candidate report planning_mode is invalid")
+        restrictions = tuple(self.restrictions)
+        if (
+            any(
+                not isinstance(value, str) or not value
+                for value in restrictions
+            )
+            or len(restrictions) != len(set(restrictions))
+        ):
+            raise SemanticError("candidate report restrictions are invalid")
+        object.__setattr__(self, "restrictions", tuple(sorted(restrictions)))
         SearchDiagnostics.from_mapping(
             {
                 name: getattr(self, name)
@@ -361,6 +372,7 @@ def build_candidate_report(
             outcome.artifact,
         ),
         reproducibility=_reproducibility(candidate),
+        restrictions=candidate.restrictions,
         planning_mode=hierarchy_value.get("planning_mode", "unknown"),
         requested_problem_count=diagnostics_value.requested_problem_count,
         routing_unit_count=diagnostics_value.routing_unit_count,

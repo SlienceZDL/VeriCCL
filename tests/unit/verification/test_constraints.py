@@ -135,6 +135,37 @@ def test_same_lane_overlap_is_rejected():
     assert result.evidence["conflicting_transfer_id"] == "lane-send-0"
 
 
+def test_opposite_directed_lanes_can_overlap_on_the_same_channel():
+    result = verify_schedule_constraints(
+        two_rank_allgather_schedule(),
+        inputs(CollectiveKind.ALL_GATHER),
+        topology(),
+    )
+
+    assert result.status is ValidationStatus.VALID
+
+
+def test_distinct_channels_can_overlap_on_the_same_directed_link():
+    schedule = two_send_same_lane_schedule()
+    second = schedule.transfers[1]
+    stage = PathStage(0, "SEND", (Symbol(0, 1, 0.0),))
+    parallel = replace(
+        second,
+        channel=1,
+        atoms=(Atom(1, 1024, (stage,), 0.0, 1.0),),
+        st_time=0.0,
+        ed_time=1.0,
+    )
+
+    result = verify_schedule_constraints(
+        replace(schedule, transfers=(schedule.transfers[0], parallel)),
+        inputs(CollectiveKind.BROADCAST, slices=2),
+        topology(),
+    )
+
+    assert result.status is ValidationStatus.VALID
+
+
 def test_fixed_shared_resource_capacity_is_enforced():
     schedule = two_rank_allgather_schedule()
     metadata = dict(schedule.metadata)

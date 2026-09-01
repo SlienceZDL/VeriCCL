@@ -337,6 +337,19 @@ def test_same_group_contributor_change_is_not_a_logical_position_mapping():
     assert len(templates) == 2
 
 
+def test_external_contributor_change_is_not_an_arbitrary_mapping():
+    topology = _paired_topology()
+    first = _domain_problem(topology, (0, 1), contributors={2})
+    second = _replace_problem_contributors(first, {3})
+
+    templates = build_solver_templates(
+        (first, second),
+        PlanningMode.DIRECT,
+    )
+
+    assert len(templates) == 2
+
+
 def test_cross_group_contributor_must_follow_verified_rank_bijection():
     topology = _paired_topology()
     first = _domain_problem(topology, (0, 1))

@@ -233,25 +233,46 @@ def _contributor_map(
     if len(source) != len(target):
         return None
     mapped = {}
-    used = set()
     source_slice_count = representative_problem.slice_count
     target_slice_count = member_problem.slice_count
+    target_by_position: Dict[int, list] = {}
+    for contributor in sorted(target):
+        _, logical_position = divmod(contributor, target_slice_count)
+        target_by_position.setdefault(logical_position, []).append(contributor)
+    source_by_position: Dict[int, list] = {}
     for contributor in sorted(source):
-        source_rank, logical_position = divmod(
-            contributor,
-            source_slice_count,
-        )
-        if source_rank not in rank_map or logical_position not in position_map:
-            continue
-        candidate = (
-            rank_map[source_rank] * target_slice_count
-            + position_map[logical_position]
-        )
-        if candidate in target and candidate not in used:
-            mapped[contributor] = candidate
-            used.add(candidate)
-    if set(mapped) != set(source) or used != set(target):
+        _, logical_position = divmod(contributor, source_slice_count)
+        if logical_position not in position_map:
+            return None
+        source_by_position.setdefault(
+            position_map[logical_position],
+            [],
+        ).append(contributor)
+    if set(source_by_position) != set(target_by_position):
         return None
+    for logical_position, source_values in sorted(source_by_position.items()):
+        remaining = set(target_by_position[logical_position])
+        if len(source_values) != len(remaining):
+            return None
+        for contributor in source_values:
+            source_rank, _ = divmod(contributor, source_slice_count)
+            preferred_ranks = []
+            if source_rank in rank_map:
+                preferred_ranks.append(rank_map[source_rank])
+            if source_rank not in preferred_ranks:
+                preferred_ranks.append(source_rank)
+            candidates = tuple(
+                rank * target_slice_count + logical_position
+                for rank in preferred_ranks
+            )
+            candidate = next(
+                (value for value in candidates if value in remaining),
+                None,
+            )
+            if candidate is None:
+                return None
+            mapped[contributor] = candidate
+            remaining.remove(candidate)
     return mapped
 
 
@@ -406,6 +427,9 @@ def _mapped_offset(
         return contributor_map[offset]
     if offset in contributor_map:
         return contributor_map[offset]
+    if len(position_map) == 1:
+        source_position, target_position = next(iter(position_map.items()))
+        return offset + target_position - source_position
     return offset
 
 

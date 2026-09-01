@@ -43,3 +43,23 @@ def test_runtime_incompatible_schedule_remains_offline_valid_candidate(tmp_path)
         > 1024
     )
     assert_semantic_outputs(result, "broadcast")
+
+
+def test_candidate_report_preserves_template_backend_restrictions(tmp_path):
+    result = solve_public_cli(
+        tmp_path,
+        "broadcast",
+        total_size_bytes=2048,
+        slice_size_bytes=1024,
+        max_channels=1,
+    )
+
+    assert result["report"]["restrictions"] == [
+        "independent_node_composition",
+        "template_route_composition",
+    ]
+    assert result["sidecar"]["candidate"]["restrictions"] == (
+        result["report"]["restrictions"]
+    )
+    assert result["report"]["search_space_restricted"] is True
+    assert result["report"]["proven_optimal"] is False

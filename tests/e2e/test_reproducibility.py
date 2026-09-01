@@ -15,12 +15,38 @@ def _digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_seed_zero_pure_software_runs_are_canonically_reproducible(tmp_path):
-    first = solve_public_cli(tmp_path / "first", "allreduce", run_id="first")
+@pytest.mark.parametrize(
+    "operator,options",
+    (
+        ("allreduce", {}),
+        (
+            "allgather",
+            {
+                "topology_name": "two_node_gateway.json",
+                "total_size_bytes": 8192,
+                "slice_size_bytes": 1024,
+                "hierarchy": True,
+            },
+        ),
+    ),
+    ids=("direct-allreduce", "gateway-allgather"),
+)
+def test_seed_zero_pure_software_runs_are_canonically_reproducible(
+    tmp_path,
+    operator,
+    options,
+):
+    first = solve_public_cli(
+        tmp_path / "first",
+        operator,
+        run_id="first",
+        **options,
+    )
     second = solve_public_cli(
         tmp_path / "second",
-        "allreduce",
+        operator,
         run_id="second",
+        **options,
     )
 
     assert first["sidecar"] == second["sidecar"]

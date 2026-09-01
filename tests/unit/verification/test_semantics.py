@@ -37,6 +37,28 @@ def test_valid_schedule_replays_to_exact_required_outputs():
     assert result.evidence["final_state_count"] == 2
 
 
+def test_reduction_send_carries_the_complete_real_contributor_set():
+    schedule = two_rank_allreduce_schedule()
+    reduce_transfer, send_transfer = schedule.transfers
+
+    assert reduce_transfer.member_slice_ids == frozenset({1})
+    assert send_transfer.member_slice_ids == frozenset({0, 1})
+    assert send_transfer.predecessor_ids == frozenset(
+        {reduce_transfer.transfer_id}
+    )
+    assert {
+        atom.slice_id for atom in send_transfer.atoms
+    } == {0, 1}
+    assert schedule.metadata["final_outputs"] == {
+        "r00000000-o00000000": (0, 1),
+        "r00000001-o00000000": (0, 1),
+    }
+    assert verify_schedule_semantics(
+        schedule,
+        inputs(),
+    ).status is ValidationStatus.VALID
+
+
 @pytest.mark.parametrize(
     "schedule,input_value",
     [
