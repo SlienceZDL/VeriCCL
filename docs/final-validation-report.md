@@ -25,9 +25,9 @@ optimality requests use only the legacy full-time MILP backend.
 | Scope | Command | Measured result |
 |---|---|---|
 | Task 9 focused acceptance | `.venv/bin/python -m pytest tests/integration/test_scalable_template_solving.py tests/e2e/test_hierarchical_allgather.py tests/e2e/test_hierarchical_allreduce.py tests/e2e/test_reproducibility.py tests/e2e/test_candidate_xml.py tests/unit/verification/test_semantics.py tests/unit/verification/test_constraints.py tests/unit/verification/test_bdd_flow.py -q` | 64 passed in 30.57s |
-| All non-hardware tests | `.venv/bin/python -m pytest tests/unit tests/property tests/integration tests/e2e -q` | 1340 passed, 1 skipped in 67.09s |
-| Gurobi tests | `.venv/bin/python -m pytest tests/gurobi -q` | 37 passed in 0.31s |
-| Documented commands | `.venv/bin/python -m pytest tests/integration/test_documented_commands.py -q` | 29 passed in 5.97s |
+| All non-hardware tests | `.venv/bin/python -m pytest tests/unit tests/property tests/integration tests/e2e -q` | 1341 passed, 1 skipped in 67.92s |
+| Gurobi tests | `.venv/bin/python -m pytest tests/gurobi -q` | 37 passed in 0.35s |
+| Documented commands | `.venv/bin/python -m pytest tests/integration/test_documented_commands.py -q` | 29 passed in 6.13s |
 | Python compilation | `.venv/bin/python -m compileall -q vericcl tests` | Exit code 0 |
 | CLI startup | `.venv/bin/python -m vericcl --help` | Exit code 0; `solve` and `verify` subcommands listed |
 | Whitespace validation | `git diff --check` | Exit code 0; no errors |
