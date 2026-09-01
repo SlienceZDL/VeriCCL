@@ -185,7 +185,6 @@ class CandidateReport:
     tuning_strategy: Mapping[str, object]
     runtime_recommendations: tuple
     reproducibility: Mapping[str, object]
-    restrictions: tuple = ()
     planning_mode: str = "unknown"
     requested_problem_count: int = 0
     routing_unit_count: int = 0
@@ -203,6 +202,7 @@ class CandidateReport:
     model_general_constraints_max: int = 0
     verification_time_s: float = 0.0
     cache_hit: bool = False
+    restrictions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for field in (

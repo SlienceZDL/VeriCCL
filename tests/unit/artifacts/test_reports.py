@@ -9,6 +9,7 @@ from vericcl.artifacts.hashing import (
     verify_artifact_binding,
 )
 from vericcl.artifacts.reports import (
+    CandidateReport,
     build_candidate_report,
     build_validation_json,
 )
@@ -144,6 +145,85 @@ def test_report_contains_reproducibility_validation_and_xml_binding():
         value.candidate_signature,
         outcome.artifact.sha256,
     )
+
+
+def test_candidate_report_preserves_legacy_positional_field_order():
+    schedule = two_rank_allreduce_schedule()
+    input_value = inputs()
+    topology_value = topology()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology_value,
+    )
+    source = build_candidate_report(
+        _candidate(schedule),
+        input_value,
+        topology_value,
+        outcome,
+        overlay=None,
+        applied_strategies={},
+        hierarchy_plan={"planning_mode": "direct"},
+        rejection_reason=None,
+        selected_best=False,
+        tuning_strategy={},
+    )
+    legacy_field_order = (
+        "schema_version",
+        "candidate_id",
+        "normalized_input_sha256",
+        "topology_signature",
+        "candidate_signature",
+        "artifact_binding_sha256",
+        "requested_strategies",
+        "applied_strategies",
+        "strategy_parameters",
+        "overlay",
+        "hierarchy_plan",
+        "channel_count",
+        "buffer_plan",
+        "solver_metrics",
+        "validation",
+        "lineage",
+        "rejection_reason",
+        "selected_best",
+        "proven_optimal",
+        "search_space_restricted",
+        "runtime_compatible",
+        "xml_sha256",
+        "bdd_evidence",
+        "simulation_evidence",
+        "tuning_strategy",
+        "runtime_recommendations",
+        "reproducibility",
+        "planning_mode",
+        "requested_problem_count",
+        "routing_unit_count",
+        "template_count",
+        "template_member_count",
+        "route_model_count",
+        "fallback_member_model_count",
+        "search_model_count_total",
+        "route_model_build_time_s",
+        "route_model_optimize_time_s",
+        "template_expansion_time_s",
+        "global_scheduling_time_s",
+        "model_variables_max",
+        "model_constraints_max",
+        "model_general_constraints_max",
+        "verification_time_s",
+        "cache_hit",
+    )
+
+    reconstructed = CandidateReport(
+        *(getattr(source, name) for name in legacy_field_order)
+    )
+
+    assert all(
+        getattr(reconstructed, name) == getattr(source, name)
+        for name in legacy_field_order
+    )
+    assert reconstructed.restrictions == ()
 
 
 def test_report_keeps_candidate_and_run_model_counts_distinct():
