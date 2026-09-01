@@ -461,11 +461,35 @@ def test_force_resolve_bypasses_complete_candidate_cache(monkeypatch):
     assert calls
 
 
-def test_cache_hit_preserves_structural_diagnostics_and_zeros_hit_times():
+def test_cache_hit_preserves_structure_and_zeros_execution_diagnostics():
     cache = CandidateCache()
     request = _request()
 
     cold = solve(request, cache=cache)
+    historical = SearchDiagnostics(
+        requested_problem_count=cold.diagnostics.requested_problem_count,
+        routing_unit_count=cold.diagnostics.routing_unit_count,
+        template_count=cold.diagnostics.template_count,
+        template_member_count=cold.diagnostics.template_member_count,
+        route_model_count=7,
+        fallback_member_model_count=2,
+        search_model_count_total=11,
+        route_model_build_time_s=1.25,
+        route_model_optimize_time_s=2.5,
+        template_expansion_time_s=3.5,
+        global_scheduling_time_s=4.5,
+        model_variables_max=13,
+        model_constraints_max=17,
+        model_general_constraints_max=19,
+    )
+    cache_key = next(iter(cache._entries))
+    cache.put(
+        cache_key,
+        cold.selected_candidate,
+        ttl_seconds=10,
+        complete=True,
+        diagnostics=historical,
+    )
     hot = solve(request, cache=cache)
 
     assert not cold.cache_hit
@@ -477,15 +501,9 @@ def test_cache_hit_preserves_structural_diagnostics_and_zeros_hit_times():
         "routing_unit_count",
         "template_count",
         "template_member_count",
-        "route_model_count",
-        "fallback_member_model_count",
-        "search_model_count_total",
-        "model_variables_max",
-        "model_constraints_max",
-        "model_general_constraints_max",
     ):
         assert getattr(hot.diagnostics, field) == getattr(
-            cold.diagnostics,
+            historical,
             field,
         )
     assert hot.diagnostics.requested_problem_count > 0
@@ -494,6 +512,12 @@ def test_cache_hit_preserves_structural_diagnostics_and_zeros_hit_times():
     assert hot.diagnostics.route_model_optimize_time_s == 0.0
     assert hot.diagnostics.template_expansion_time_s == 0.0
     assert hot.diagnostics.global_scheduling_time_s == 0.0
+    assert hot.diagnostics.route_model_count == 0
+    assert hot.diagnostics.fallback_member_model_count == 0
+    assert hot.diagnostics.search_model_count_total == 0
+    assert hot.diagnostics.model_variables_max == 0
+    assert hot.diagnostics.model_constraints_max == 0
+    assert hot.diagnostics.model_general_constraints_max == 0
 
 
 def test_auto_skips_throughput_when_cv_adjusted_gain_is_too_small(

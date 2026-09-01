@@ -726,7 +726,12 @@ class CandidateCache:
             if current >= entry.expires_at:
                 del self._entries[key]
                 return None
-            value = entry.value
+            missing = object()
+            value = getattr(entry, "value", missing)
+            if value is missing:
+                value = getattr(entry, "candidate", missing)
+            if value is missing:
+                raise SemanticError("cache entry value is invalid")
             if isinstance(value, SolveCandidate):
                 value = CachedCandidate(value)
             if not isinstance(value, CachedCandidate):

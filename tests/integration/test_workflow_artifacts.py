@@ -237,19 +237,25 @@ def test_workflow_reports_cold_and_hot_cache_diagnostic_provenance(
     assert hot_summary["cache_hit"] is True
     assert cold_report["cache_hit"] is False
     assert hot_report["cache_hit"] is True
+    assert hot_summary["planning_mode"] == cold_summary["planning_mode"]
+    assert hot_report["planning_mode"] == cold_report["planning_mode"]
     for field in (
         "requested_problem_count",
         "routing_unit_count",
         "template_count",
         "template_member_count",
-        "route_model_count",
-        "search_model_count_total",
     ):
         assert hot_summary[field] == cold_summary[field]
         assert hot_report[field] == cold_report[field]
     assert hot_summary["requested_problem_count"] > 0
     assert hot_summary["template_count"] > 0
     for field in (
+        "route_model_count",
+        "fallback_member_model_count",
+        "search_model_count_total",
+        "model_variables_max",
+        "model_constraints_max",
+        "model_general_constraints_max",
         "route_model_build_time_s",
         "route_model_optimize_time_s",
         "template_expansion_time_s",
@@ -257,6 +263,12 @@ def test_workflow_reports_cold_and_hot_cache_diagnostic_provenance(
     ):
         assert hot_summary[field] == 0.0
         assert hot_report[field] == 0.0
+    assert hot_report["verification_time_s"] > 0.0
+    assert hot_summary["verification_time_s"] >= (
+        hot_report["verification_time_s"]
+    )
+    assert hot_summary["elapsed_s"] > 0.0
+    assert hot_summary["total_wall_clock_time_s"] == hot_summary["elapsed_s"]
 
 
 def test_solve_reports_direct_fallback_for_requested_hierarchy(tmp_path):

@@ -14,7 +14,6 @@ from vericcl.planner.model import PlanningMode
 from vericcl.solver.cache import (
     CacheSignature,
     CandidateCache,
-    _CacheEntry,
     build_cache_signature,
     candidate_cache_key,
     performance_cache_key,
@@ -35,6 +34,13 @@ pytestmark = pytest.mark.phase03
 
 
 EXAMPLES = Path(__file__).parents[3] / "vericcl" / "examples"
+
+
+class _LegacyCacheEntry:
+    def __init__(self, candidate_value, expires_at, complete):
+        self.candidate = candidate_value
+        self.expires_at = expires_at
+        self.complete = complete
 
 
 def request(seed=0, environment="env-a"):
@@ -396,11 +402,13 @@ def test_typed_cache_entry_round_trips_candidate_and_diagnostics():
 def test_candidate_only_cache_entry_reads_with_default_diagnostics():
     cache = CandidateCache()
     value = candidate()
-    cache._entries["key"] = _CacheEntry(
-        value=value,
+    legacy = _LegacyCacheEntry(
+        candidate_value=value,
         expires_at=10.0,
         complete=True,
     )
+    assert not hasattr(legacy, "value")
+    cache._entries["key"] = legacy
 
     cached = cache.get_entry("key", now=1)
 

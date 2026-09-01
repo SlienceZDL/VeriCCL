@@ -646,12 +646,17 @@ def solve(
             or cached_entry.candidate.proven_optimal
         ):
             cached = replace(cached_entry.candidate, selected_best=True)
-            cached_diagnostics = replace(
-                cached_entry.diagnostics,
-                route_model_build_time_s=0.0,
-                route_model_optimize_time_s=0.0,
-                template_expansion_time_s=0.0,
-                global_scheduling_time_s=0.0,
+            cached_diagnostics = SearchDiagnostics(
+                requested_problem_count=(
+                    cached_entry.diagnostics.requested_problem_count
+                ),
+                routing_unit_count=(
+                    cached_entry.diagnostics.routing_unit_count
+                ),
+                template_count=cached_entry.diagnostics.template_count,
+                template_member_count=(
+                    cached_entry.diagnostics.template_member_count
+                ),
             )
             return SolveResult(
                 status=cached.metrics.status,
