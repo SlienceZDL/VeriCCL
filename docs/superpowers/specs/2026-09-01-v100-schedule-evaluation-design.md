@@ -2,6 +2,8 @@
 
 **日期：** 2026-09-01
 
+**修订：** 2026-09-02，根据 Gurobi 许可证只读预检调整控制端与 MPI 启动端。
+
 **目标：** 基于现有 V100 2×4 与 2×8 拓扑、AllGather/AllReduce sketch 和默认 atom，完成 24 个调度的合成、离线验证、在线校准、在线验证与调优，并在 node2/node4 上使用同一套 MSCCL 运行时测试 VeriCCL XML 和 `/home/zdl/MSCCL/test` 中的对照 XML。保存完整日志，最终比较仅使用 in-place `algbw`。
 
 ## 1. 范围与成功标准
@@ -115,7 +117,7 @@ AllGather 的 `total_size_bytes` 表示每 Rank 输入大小，因此 nccl-tests
 
 ## 8. 非共享文件系统支持
 
-node2 与 node4 的 `/home/zdl` 不是共享文件系统。默认单机行为保持不变，并增加可注入依赖：
+node2 与 node4 的 `/home/zdl` 不是共享文件系统。2026-09-02 的只读预检确认：node4 的 Gurobi 13.0.3 许可证 `2634413` 已过期，node2 的 Gurobi 13.0.2 许可证 `2802355` 可正常求解。不得复制、修改或更新许可证。完整 VeriCCL/Gurobi 工作流因此在 node2 运行，但所有 MPI/nccl-tests 命令仍由 node2 通过 SSH 委托 node4 发起。默认单机行为保持不变，并增加可注入依赖：
 
 ```python
 build_online_context_factory(
@@ -128,10 +130,11 @@ build_online_context_factory(
 
 - `executor=None` 时仍创建 `SubprocessCommandExecutor`。
 - `trace_collector=None` 时仍使用 `collect_trace_files`。
-- 实验运行器提供 staging executor：发现 `MSCCL_XML_FILES` 后，在启动 MPI 前将 XML 原子复制到 node2 的同一路径。
-- 实验 trace collector 在分析前将 node2 生成的 Rank trace 复制回 node4 的本地 trace 目录，再调用标准 collector。
+- 实验运行器提供 remote staging executor：发现 `MSCCL_XML_FILES` 后，先将 node2 上的 XML 原子复制到 node4 的同一路径，再通过 SSH 在 node4 执行完整命令并原样返回 stdout、stderr 和退出状态。
+- 2×4 hostfile 中 node4 对应 Rank 0–3，node2 对应 Rank 4–7；2×8 中 node4 对应 Rank 0–7，node2 对应 Rank 8–15。
+- 实验 trace collector 在分析前将 node4 生成的前半 Rank trace 复制回 node2 的本地 trace 目录；node2 生成的后半 Rank trace 已经位于控制端。全部文件齐备后再调用标准 collector。
 - 所有 SSH/SCP 命令使用参数数组和固定主机清单，不拼接 shell 字符串。
-- staging 文件只写入 `/home/zdl/VeriCCL-experiments/<run-id>`。
+- node2 与 node4 使用相同的 `/home/zdl/VeriCCL-experiments/<run-id>` 路径。remote executor 只写入该目录，不允许写入其他远程路径。
 
 对应单元测试覆盖默认依赖、注入依赖、XML staging、缺失远程文件、trace 汇集和失败传播。
 
@@ -145,12 +148,12 @@ VeriCCL 和对照 XML 使用同一套已验证的 patched MSCCL runtime，避免
 - VeriCCL XML 使用 `NCCL_BUFFSIZE=2 × slice_size_bytes`。
 - 对照 XML 按用户给出的参考配置使用 `NCCL_BUFFSIZE=2097152`。
 
-测试从 node4 发起，生成两个隔离 hostfile：
+MPI 测试由 node2 控制端通过 SSH 在 node4 发起，生成两个隔离 hostfile，并在两台机器的相同路径保存相同内容：
 
 - 2×4：`10.0.0.104 slots=4` 与 `10.0.0.102 slots=4`。
 - 2×8：`10.0.0.104 slots=8` 与 `10.0.0.102 slots=8`。
 
-不得使用现有 `/home/zdl/MSCCL/hostfile`，因为其中包含不属于本次 node2/node4 组合的 `10.0.0.101`。MPI 保留 OpenMPI 4.1.8、`pml ob1`、`btl tcp,self,vader` 和 `btl_tcp_if_include=10.0.0.0/24`。NCCL 设置 `NCCL_SOCKET_IFNAME=eno0,enp4s0`、`NCCL_IB_DISABLE=1`、`NCCL_P2P_LEVEL=NVL`、`NCCL_IGNORE_DISABLED_P2P=1`、`NCCL_NET_GDR_LEVEL=0`、`NCCL_NET_GDR_READ=0`，并按拓扑设置可见 GPU 数量。
+不得使用现有 `/home/zdl/MSCCL/hostfile`，因为其中包含不属于本次 node2/node4 组合的 `10.0.0.101`。MPI 保留 OpenMPI 4.1.8、`pml ob1`、`btl tcp,self,vader` 和 `btl_tcp_if_include=10.0.0.0/24`。NCCL 设置 `NCCL_SOCKET_IFNAME=eno0,enp4s0`、`NCCL_IB_DISABLE=1`、`NCCL_P2P_LEVEL=NVL`、`NCCL_IGNORE_DISABLED_P2P=1`、`NCCL_NET_GDR_LEVEL=0`、`NCCL_NET_GDR_READ=0`，并按拓扑设置可见 GPU 数量。node2 与 node4 的 MSCCL、nccl-tests、clock helper、hostfile 和实验根目录必须具有相同绝对路径；预检不通过时停止实验，不创建系统级软链接或修改系统路径。
 
 ## 10. 性能测试矩阵
 
@@ -177,7 +180,7 @@ VeriCCL 和对照 XML 使用同一套已验证的 patched MSCCL runtime，避免
 
 ## 12. 结果目录与可恢复执行
 
-远程完整实验保存在：
+远程完整实验以 node2 为控制端，并在 node2/node4 的相同绝对路径保存控制文件或暂存文件：
 
 ```text
 /home/zdl/VeriCCL-experiments/2026-09-01-v100-k16/
