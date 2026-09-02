@@ -449,7 +449,7 @@ transfer\_duration=physical\_end-physical\_start
 
 `B_link(k)`不依赖目标调度是否实际出现并发度`k`。VeriCCL预先为不同channel并发度生成基准测试XML，基准消息大小固定为128 MiB。机内链路只在`1机*2卡`环境测试，机间链路只在`2机*1卡`环境测试；其余逻辑链路仅在方向角色、gateway角色、链路参数、最大channel以及共享资源结构和参数均精确同构时复用测量结果，不执行更大规模的链路基准测试。任一同类链路不满足该条件时拒绝更新，禁止按机内/机间标签粗粒度传播。每次在线执行通过`VERICCL_CALIBRATION_LINK_CLASS`选择一个与当前硬件布局一致的代表类别，未选择类别继续使用topo输入中的保守参数。全部在线任务均由MPI按每进程一张GPU启动并使用`-g 1`；机内校准使用`-np 2`，机间校准额外使用`-N 1`和hostfile，保证两个Rank分别位于两个节点。全局算子按全局Rank数启动，并由hostfile slot分布决定每节点进程数。基准结果按链路类别和完整环境签名分别持久化；`solve --online`用稳定结果更新同类链路及同类共享资源后重新构建Plan并二次求解，同时保留首轮候选、校准后二次候选及其父子关系；`verify --online`不改写输入XML，而在报告中设置`requires_resolve=true`。
 
-基准XML使用当前任务的`slice_size_bytes = S`，基准slice数量为`N_bench = 128 MiB / S`。输入参数`max_calibration_channels`默认值为16，有效最大并发度为`K_effective = min(max_calibration_channels, 16, N_bench, link_max_channels)`，保证每个活跃channel至少传输一个完整slice。VeriCCL为每个`k = 1..K_effective`生成独立基准XML并逐一测试，不使用插值、外推或提前停止。更新后的链路与共享资源`max_channels`保守限制为`K_effective`，求解器不得使用未测并发度。如果`S`不能整除128 MiB，则跳过该任务的在线链路校准并在报告中提示，不自动改变slice大小，也不使用其他slice大小的基准结果替代。
+基准XML使用当前任务的`slice_size_bytes = S`，基准slice数量为`N_bench = 128 MiB / S`。输入参数`max_calibration_channels`默认值为16，有效最大并发度统一定义为`K_effective=min(16,max_calibration_channels,128MiB/S,link_max_channels)`，保证每个活跃channel至少传输一个完整slice。VeriCCL为每个`k = 1..K_effective`生成独立基准XML并逐一测试，不使用插值、外推或提前停止。更新后的链路与共享资源`max_channels`保守限制为`K_effective`，求解器不得使用未测并发度。如果`S`不能整除128 MiB，则跳过该任务的在线链路校准并在报告中提示，不自动改变slice大小，也不使用其他slice大小的基准结果替代。
 
 固定128 MiB消息和固定slice大小不能唯一分离实测启动开销与单slice传输开销，因此在线校准保留topo输入中的`alpha`。设并发度`k`下完整传输批次的P95耗时为`D_safe(k)`，则更新：
 

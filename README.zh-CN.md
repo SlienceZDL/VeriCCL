@@ -310,6 +310,7 @@ export VERICCL_TRACE_RECORDS=1048576
 ```
 
 校准固定使用128 MiB与输入slice大小。slice大小必须整除128 MiB，否则校准状态为`not_run`。机内和节点间校准均由MPI启动，每个进程只使用一个GPU（`-g 1`）；只有节点间执行额外要求hostfile。
+对于slice大小`S`，实测并发上限为`K_effective=min(16,max_calibration_channels,128MiB/S,link_max_channels)`；VeriCCL不推断未测量的并发点。
 节点间校准的双Rank代表性基准还使用`-N 1`，确保两个进程分别位于两个节点。
 首次执行未缓存的16点校准时，应保留示例中的`--timeout-s 10800`。每个点需要20个独立release进程和1个trace进程；即使全部XML有效，1800秒工作流预算也可能不足。
 
@@ -461,7 +462,7 @@ git diff --check
 
 本次文档工作未在macOS文档主机执行CUDA编译或GPU运行。报告硬件验证结果前，必须在已配置的目标GPU环境执行已标明的服务器构建与运行命令。
 
-其他参考资料：[运行时配置](docs/runtime-configuration.md)、[验证报告](docs/validation-report.md)、[MSCCL trace补丁](runtime/msccl-trace/README.md)、[迁移说明](MIGRATION.md)、[NCCL Tests](https://github.com/NVIDIA/nccl-tests)及[官方MSCCL](https://github.com/microsoft/msccl.git)。
+其他参考资料：[V100 K<=16实验流程](docs/experiments/v100-k16.md)、[运行时配置](docs/runtime-configuration.md)、[验证报告](docs/validation-report.md)、[MSCCL trace补丁](runtime/msccl-trace/README.md)、[迁移说明](MIGRATION.md)、[NCCL Tests](https://github.com/NVIDIA/nccl-tests)及[官方MSCCL](https://github.com/microsoft/msccl.git)。
 
 ## 许可证与引用
 

@@ -68,11 +68,11 @@ export VERICCL_TRACE_RECORDS=1048576
 export VERICCL_TRACE_FILE_PREFIX=/absolute/path/to/vericcl-step
 ```
 
-For inter-node validation, the trace prefix must be on storage mounted at the
-same absolute path and visible to the launcher and collector on every node.
-Each rank writes `<prefix>.rank-<rank>.bin`; without shared storage, the
-collective may finish but collection fails because rank files remain on their
-local hosts.
+For inter-node validation, every host uses the same absolute trace prefix, but
+the path does not need shared storage. Each rank writes
+`<prefix>.rank-<rank>.bin` on its local host. With the split-host V100 executor,
+node4 owns the first half of the ranks and node2 owns the second half. The
+remote collector copies node4 files to node2 before parsing all rank files.
 
 The raw trace `iteration` field stores the MSCCL `workIndex`, which distinguishes repeated collective invocations. Trace diagnosis uses `-w 0 -n 20 -c 0`; the collector discards each timing block's setup invocation and analyzes exactly 20 measured invocations. `VERICCL_TRACE_RECORDS` is a user floor; preflight raises the effective capacity to at least `42 * max_steps_per_rank`.
 
@@ -116,7 +116,7 @@ The cache reuses only stable points with an exact environment-signature match. U
 
 ## Calibration contract
 
-Link calibration uses exactly 128 MiB and the current slice size. Intra-node calibration covers one host and two GPUs; inter-node calibration covers two hosts and one GPU each. It evaluates `k=1..min(max_calibration_channels,16,128MiB/S,link_max_channels)`. If `S` does not divide 128 MiB, calibration is `not_run` and never changes the slice size.
+Link calibration uses exactly 128 MiB and the current slice size. Intra-node calibration covers one host and two GPUs; inter-node calibration covers two hosts and one GPU each. The limit is `K_effective=min(16,max_calibration_channels,128MiB/S,link_max_channels)`, and calibration evaluates every `k=1..K_effective`. If `S` does not divide 128 MiB, calibration is `not_run` and never changes the slice size.
 
 Each concurrency point receives a separate Broadcast XML. Complete-wave duration comes from per-step traces; an incomplete final wave executes but does not contribute to `D_safe(k)`.
 

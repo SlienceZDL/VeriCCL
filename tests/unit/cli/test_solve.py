@@ -225,3 +225,15 @@ def test_clean_solve_prints_one_summary_and_returns_success(monkeypatch, capsys)
     assert captured.err == ""
     assert captured.out.count("\n") == 1
     assert "status=feasible" in captured.out
+
+
+def test_v100_experiment_document_uses_safe_fixed_contract():
+    text = Path("docs/experiments/v100-k16.md").read_text(encoding="utf-8")
+
+    assert "NCCL_IB_DISABLE=1" in text
+    assert "--config" in text
+    assert "--resume" in text
+    assert (
+        "/home/zdl/VeriCCL-experiments/2026-09-01-v100-k16" in text
+    )
+    assert "/home/cc" not in text

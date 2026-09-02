@@ -310,6 +310,7 @@ export VERICCL_TRACE_RECORDS=1048576
 ```
 
 Calibration uses exactly 128 MiB and the input slice size. The slice size must divide 128 MiB or calibration is `not_run`. Both intra-node and inter-node calibration launch one MPI process per GPU with `-g 1`; only inter-node execution additionally requires a hostfile.
+The calibrated concurrency limit is `K_effective=min(16,max_calibration_channels,128MiB/S,link_max_channels)` for slice size `S`; VeriCCL does not infer unmeasured concurrency points.
 For its two-rank representative benchmark, inter-node calibration also uses `-N 1`, placing exactly one process on each node.
 Keep the documented `--timeout-s 10800` for an uncached 16-point calibration. Each point starts 20 independent release processes plus one trace process; a 1800-second workflow budget can be insufficient even when every XML is valid.
 
@@ -461,7 +462,7 @@ git diff --check
 
 CUDA compilation and GPU execution were not performed on the macOS documentation host. Run the marked server build and execution commands in the configured target GPU environment before reporting hardware validation.
 
-Further references: [runtime configuration](docs/runtime-configuration.md), [validation reports](docs/validation-report.md), [MSCCL trace patch](runtime/msccl-trace/README.md), [migration notes](MIGRATION.md), [NCCL Tests](https://github.com/NVIDIA/nccl-tests), and [official MSCCL](https://github.com/microsoft/msccl.git).
+Further references: [V100 K<=16 experiment workflow](docs/experiments/v100-k16.md), [runtime configuration](docs/runtime-configuration.md), [validation reports](docs/validation-report.md), [MSCCL trace patch](runtime/msccl-trace/README.md), [migration notes](MIGRATION.md), [NCCL Tests](https://github.com/NVIDIA/nccl-tests), and [official MSCCL](https://github.com/microsoft/msccl.git).
 
 ## License and Citation
 
