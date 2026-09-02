@@ -228,6 +228,23 @@ def _calibration_plan(cache, measure, *, force=False):
     )
 
 
+def test_calibration_plan_accepts_complete_global_software_range():
+    CalibrationPlan(
+        request=CalibrationRequest(
+            link_class="intra_node",
+            slice_size_bytes=1024,
+            max_calibration_channels=32,
+            datatype="float",
+        ),
+        alpha_us=1.0,
+        signatures=tuple(_signature(value) for value in range(1, 17)),
+        cache=CalibrationCache(),
+        measure_point=lambda signature: _point(
+            concurrency=signature.concurrency,
+        ),
+    )
+
+
 def _performance_calls(executor):
     return [
         call

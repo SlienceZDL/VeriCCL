@@ -102,6 +102,15 @@ def test_calibration_builds_every_integer_concurrency_without_interpolation():
     ) == ("1", "2", "3", "4")
 
 
+def test_calibration_respects_global_software_concurrency_limit():
+    artifacts = build_calibration_artifacts(
+        _request(max_calibration_channels=32),
+        _topology(max_channels=32),
+    )
+
+    assert len(artifacts) == 16
+
+
 def test_calibration_benchmark_exposes_matching_schedule_and_inputs():
     benchmark = build_calibration_benchmark(
         _request(),

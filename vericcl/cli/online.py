@@ -7,6 +7,7 @@ from pathlib import Path
 from time import monotonic as _monotonic
 from typing import Mapping
 
+from vericcl.constants import SOFTWARE_MAX_CONCURRENCY
 from vericcl.errors import InputValidationError, SemanticError
 from vericcl.semantics.collective import CollectiveKind
 from vericcl.topology.loader import load_topology
@@ -297,7 +298,7 @@ def build_online_context_factory(
             effective = (
                 0
                 if count is None
-                else min(maximum, 32, count)
+                else min(maximum, SOFTWARE_MAX_CONCURRENCY, count)
             )
             signatures = tuple(
                 EnvironmentSignature(

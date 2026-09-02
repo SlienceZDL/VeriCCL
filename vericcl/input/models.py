@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Optional, Tuple
 
+from vericcl.constants import SOFTWARE_MAX_CONCURRENCY
 from vericcl.semantics.collective import CollectiveSpec
 
 
@@ -16,7 +17,7 @@ class Hyperparameters:
     total_size_bytes: int
     slice_size_bytes: int
     objective_mode: ObjectiveMode = ObjectiveMode.AUTO
-    max_calibration_channels: int = 32
+    max_calibration_channels: int = SOFTWARE_MAX_CONCURRENCY
     min_expected_improvement: float = 0.01
     min_tuning_improvement: float = 0.01
     max_tuning_iterations: int = 20
@@ -35,7 +36,7 @@ class SolverConfig:
     mip_gap: float = 1e-4
     require_proven_optimal: bool = False
     solver_seed: int = 0
-    max_channels: int = 32
+    max_channels: int = SOFTWARE_MAX_CONCURRENCY
     max_threads_per_model: int = 12
     max_parallel_models: int = 4
     force_resolve: bool = False

@@ -161,7 +161,7 @@ Sketch (`vericcl/examples/sketch/allreduce_8m_1m.json`):
 - `collective.operator` is one of the six direct operators above. `root` is required only for `broadcast` and `reduce`; reduction operators require `reduction_op` in `avg|max|min|prod|sum`. `datatype` is non-empty and `inplace` is Boolean.
 - `total_size_bytes` and `slice_size_bytes` are positive byte counts. Total size must be divisible by slice size; `input_chunkup`, when present, must equal their quotient. `alltoall` and `reduce_scatter` additionally require the slice count to be divisible by `ranks`.
 - Hyperparameters control objective selection, calibration concurrency, tuning thresholds/iterations, verification timeout, and forced recalibration. The example shows their accepted types and defaults.
-- `solver` controls total/per-model seconds, `mip_gap` in `[0,1]`, proof requirement, deterministic seed, channels in `[1,32]`, thread/model parallelism, and forced re-solving.
+- `solver` controls total/per-model seconds, `mip_gap` in `[0,1]`, proof requirement, deterministic seed, channels in `[1,16]`, thread/model parallelism, and forced re-solving.
 
 Atom (`vericcl/examples/atom/constructive.json` and `vericcl/examples/atom/default.json`):
 
@@ -311,7 +311,7 @@ export VERICCL_TRACE_RECORDS=1048576
 
 Calibration uses exactly 128 MiB and the input slice size. The slice size must divide 128 MiB or calibration is `not_run`. Both intra-node and inter-node calibration launch one MPI process per GPU with `-g 1`; only inter-node execution additionally requires a hostfile.
 For its two-rank representative benchmark, inter-node calibration also uses `-N 1`, placing exactly one process on each node.
-Keep the documented `--timeout-s 10800` for an uncached 32-point calibration. Each point starts 20 independent release processes plus one trace process; a 1800-second workflow budget can be insufficient even when every XML is valid.
+Keep the documented `--timeout-s 10800` for an uncached 16-point calibration. Each point starts 20 independent release processes plus one trace process; a 1800-second workflow budget can be insufficient even when every XML is valid.
 
 Release measurement and trace diagnosis are separate runs. Release uses five warmups, 20 measurements, correctness checks, and `VERICCL_TRACE_ENABLE=0`; trace uses zero warmups, 20 measurements, `-c 0`, and `VERICCL_TRACE_ENABLE=1`. Trace cost is never performance data.
 

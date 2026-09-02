@@ -12,6 +12,7 @@ from typing import Callable, Mapping, Optional, Tuple
 
 from lxml import etree
 
+from vericcl.constants import SOFTWARE_MAX_CONCURRENCY
 from vericcl.errors import SemanticError
 from vericcl.input.models import ResolvedInput
 from vericcl.semantics.atom import Schedule
@@ -147,7 +148,7 @@ class CalibrationPlan:
             if benchmark_slices is None
             else min(
                 self.request.max_calibration_channels,
-                32,
+                SOFTWARE_MAX_CONCURRENCY,
                 benchmark_slices,
             )
         )

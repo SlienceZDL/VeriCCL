@@ -4,6 +4,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Tuple
 
+from vericcl.constants import SOFTWARE_MAX_CONCURRENCY
 from vericcl.errors import InputValidationError
 from vericcl.input.json_codec import sha256_json
 from vericcl.input.models import (
@@ -325,10 +326,13 @@ def _configs(
         slice_size_bytes=slice_size,
         objective_mode=objective_mode,
         max_calibration_channels=_integer(
-            hyperparameters.get("max_calibration_channels", 32),
+            hyperparameters.get(
+                "max_calibration_channels",
+                SOFTWARE_MAX_CONCURRENCY,
+            ),
             "hyperparameters.max_calibration_channels",
             minimum=1,
-            maximum=32,
+            maximum=SOFTWARE_MAX_CONCURRENCY,
         ),
         min_expected_improvement=_number(
             hyperparameters.get("min_expected_improvement", 0.01),
@@ -390,10 +394,15 @@ def _configs(
             minimum=0,
         ),
         max_channels=_integer(
-            _section_value(solver, hyperparameters, "max_channels", 32),
+            _section_value(
+                solver,
+                hyperparameters,
+                "max_channels",
+                SOFTWARE_MAX_CONCURRENCY,
+            ),
             "solver.max_channels",
             minimum=1,
-            maximum=32,
+            maximum=SOFTWARE_MAX_CONCURRENCY,
         ),
         max_threads_per_model=_integer(
             _section_value(solver, hyperparameters, "max_threads_per_model", 12),

@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Optional, Sequence, Tuple
 
+from vericcl.constants import SOFTWARE_MAX_CONCURRENCY
 from vericcl.errors import SemanticError
 from vericcl.topology.model import PerformanceCurve, Topology
 from vericcl.verification.online.model import PerformanceStatistics
@@ -15,7 +16,7 @@ from vericcl.verification.online.trace_analysis import TraceAnalysis
 
 
 BENCHMARK_SIZE_BYTES = 128 * 1024 * 1024
-MAX_CALIBRATION_CONCURRENCY = 32
+MAX_CALIBRATION_CONCURRENCY = SOFTWARE_MAX_CONCURRENCY
 CALIBRATION_LINK_CLASSES = frozenset({"intra_node", "inter_node"})
 CALIBRATION_TRANSFER_PREFIX = "calibration-send-"
 

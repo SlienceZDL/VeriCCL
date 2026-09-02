@@ -161,7 +161,7 @@ Sketch（`vericcl/examples/sketch/allreduce_8m_1m.json`）：
 - `collective.operator`为上述六个直接算子之一。仅`broadcast`与`reduce`要求`root`；归约算子要求`reduction_op`属于`avg|max|min|prod|sum`。`datatype`不能为空，`inplace`为Boolean。
 - `total_size_bytes`与`slice_size_bytes`均为正字节数。总大小必须被slice大小整除；若存在`input_chunkup`，其值必须等于两者之商。`alltoall`与`reduce_scatter`还要求slice数可被`ranks`整除。
 - 超参数控制目标选择、校准并发度、调优阈值与迭代数、验证超时及强制重新校准。示例给出接受的类型与默认值。
-- `solver`控制总求解/单模型秒数、`[0,1]`范围内的`mip_gap`、最优性证明要求、确定性seed、`[1,32]`范围内的channel数、线程/模型并行度及强制重新求解。
+- `solver`控制总求解/单模型秒数、`[0,1]`范围内的`mip_gap`、最优性证明要求、确定性seed、`[1,16]`范围内的channel数、线程/模型并行度及强制重新求解。
 
 Atom（`vericcl/examples/atom/constructive.json`与`vericcl/examples/atom/default.json`）：
 
@@ -311,7 +311,7 @@ export VERICCL_TRACE_RECORDS=1048576
 
 校准固定使用128 MiB与输入slice大小。slice大小必须整除128 MiB，否则校准状态为`not_run`。机内和节点间校准均由MPI启动，每个进程只使用一个GPU（`-g 1`）；只有节点间执行额外要求hostfile。
 节点间校准的双Rank代表性基准还使用`-N 1`，确保两个进程分别位于两个节点。
-首次执行未缓存的32点校准时，应保留示例中的`--timeout-s 10800`。每个点需要20个独立release进程和1个trace进程；即使全部XML有效，1800秒工作流预算也可能不足。
+首次执行未缓存的16点校准时，应保留示例中的`--timeout-s 10800`。每个点需要20个独立release进程和1个trace进程；即使全部XML有效，1800秒工作流预算也可能不足。
 
 release测量与trace诊断必须分开运行。release使用5次预热、20次测量、正确性检查及`VERICCL_TRACE_ENABLE=0`；trace使用0次预热、20次测量、`-c 0`及`VERICCL_TRACE_ENABLE=1`。trace开销不能作为性能数据。
 

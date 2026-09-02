@@ -2,6 +2,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from vericcl.constants import SOFTWARE_MAX_CONCURRENCY
 from vericcl.input.models import Hyperparameters, ObjectiveMode, SolverConfig
 from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 
@@ -22,7 +23,7 @@ def test_hyperparameter_defaults_match_public_contract():
     hyperparameters = Hyperparameters(total_size_bytes=8, slice_size_bytes=1)
 
     assert hyperparameters.objective_mode is ObjectiveMode.AUTO
-    assert hyperparameters.max_calibration_channels == 32
+    assert hyperparameters.max_calibration_channels == SOFTWARE_MAX_CONCURRENCY
     assert hyperparameters.min_expected_improvement == 0.01
     assert hyperparameters.min_tuning_improvement == 0.01
     assert hyperparameters.max_tuning_iterations == 20
@@ -38,10 +39,14 @@ def test_solver_defaults_match_public_contract():
     assert solver.mip_gap == 1e-4
     assert solver.require_proven_optimal is False
     assert solver.solver_seed == 0
-    assert solver.max_channels == 32
+    assert solver.max_channels == SOFTWARE_MAX_CONCURRENCY
     assert solver.max_threads_per_model == 12
     assert solver.max_parallel_models == 4
     assert solver.force_resolve is False
+
+
+def test_public_concurrency_limit_is_sixteen():
+    assert SOFTWARE_MAX_CONCURRENCY == 16
 
 
 def test_collective_spec_defaults_to_out_of_place():

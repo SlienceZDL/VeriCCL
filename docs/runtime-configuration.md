@@ -110,13 +110,13 @@ Calibration executes concurrency points in order. Before each uncached point, Ve
 
 Intra-node calibration launches two MPI processes on one node. Inter-node calibration adds `-N 1` to `-np 2` with the configured hostfile, placing exactly one process and one GPU on each of two nodes. Global operator validation uses the global rank count and the hostfile slot distribution instead.
 
-Use the documented 10800-second workflow budget for a first uncached 32-point calibration. A point contains 20 independent release processes and one trace process, so a 1800-second budget may expire without indicating an XML or hardware failure.
+Use the documented 10800-second workflow budget for a first uncached 16-point calibration. A point contains 20 independent release processes and one trace process, so a 1800-second budget may expire without indicating an XML or hardware failure.
 
 The cache reuses only stable points with an exact environment-signature match. Unstable points remain in the cache file for audit but are automatically measured again on the next run.
 
 ## Calibration contract
 
-Link calibration uses exactly 128 MiB and the current slice size. Intra-node calibration covers one host and two GPUs; inter-node calibration covers two hosts and one GPU each. It evaluates `k=1..min(max_calibration_channels,32,128MiB/S,link_max_channels)`. If `S` does not divide 128 MiB, calibration is `not_run` and never changes the slice size.
+Link calibration uses exactly 128 MiB and the current slice size. Intra-node calibration covers one host and two GPUs; inter-node calibration covers two hosts and one GPU each. It evaluates `k=1..min(max_calibration_channels,16,128MiB/S,link_max_channels)`. If `S` does not divide 128 MiB, calibration is `not_run` and never changes the slice size.
 
 Each concurrency point receives a separate Broadcast XML. Complete-wave duration comes from per-step traces; an incomplete final wave executes but does not contribute to `D_safe(k)`.
 

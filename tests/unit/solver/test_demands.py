@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from vericcl.constants import SOFTWARE_MAX_CONCURRENCY
 from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import AtomConstraints, ForbiddenTransfer
 from vericcl.errors import SemanticError
@@ -187,8 +188,16 @@ def test_candidate_edges_include_only_legal_channel_indices():
     problem = allreduce_problem("allreduce-ag-a00000000")
 
     assert CandidateEdge(0, 1, 0) in problem.candidate_edges
-    assert CandidateEdge(0, 1, 31) in problem.candidate_edges
-    assert CandidateEdge(0, 1, 32) not in problem.candidate_edges
+    assert CandidateEdge(
+        0,
+        1,
+        SOFTWARE_MAX_CONCURRENCY - 1,
+    ) in problem.candidate_edges
+    assert CandidateEdge(
+        0,
+        1,
+        SOFTWARE_MAX_CONCURRENCY,
+    ) not in problem.candidate_edges
 
 
 def test_constructive_path_seeds_are_bounded_without_pruning_milp_edges():

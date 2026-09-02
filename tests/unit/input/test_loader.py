@@ -4,6 +4,7 @@ from typing import Optional
 
 import pytest
 
+from vericcl.constants import SOFTWARE_MAX_CONCURRENCY
 from vericcl.errors import InputValidationError
 from vericcl.input.loader import resolve_inputs
 from vericcl.input.models import ObjectiveMode
@@ -93,7 +94,10 @@ def test_resolve_inputs_expands_all_defaults(tmp_path):
     strategies = resolved.resolved_atom["strategies"]
     assert collective["inplace"] is False
     assert hyperparameters["objective_mode"] == "auto"
-    assert hyperparameters["max_calibration_channels"] == 32
+    assert (
+        hyperparameters["max_calibration_channels"]
+        == SOFTWARE_MAX_CONCURRENCY
+    )
     assert hyperparameters["min_expected_improvement"] == 0.01
     assert hyperparameters["min_tuning_improvement"] == 0.01
     assert hyperparameters["max_tuning_iterations"] == 20
@@ -103,6 +107,7 @@ def test_resolve_inputs_expands_all_defaults(tmp_path):
     assert solver["per_model_timeout_s"] == 1800
     assert solver["mip_gap"] == 1e-4
     assert solver["solver_seed"] == 0
+    assert solver["max_channels"] == SOFTWARE_MAX_CONCURRENCY
     assert strategies == {
         "batching": False,
         "constructive_trees": True,
@@ -366,6 +371,18 @@ def test_invalid_numeric_configuration_is_rejected(
     write_json(paths[1], sketch)
 
     with pytest.raises(InputValidationError):
+        resolve_inputs(*paths)
+
+
+def test_values_above_global_concurrency_limit_are_rejected(tmp_path):
+    paths = write_three_inputs(tmp_path)
+    sketch = read_json(paths[1])
+    sketch["solver"] = {
+        "max_channels": SOFTWARE_MAX_CONCURRENCY + 1,
+    }
+    write_json(paths[1], sketch)
+
+    with pytest.raises(InputValidationError, match="max_channels"):
         resolve_inputs(*paths)
 
 
