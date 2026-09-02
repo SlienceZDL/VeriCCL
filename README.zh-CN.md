@@ -312,9 +312,9 @@ export VERICCL_TRACE_RECORDS=1048576
 校准固定使用128 MiB与输入slice大小。slice大小必须整除128 MiB，否则校准状态为`not_run`。机内和节点间校准均由MPI启动，每个进程只使用一个GPU（`-g 1`）；只有节点间执行额外要求hostfile。
 对于slice大小`S`，实测并发上限为`K_effective=min(16,max_calibration_channels,128MiB/S,link_max_channels)`；VeriCCL不推断未测量的并发点。
 节点间校准的双Rank代表性基准还使用`-N 1`，确保两个进程分别位于两个节点。
-首次执行未缓存的16点校准时，应保留示例中的`--timeout-s 10800`。每个点需要20个独立release进程和1个trace进程；即使全部XML有效，1800秒工作流预算也可能不足。
+首次执行未缓存的16点校准时，应保留示例中的`--timeout-s 10800`。每个校准点执行1个带正确性检查的release进程，该进程包含5次预热和20次正式测量；随后执行1个包含20次迭代的trace进程。校准稳定性与`B_link(k)`由trace的逐迭代数据确定。最终算子验证仍采用更严格的统计方式：每轮执行20个独立release进程，测量不稳定时最多执行3轮。
 
-release测量与trace诊断必须分开运行。release使用5次预热、20次测量、正确性检查及`VERICCL_TRACE_ENABLE=0`；trace使用0次预热、20次测量、`-c 0`及`VERICCL_TRACE_ENABLE=1`。trace开销不能作为性能数据。
+release测量与trace诊断必须分开运行。release使用5次预热、20次测量、正确性检查及`VERICCL_TRACE_ENABLE=0`；trace使用0次预热、20次测量、`-c 0`及`VERICCL_TRACE_ENABLE=1`。trace运行输出的nccl-tests聚合时间不作为性能数据；校准仅使用其20次迭代中记录的sender本地step时间区间。
 
 ### MSCCL激活边界
 

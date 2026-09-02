@@ -831,6 +831,9 @@ def test_stable_online_calibration_updates_topology_and_resolves_again(
     assert evidence["calibration_status"] == "passed"
     assert evidence["requires_resolve"] is False
     assert evidence["calibration"]["link_class"] == "intra_node"
+    assert evidence["calibration"]["release_mode"] == (
+        "single_process_correctness"
+    )
     assert evidence["calibration"]["points"][0]["p95_us"] == 10.0
     assert "mean_us" in evidence["calibration"]["points"][0]
     assert "population_standard_deviation_us" in evidence[

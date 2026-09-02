@@ -90,6 +90,19 @@ def test_runner_retries_three_independent_unstable_rounds():
     assert executor.calls[1].command[:3] == ("mpirun", "-np", "2")
 
 
+def test_runner_validates_release_with_one_correctness_process():
+    executor = SequenceExecutor((10.0,))
+    runner = NcclTestsRunner(executor, environment={"A": "B"})
+
+    runner.validate_release(_request())
+
+    assert len(executor.calls) == 2
+    command = executor.calls[1].command
+    assert command[command.index("-w") + 1] == "5"
+    assert command[command.index("-n") + 1] == "20"
+    assert command[command.index("-c") + 1] == "1"
+
+
 def test_runner_rejects_multiple_rows_and_invalid_executor_results():
     class MultipleRows:
         def run(self, request):

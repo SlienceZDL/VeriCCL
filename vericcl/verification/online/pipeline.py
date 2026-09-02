@@ -277,6 +277,7 @@ class OnlineContext:
     trace_collector: TraceCollector = collect_trace_files
     calibration_plan: Optional[CalibrationPlan] = None
     online_tuning_requested: bool = False
+    single_process_release_validation: bool = False
     chunk_steps: int = EXPECTED_MSCCL_CHUNK_STEPS
     slice_steps: int = EXPECTED_MSCCL_SLICE_STEPS
     trace_record_capacity: int = 1048576
@@ -331,6 +332,10 @@ class OnlineContext:
             raise SemanticError("online context calibration plan is invalid")
         if not isinstance(self.online_tuning_requested, bool):
             raise SemanticError("online_tuning_requested must be boolean")
+        if not isinstance(self.single_process_release_validation, bool):
+            raise SemanticError(
+                "single_process_release_validation must be boolean"
+            )
         if self.chunk_steps != EXPECTED_MSCCL_CHUNK_STEPS:
             raise SemanticError("chunk_steps must equal four")
         if self.slice_steps != EXPECTED_MSCCL_SLICE_STEPS:
@@ -386,6 +391,7 @@ class OnlineValidationResult:
     requires_resolve: bool
     online_tuning_allowed: bool
     tuning_evidence: Optional[OnlineTuningEvidence]
+    single_process_release_validation: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.context_schedule, Schedule):
@@ -450,6 +456,8 @@ class OnlineValidationResult:
             bool,
         ):
             raise SemanticError("online result boolean field is invalid")
+        if not isinstance(self.single_process_release_validation, bool):
+            raise SemanticError("online result release mode is invalid")
         if self.tuning_evidence is not None and not isinstance(
             self.tuning_evidence,
             OnlineTuningEvidence,
@@ -480,6 +488,9 @@ def _result(
         "requires_resolve": False,
         "online_tuning_allowed": False,
         "tuning_evidence": None,
+        "single_process_release_validation": (
+            context.single_process_release_validation
+        ),
     }
     values.update(changes)
     return OnlineValidationResult(**values)
@@ -888,7 +899,11 @@ def run_online_validation(context: OnlineContext) -> OnlineValidationResult:
         timeout_s=operator_timeout,
     )
     try:
-        history = runner.measure(context.request)
+        history = None
+        if context.single_process_release_validation:
+            runner.validate_release(context.request)
+        else:
+            history = runner.measure(context.request)
     except SemanticError as error:
         return _result(
             context,
@@ -900,11 +915,9 @@ def run_online_validation(context: OnlineContext) -> OnlineValidationResult:
             runtime_environment=prepared.release_environment,
             calibration=calibration,
         )
-    release_status = (
-        OnlineStageStatus.PASSED
-        if history.stable
-        else OnlineStageStatus.UNSTABLE
-    )
+    release_status = OnlineStageStatus.PASSED
+    if history is not None and not history.stable:
+        release_status = OnlineStageStatus.UNSTABLE
 
     assert context.clock_sync_binary is not None
     assert context.trace_file_prefix is not None
@@ -1009,6 +1022,7 @@ def run_online_validation(context: OnlineContext) -> OnlineValidationResult:
     tuning_allowed = (
         context.online_tuning_requested
         and not calibration_blocks_tuning
+        and history is not None
         and history.stable
         and trace.analysis.tuning_eligible
     )

@@ -312,9 +312,9 @@ export VERICCL_TRACE_RECORDS=1048576
 Calibration uses exactly 128 MiB and the input slice size. The slice size must divide 128 MiB or calibration is `not_run`. Both intra-node and inter-node calibration launch one MPI process per GPU with `-g 1`; only inter-node execution additionally requires a hostfile.
 The calibrated concurrency limit is `K_effective=min(16,max_calibration_channels,128MiB/S,link_max_channels)` for slice size `S`; VeriCCL does not infer unmeasured concurrency points.
 For its two-rank representative benchmark, inter-node calibration also uses `-N 1`, placing exactly one process on each node.
-Keep the documented `--timeout-s 10800` for an uncached 16-point calibration. Each point starts 20 independent release processes plus one trace process; a 1800-second workflow budget can be insufficient even when every XML is valid.
+Keep the documented `--timeout-s 10800` for an uncached 16-point calibration. Each calibration point starts one correctness-enabled release process with five warmups and 20 measurements, followed by one 20-iteration trace process. The trace iterations determine calibration stability and `B_link(k)`. Final operator validation remains stricter: it uses rounds of 20 independent release processes, with up to three rounds when measurements are unstable.
 
-Release measurement and trace diagnosis are separate runs. Release uses five warmups, 20 measurements, correctness checks, and `VERICCL_TRACE_ENABLE=0`; trace uses zero warmups, 20 measurements, `-c 0`, and `VERICCL_TRACE_ENABLE=1`. Trace cost is never performance data.
+Release measurement and trace diagnosis are separate runs. Release uses five warmups, 20 measurements, correctness checks, and `VERICCL_TRACE_ENABLE=0`; trace uses zero warmups, 20 measurements, `-c 0`, and `VERICCL_TRACE_ENABLE=1`. The aggregate nccl-tests time reported by the trace run is not performance data; calibration uses the sender-local step intervals recorded for its 20 iterations.
 
 ### MSCCL activation boundary
 

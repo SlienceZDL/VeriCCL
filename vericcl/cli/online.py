@@ -420,6 +420,7 @@ def build_online_context_factory(
                     max_clock_uncertainty_us=uncertainty,
                     trace_collector=selected_collector,
                     online_tuning_requested=False,
+                    single_process_release_validation=True,
                     timeout_s=remaining_budget / remaining_points,
                     trace_record_capacity=trace_record_capacity,
                 )

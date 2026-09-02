@@ -479,6 +479,7 @@ def _online_evidence(result: OnlineValidationResult) -> dict:
                     calibration.cache_hit_concurrencies
                 ),
                 "stable": calibration.stable,
+                "release_mode": "single_process_correctness",
                 "skipped_reason": calibration.skipped_reason,
                 "points": tuple(
                     {

@@ -263,6 +263,22 @@ class NcclTestsRunner:
             history = history.add_round(samples)
         return history
 
+    def validate_release(self, request: NcclTestRequest) -> None:
+        self.validate_help(request)
+        process = self._request(
+            build_nccl_tests_command(request),
+            "nccl-tests release validation",
+        )
+        output = _run_checked(self._executor, process).stdout
+        rows = parse_nccl_tests_output(
+            output,
+            request.message_size_bytes,
+        )
+        if len(rows) != 1:
+            raise SemanticError(
+                "release validation must produce one performance row"
+            )
+
     def diagnostic(
         self,
         request: NcclTestRequest,

@@ -473,6 +473,41 @@ def test_release_and_trace_runs_are_separate_and_share_exact_parameters(tmp_path
     assert result.tuning_evidence is not None
 
 
+def test_single_process_release_still_runs_correctness_and_trace(tmp_path):
+    executor = FakeExecutor(trace_time_us=999.0)
+    context = _context(
+        tmp_path,
+        executor=executor,
+        online_tuning_requested=False,
+        single_process_release_validation=True,
+    )
+
+    result = run_online_validation(context)
+
+    calls = _performance_calls(executor)
+    release_calls = [
+        call
+        for call in calls
+        if call.environment["VERICCL_TRACE_ENABLE"] == "0"
+    ]
+    trace_calls = [
+        call
+        for call in calls
+        if call.environment["VERICCL_TRACE_ENABLE"] == "1"
+    ]
+    assert result.release_status is OnlineStageStatus.PASSED
+    assert result.release_history is None
+    assert result.online_operator_validation is OnlineStageStatus.PASSED
+    assert result.single_process_release_validation is True
+    assert result.online_tuning_allowed is False
+    assert len(release_calls) == 1
+    assert len(trace_calls) == 1
+    release = release_calls[0].command
+    assert release[release.index("-w") + 1] == "5"
+    assert release[release.index("-n") + 1] == "20"
+    assert release[release.index("-c") + 1] == "1"
+
+
 def test_trace_capacity_is_raised_to_cover_both_timing_blocks(tmp_path):
     executor = FakeExecutor()
     context = _context(
