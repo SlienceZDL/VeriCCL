@@ -15,4 +15,5 @@ venv/
 .worktrees/
 .vscode/
 *.log
+!exp/results/**/*.log
 *.tmp

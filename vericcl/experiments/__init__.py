@@ -17,6 +17,12 @@ from vericcl.experiments.remote import (
     SshFileStager,
     SshStagingCommandExecutor,
 )
+from vericcl.experiments.report import (
+    ReportRow,
+    build_report_rows,
+    load_performance_results,
+    write_report,
+)
 from vericcl.experiments.state import (
     ExperimentStateStore,
     TaskRecord,
@@ -33,6 +39,7 @@ __all__ = [
     "ExperimentPathPolicy",
     "PerformanceResult",
     "RemoteTraceCollector",
+    "ReportRow",
     "SshFileStager",
     "SshStagingCommandExecutor",
     "TaskRecord",
@@ -40,7 +47,10 @@ __all__ = [
     "XmlSource",
     "atomic_replace_text",
     "build_performance_command",
+    "build_report_rows",
     "evaluate_msccl_activation",
     "load_experiment_manifest",
+    "load_performance_results",
     "select_baselines",
+    "write_report",
 ]

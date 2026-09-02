@@ -32,6 +32,7 @@ from vericcl.experiments.remote import (
     SshFileStager,
     SshStagingCommandExecutor,
 )
+from vericcl.experiments.report import write_report
 from vericcl.experiments.state import (
     ExperimentStateStore,
     TaskRecord,
@@ -750,6 +751,7 @@ def _copy_baselines(
     config: V100ExperimentConfig,
 ) -> Mapping[Path, str]:
     destination = config.experiment_root / "baselines"
+    destination.mkdir(parents=True, exist_ok=True)
     mapping = {}
     index = []
     for source in sorted(config.baseline_source.rglob("*.xml")):
@@ -1193,6 +1195,7 @@ def smoke(
             concurrency=1,
         )
         directory = config.experiment_root / "smoke"
+        directory.mkdir(parents=True, exist_ok=True)
         xml_path = directory / "inter-node-k01-128m.xml"
         atomic_write_text(xml_path, benchmark.artifact.xml_text)
         factory = factory_builder(config, 2)
@@ -1382,8 +1385,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 record.status is TaskStatus.PASSED for record in records
             ):
                 return 1
-        if arguments.stage == "summarize":
-            raise SemanticError("summarize stage is not available in this build")
+        if arguments.stage in {"summarize", "all"}:
+            write_report(config.experiment_root)
     except VeriCCLError as error:
         print("VeriCCL V100 experiment failed: {}".format(error))
         return 2
