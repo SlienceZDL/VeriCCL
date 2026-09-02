@@ -7,8 +7,12 @@ import pytest
 from vericcl.errors import SemanticError
 from vericcl.experiments.model import ExperimentCase
 from vericcl.experiments.state import TaskStatus
+from vericcl.verification.online.runner import ProcessResult
 from vericcl.experiments.v100 import (
     V100ExperimentConfig,
+    benchmark_xml,
+    build_mpi_prefix,
+    build_performance_environment,
     load_v100_config,
     preflight,
     solve_case,
@@ -188,3 +192,99 @@ def test_load_v100_config_rejects_unknown_fields(tmp_path):
 
     with pytest.raises(SemanticError, match="fields"):
         load_v100_config(path)
+
+
+def test_mpi_prefix_uses_tcp_and_node4_first_hostfile(tmp_path):
+    config = _config(tmp_path)
+
+    prefix = build_mpi_prefix(config, 8, ())
+
+    assert prefix == (
+        str(config.mpi_launcher),
+        "--allow-run-as-root",
+        "--prefix",
+        str(config.mpi_launcher.parent.parent),
+        "-np",
+        "8",
+        "--hostfile",
+        str(config.hostfile_8),
+        "-mca",
+        "pml",
+        "ob1",
+        "-mca",
+        "btl",
+        "tcp,self,vader",
+        "-mca",
+        "btl_vader_single_copy_mechanism",
+        "none",
+        "-mca",
+        "btl_tcp_if_include",
+        "10.0.0.0/24",
+    )
+
+
+def test_performance_environment_uses_xml_specific_buffer(tmp_path):
+    config = _config(tmp_path)
+    case = _case(tmp_path)
+    xml = _touch(config.experiment_root / "schedule.xml", "<algo/>")
+
+    generated = build_performance_environment(
+        config,
+        case,
+        xml,
+        source="vericcl",
+    )
+    baseline = build_performance_environment(
+        config,
+        case,
+        xml,
+        source="baseline",
+    )
+
+    assert generated["NCCL_BUFFSIZE"] == str(2 * case.slice_size_bytes)
+    assert baseline["NCCL_BUFFSIZE"] == str(2 * 1024 * 1024)
+    assert generated["NCCL_IB_DISABLE"] == "1"
+    assert "NCCL_IB_HCA" not in generated
+
+
+def test_benchmark_xml_preserves_raw_and_structured_results(tmp_path):
+    config = _config(tmp_path)
+    case = _case(tmp_path)
+    xml = _touch(config.experiment_root / "schedule.xml", "<algo/>")
+
+    class Executor:
+        requests = []
+
+        def run(self, request):
+            self.requests.append(request)
+            return ProcessResult(
+                0,
+                (
+                    "4194304 1048576 float none -1 "
+                    "100 40 35 0 90 45 39 0\n"
+                ),
+                "NCCL INFO Connected 1 MSCCL algorithms\n",
+            )
+
+    executor = Executor()
+    result = benchmark_xml(
+        case,
+        config,
+        source="vericcl",
+        xml_path=xml,
+        begin="4M",
+        end="4M",
+        output_directory=config.experiment_root / "performance" / "case",
+        executor=executor,
+    )
+
+    assert result.runs[0].in_place.algorithm_bandwidth_gbps == 45.0
+    assert result.activation[0].confirmed is True
+    assert result.stdout_path.read_text(encoding="utf-8").startswith(
+        "4194304"
+    )
+    output = result.stdout_path.parent
+    assert (output / "command.txt").is_file()
+    assert (output / "environment.json").is_file()
+    assert (output / "measurements.json").is_file()
+    assert (output / "activation.json").is_file()

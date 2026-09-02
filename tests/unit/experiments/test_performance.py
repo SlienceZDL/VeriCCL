@@ -1,11 +1,16 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from vericcl.errors import SemanticError
 from vericcl.experiments.performance import (
     ActivationEvidence,
+    PerformanceResult,
+    XmlSource,
+    build_performance_command,
     evaluate_msccl_activation,
+    select_baselines,
 )
 from vericcl.verification.online.model import NcclTestMeasurement, NcclTestRun
 
@@ -69,3 +74,92 @@ def test_activation_models_reject_invalid_boundaries():
         evaluate_msccl_activation(object(), _run(70.0, 75.0))
     with pytest.raises(SemanticError):
         evaluate_msccl_activation("", object())
+
+
+def test_vericcl_benchmark_uses_exact_size_and_fifteen_iterations():
+    command = build_performance_command(
+        binary="/tests/all_gather_perf",
+        begin="4M",
+        end="4M",
+        factor=2,
+        iterations=15,
+    )
+
+    assert command[-10:] == (
+        "-b",
+        "4M",
+        "-e",
+        "4M",
+        "-f",
+        "2",
+        "-g",
+        "1",
+        "-n",
+        "15",
+    )
+
+
+def test_baseline_benchmark_uses_full_range():
+    command = build_performance_command(
+        binary="/tests/all_reduce_perf",
+        begin="4M",
+        end="2G",
+        factor=2,
+        iterations=15,
+    )
+
+    assert ("-b", "4M", "-e", "2G", "-f", "2") == command[-10:-4]
+
+
+def _write_xml(path, *, collective, ranks):
+    path.write_text(
+        (
+            '<algo name="test" nchannels="1" nchunksperloop="1" '
+            'proto="Simple" coll="{}" inplace="1" redop="nop" '
+            'ngpus="{}" minBytes="1" maxBytes="2"></algo>'
+        ).format(collective, ranks),
+        encoding="ascii",
+    )
+    return path
+
+
+def test_baselines_are_selected_by_xml_contract(tmp_path):
+    paths = (
+        _write_xml(tmp_path / "ag-16.xml", collective="allgather", ranks=16),
+        _write_xml(tmp_path / "ag-8.xml", collective="allgather", ranks=8),
+        _write_xml(tmp_path / "ar-16.xml", collective="allreduce", ranks=16),
+    )
+
+    selected = select_baselines(
+        paths,
+        collective="allgather",
+        rank_count=16,
+    )
+
+    assert tuple(path.name for path in selected) == ("ag-16.xml",)
+
+
+def test_performance_result_requires_ordered_matching_evidence(tmp_path):
+    first = _run(70.0, 75.0)
+    second = replace(first, message_size_bytes=16 * 1024 * 1024)
+    evidence = evaluate_msccl_activation(
+        "NCCL INFO Connected 1 MSCCL algorithms\n",
+        first,
+    )
+    values = {
+        "task_id": "task",
+        "topology_name": "v100-n2g4",
+        "collective_label": "ag",
+        "source": XmlSource.VERICCL,
+        "xml_name": "schedule.xml",
+        "runs": (first, second),
+        "activation": (evidence, evidence),
+        "stdout_path": Path(tmp_path / "stdout.log"),
+        "stderr_path": Path(tmp_path / "stderr.log"),
+    }
+
+    PerformanceResult(**values)
+    with pytest.raises(SemanticError, match="activation"):
+        PerformanceResult(**{**values, "activation": (evidence,)})
+    with pytest.raises(SemanticError, match="order"):
+        PerformanceResult(**{**values, "runs": (second, first)})
