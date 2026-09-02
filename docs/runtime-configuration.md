@@ -109,6 +109,11 @@ available; do not report uncertain comparisons as tuning evidence.
 
 Each release round starts 20 independent NCCL Tests processes. Every process performs five warmups and 20 timed iterations. A coefficient of variation above 5% triggers up to three rounds. Reports retain the median, P95, mean, standard deviation, coefficient of variation, and stability for every round rather than selecting a best single run.
 
+If all three release rounds remain unstable but correctness and the complete
+step trace pass, VeriCCL records `online_release_unstable` with online status
+`warning`. The XML remains selectable and executable, while online tuning and
+performance-comparison decisions remain disabled for that measurement.
+
 Calibration executes concurrency points in order. Before each uncached point, VeriCCL divides the remaining wall-clock budget across that point and the remaining points, so time saved by earlier measurements rolls forward without extending the outer verification deadline.
 
 Intra-node calibration launches two MPI processes on one node. Inter-node calibration adds `-N 1` to `-np 2` with the configured hostfile, placing exactly one process and one GPU on each of two nodes. Global operator validation uses the global rank count and the hostfile slot distribution instead.

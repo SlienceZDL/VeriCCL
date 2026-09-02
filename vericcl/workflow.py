@@ -548,25 +548,47 @@ def _with_online_result(
     outcome: VerificationOutcome,
     result: OnlineValidationResult,
 ) -> VerificationOutcome:
-    passed = (
+    operator_passed = (
         result.online_operator_validation is OnlineStageStatus.PASSED
-        and result.release_status is OnlineStageStatus.PASSED
         and result.failure_code is None
+    )
+    passed = (
+        operator_passed
+        and result.release_status is OnlineStageStatus.PASSED
+    )
+    unstable = (
+        operator_passed
+        and result.release_status is OnlineStageStatus.UNSTABLE
     )
     online = CheckResult(
         dimension="online",
         status=(
-            ValidationStatus.VALID if passed else ValidationStatus.FAILED
+            ValidationStatus.VALID
+            if passed
+            else (
+                ValidationStatus.WARNING
+                if unstable
+                else ValidationStatus.FAILED
+            )
         ),
         code=(
             "online_validation_passed"
             if passed
-            else result.failure_code or "online_validation_failed"
+            else (
+                "online_release_unstable"
+                if unstable
+                else result.failure_code or "online_validation_failed"
+            )
         ),
         message=(
             "online operator validation passed"
             if passed
-            else result.failure_message or "online operator validation failed"
+            else (
+                "online operator validation passed with unstable "
+                "release performance"
+                if unstable
+                else result.failure_message or "online operator validation failed"
+            )
         ),
         evidence=_online_evidence(result),
     )

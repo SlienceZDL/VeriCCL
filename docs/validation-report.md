@@ -49,6 +49,6 @@ BDD发现的是潜在的非必要等待或可替换flow，不表示语义错误�
 
 ## 在线证据
 
-在线报告记录每轮样本数、中位数、P95、均值、总体标准差、CV、稳定性、trace文件、时钟误差上界、`online_operator_validation`及瓶颈优先级。`trace_analysis.step_waits`保存逐step等待分解，`bottlenecks`和`tuning_evidence.bottleneck_priorities`关联transfer、atom、flow、Rank、TB、step、lane和等待类型。只有release结果稳定、trace完整且时钟不确定性在阈值内时，在线数据才可用于候选比较；任何`failure_code`都会使online维度为`failed`。
+在线报告记录每轮样本数、中位数、P95、均值、总体标准差、CV、稳定性、trace文件、时钟误差上界、`online_operator_validation`及瓶颈优先级。`trace_analysis.step_waits`保存逐step等待分解，`bottlenecks`和`tuning_evidence.bottleneck_priorities`关联transfer、atom、flow、Rank、TB、step、lane和等待类型。只有release结果稳定、trace完整且时钟不确定性在阈值内时，在线数据才可用于候选比较；任何`failure_code`都会使online维度为`failed`。若仅release性能不稳定，而正确性与完整trace均通过，则online维度为`warning`、问题码为`online_release_unstable`，XML仍可保留，但不得执行在线调优或形成性能结论。
 
 链路校准缓存签名覆盖链路类别、拓扑签名、GPU/NIC、CUDA/NCCL/MSCCL版本、Simple协议、slice大小、128 MiB、并发度、`NCCL_BUFFSIZE`、chunk/slice steps及相关路径变量。任一字段变化或`force_recalibrate=true`都会绕过缓存。

@@ -152,7 +152,11 @@ class ValidationReport:
             and self.simulation.status is ValidationStatus.VALID
             and self.runtime_compatible
             and self.online.status
-            in {ValidationStatus.VALID, ValidationStatus.NOT_RUN}
+            in {
+                ValidationStatus.VALID,
+                ValidationStatus.WARNING,
+                ValidationStatus.NOT_RUN,
+            }
         )
 
     @property

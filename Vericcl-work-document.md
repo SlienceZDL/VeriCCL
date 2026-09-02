@@ -443,7 +443,7 @@ transfer\_duration=physical\_end-physical\_start
 
 `VERICCL_TRACE_RECORDS`给出每Rank的用户配置下限。预检根据sidecar中该Rank的step数和最多两个计时块自动提升容量，最低为`42 * max_steps_per_rank`，避免小slice或大XML在正式采集前即发生确定性溢出。用户可以设置更大容量，但不能强制降低该安全下限。
 
-每轮在线验证默认预热5次并正式执行20次，使用正式执行时间的中位数作为调度时间，同时记录P95、均值、标准差和变异系数。每个统计样本来自一次独立`nccl-tests`进程输出；单个进程仍使用`-w 5 -n 20`，不得把一个聚合输出行中的内部迭代虚构为20个独立样本。变异系数超过5%时重新执行该轮，最多重测3轮；达到上限后保留全部样本并将`release_status`标记为`unstable`，该结果不得用于在线调优。测试必须启用`nccl-tests`正确性检查，并使用当前调度的精确消息大小、数据类型、归约操作、root和原地/非原地模式，不得使用最佳单次时间替代统计结果。
+每轮在线验证默认预热5次并正式执行20次，使用正式执行时间的中位数作为调度时间，同时记录P95、均值、标准差和变异系数。每个统计样本来自一次独立`nccl-tests`进程输出；单个进程仍使用`-w 5 -n 20`，不得把一个聚合输出行中的内部迭代虚构为20个独立样本。变异系数超过5%时重新执行该轮，最多重测3轮；达到上限后保留全部样本并将`release_status`标记为`unstable`，该结果不得用于在线调优。若正确性检查与逐step trace均通过，则该候选的online维度标记为`warning`而非`failed`，继续保留离线有效且可执行的XML，但不得把不稳定性能用于候选比较或性能结论。测试必须启用`nccl-tests`正确性检查，并使用当前调度的精确消息大小、数据类型、归约操作、root和原地/非原地模式，不得使用最佳单次时间替代统计结果。
 
 完整且时钟误差合格的trace生成候选级`OnlineTuningEvidence`，其中保存逐`transfer_id`的实测等待总量和带完整定位信息的瓶颈优先级。该证据通过`attach_online_result_to_tuning_context`写入`TuningContext.online_trace_evidence[candidate_id]`；BDD flow替换和TB顺序提示优先处理实测等待更长、瓶颈优先级更高的候选，但替换、后缀修复、时间重排和完整验证流程不变。
 

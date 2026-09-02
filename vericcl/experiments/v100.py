@@ -1043,7 +1043,16 @@ def _online_factory(config: V100ExperimentConfig, rank_count: int):
 def _online_report_is_valid(path: Path) -> bool:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return payload["validation"]["online"]["status"] == "valid"
+        online = payload["validation"]["online"]
+        if online["status"] == "valid":
+            return True
+        evidence = online["evidence"]
+        return (
+            online["status"] == "warning"
+            and evidence["release_status"] == "unstable"
+            and evidence["online_operator_validation"] == "passed"
+            and evidence["failure_code"] is None
+        )
     except (OSError, UnicodeError, ValueError, KeyError, TypeError):
         return False
 

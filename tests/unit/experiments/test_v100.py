@@ -165,6 +165,51 @@ def test_solve_case_requests_online_validation_and_tuning(tmp_path):
     assert result.status is TaskStatus.PASSED
 
 
+def test_solve_case_accepts_completed_operator_with_unstable_release(tmp_path):
+    config = _config(tmp_path)
+    case = _case(tmp_path)
+    atom = _touch(config.repo_root / "vericcl/examples/atom/default.json", "{}")
+
+    def execute(context):
+        output = context.output_base / "fake-warning"
+        output.mkdir(parents=True, exist_ok=True)
+        final_xml = _touch(output / "final.xml", "<algo/>")
+        final_report = output / "final.validation.json"
+        final_report.write_text(
+            json.dumps(
+                {
+                    "validation": {
+                        "online": {
+                            "status": "warning",
+                            "evidence": {
+                                "release_status": "unstable",
+                                "online_operator_validation": "passed",
+                                "failure_code": None,
+                            },
+                        }
+                    }
+                }
+            ),
+            encoding="ascii",
+        )
+        return SimpleNamespace(
+            final_xml=final_xml,
+            final_report=final_report,
+            final_candidate_id="candidate",
+            status="feasible",
+            layout=SimpleNamespace(summary=output / "summary.json"),
+        )
+
+    result = solve_case(
+        case,
+        config,
+        atom_path=atom,
+        execute=execute,
+    )
+
+    assert result.status is TaskStatus.PASSED
+
+
 def test_smoke_preserves_runner_error_details(tmp_path, monkeypatch):
     config = _config(tmp_path)
     case = _case(tmp_path)

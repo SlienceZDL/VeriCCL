@@ -61,6 +61,14 @@ def test_warning_does_not_replace_semantic_status():
     assert report.eligible_for_selection is False
 
 
+def test_online_warning_preserves_candidate_selection_eligibility():
+    report = report_with(online=ValidationStatus.WARNING)
+
+    assert report.overall_status is ValidationStatus.VALID
+    assert report.eligible_for_selection is True
+    assert report.online_validated is False
+
+
 def test_bdd_analysis_error_blocks_selection_without_invalidating_semantics():
     report = report_with(bdd=ValidationStatus.ANALYSIS_ERROR)
 

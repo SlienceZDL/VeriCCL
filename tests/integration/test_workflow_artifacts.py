@@ -532,16 +532,30 @@ def test_workflow_entrypoints_reject_invalid_modes_before_file_access():
 
 
 @pytest.mark.parametrize(
-    ("operator_status", "expected"),
+    ("operator_status", "release_status", "expected"),
     (
-        (OnlineStageStatus.PASSED, "valid"),
-        (OnlineStageStatus.FAILED, "failed"),
+        (
+            OnlineStageStatus.PASSED,
+            OnlineStageStatus.PASSED,
+            "valid",
+        ),
+        (
+            OnlineStageStatus.PASSED,
+            OnlineStageStatus.UNSTABLE,
+            "warning",
+        ),
+        (
+            OnlineStageStatus.FAILED,
+            OnlineStageStatus.PASSED,
+            "failed",
+        ),
     ),
 )
 def test_online_result_is_written_without_discarding_offline_xml(
     tmp_path,
     monkeypatch,
     operator_status,
+    release_status,
     expected,
 ):
     topology, sketch, atom = _write_constructive_inputs(tmp_path)
@@ -552,7 +566,7 @@ def test_online_result_is_written_without_discarding_offline_xml(
             context_schedule=context.schedule,
             preflight_status=OnlineStageStatus.PASSED,
             calibration_status=OnlineStageStatus.NOT_RUN,
-            release_status=OnlineStageStatus.PASSED,
+            release_status=release_status,
             online_operator_validation=operator_status,
             failure_code=None if passed else "forced_online_failure",
             failure_message=None if passed else "forced online failure",
