@@ -37,6 +37,7 @@ from vericcl.verification.online.pipeline import (
 )
 from vericcl.verification.online.runner import (
     SubprocessCommandExecutor,
+    collect_trace_files,
     process_environment,
 )
 
@@ -133,7 +134,10 @@ def _calibration_link_class(environment: Mapping[str, str]) -> str:
     return value
 
 
-def _representative_topology(topology: Topology, link_class: str) -> Topology:
+def representative_calibration_topology(
+    topology: Topology,
+    link_class: str,
+) -> Topology:
     matching = tuple(
         (key, edge)
         for key, edge in topology.links.items()
@@ -197,7 +201,16 @@ def _calibration_path_variables(
 
 def build_online_context_factory(
     environment: Mapping[str, str] = os.environ,
+    *,
+    executor=None,
+    trace_collector=None,
 ):
+    selected_executor = (
+        SubprocessCommandExecutor() if executor is None else executor
+    )
+    selected_collector = (
+        collect_trace_files if trace_collector is None else trace_collector
+    )
     values = dict(environment)
     msccl_directory = Path(_required(values, "VERICCL_MSCCL_BUILD_DIR"))
     nccl_tests_directory = Path(
@@ -243,7 +256,6 @@ def build_online_context_factory(
         calibration_mpi_hostfile = Path(
             _required(values, "VERICCL_MPI_HOSTFILE")
         )
-    executor = SubprocessCommandExecutor()
     try:
         calibration_cache = CalibrationCache(
             Path(_required(values, "VERICCL_CALIBRATION_CACHE_PATH"))
@@ -279,7 +291,7 @@ def build_online_context_factory(
         calibration_plan = None
         if calibration_enabled:
             topology = load_topology(inputs)
-            calibration_topology = _representative_topology(
+            calibration_topology = representative_calibration_topology(
                 topology,
                 calibration_link_class,
             )
@@ -375,7 +387,7 @@ def build_online_context_factory(
                     ),
                     xml_paths=(calibration_xml,),
                     msccl_library_path=msccl_directory,
-                    executor=executor,
+                    executor=selected_executor,
                     environment=process_environment(values),
                     inter_node=calibration_inter_node,
                     mpi_launcher=calibration_mpi_launcher,
@@ -387,6 +399,7 @@ def build_online_context_factory(
                     trace_file_prefix=directory / "msccl-step",
                     clock_sync_binary=clock_sync_binary,
                     max_clock_uncertainty_us=uncertainty,
+                    trace_collector=selected_collector,
                     online_tuning_requested=False,
                     timeout_s=remaining_budget / remaining_points,
                     trace_record_capacity=trace_record_capacity,
@@ -426,7 +439,7 @@ def build_online_context_factory(
             request=request,
             xml_paths=(Path(xml_path),),
             msccl_library_path=msccl_directory,
-            executor=executor,
+            executor=selected_executor,
             environment=process_environment(values),
             inter_node=inter_node,
             mpi_launcher=operator_mpi_launcher,
@@ -434,6 +447,7 @@ def build_online_context_factory(
             trace_file_prefix=Path(traces_dir) / "msccl-step",
             clock_sync_binary=clock_sync_binary,
             max_clock_uncertainty_us=uncertainty,
+            trace_collector=selected_collector,
             calibration_plan=calibration_plan,
             online_tuning_requested=tuning_requested,
             timeout_s=timeout_s,

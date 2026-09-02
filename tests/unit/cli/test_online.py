@@ -16,6 +16,10 @@ from vericcl.verification.online.trace_analysis import (
     PhysicalTransferInterval,
     TraceAnalysis,
 )
+from vericcl.verification.online.runner import (
+    SubprocessCommandExecutor,
+    collect_trace_files,
+)
 from vericcl.verification.pipeline import validate_and_lower_candidate
 
 from tests.unit.verification.helpers import inputs, topology
@@ -27,6 +31,11 @@ from tests.unit.xml.helpers import (
 
 
 pytestmark = pytest.mark.phase07
+
+
+class FakeExecutor:
+    def run(self, request):
+        raise AssertionError("injected executor should not run during setup")
 
 
 def _environment(**changes):
@@ -49,6 +58,65 @@ def _environment(**changes):
     }
     values.update(changes)
     return values
+
+
+def _factory_arguments(tmp_path):
+    schedule = two_rank_allreduce_schedule()
+    input_value = inputs()
+    outcome = validate_and_lower_candidate(
+        schedule,
+        input_value,
+        topology(),
+    )
+    return (
+        outcome.artifact,
+        schedule,
+        input_value,
+        tmp_path / "schedule.xml",
+        tmp_path / "traces",
+        False,
+        30.0,
+        False,
+    )
+
+
+def test_online_factory_uses_injected_runtime_dependencies(tmp_path):
+    executor = FakeExecutor()
+    collector = lambda request: object()
+
+    context = build_online_context_factory(
+        _environment(),
+        executor=executor,
+        trace_collector=collector,
+    )(*_factory_arguments(tmp_path))
+
+    assert context.executor is executor
+    assert context.trace_collector is collector
+
+
+def test_online_factory_defaults_to_local_dependencies(tmp_path):
+    context = build_online_context_factory(_environment())(
+        *_factory_arguments(tmp_path)
+    )
+
+    assert isinstance(context.executor, SubprocessCommandExecutor)
+    assert context.trace_collector is collect_trace_files
+
+
+def test_representative_calibration_topology_is_public():
+    source = replace(
+        topology(),
+        node_membership={0: 0, 1: 1},
+        gateways=frozenset({0, 1}),
+    )
+
+    selected = online_module.representative_calibration_topology(
+        source,
+        "inter_node",
+    )
+
+    assert selected.rank_count == 2
+    assert selected.node_membership == {0: 0, 1: 1}
 
 
 def test_online_factory_requires_explicit_runtime_paths():
@@ -241,6 +309,8 @@ def test_calibration_plan_measures_full_waves_with_generated_xml(
                 physical_start=AlignedTimestamp(0.0, 0.0),
                 physical_end=AlignedTimestamp(5.0, 0.0),
                 endpoint_order_uncertain=False,
+                sender_start=AlignedTimestamp(0.0, 0.0),
+                sender_end=AlignedTimestamp(5.0, 0.0),
             )
             for iteration in range(20)
             for logical in range(2)
