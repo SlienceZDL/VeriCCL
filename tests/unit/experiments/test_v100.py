@@ -177,6 +177,10 @@ def test_smoke_preserves_runner_error_details(tmp_path, monkeypatch):
         schedule=object(),
         inputs=inputs,
     )
+    _touch(
+        config.experiment_root / "smoke" / "inter-node-k01-128m.xml",
+        benchmark.artifact.xml_text,
+    )
     monkeypatch.setattr(
         v100_module,
         "load_experiment_manifest",

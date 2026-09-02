@@ -149,6 +149,24 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _write_or_reuse_text(path: Path, text: str) -> None:
+    try:
+        atomic_write_text(path, text)
+        return
+    except FileExistsError:
+        pass
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise SemanticError(
+            "existing experiment artifact is unreadable"
+        ) from error
+    if existing != text:
+        raise SemanticError(
+            "existing experiment artifact has conflicting content"
+        )
+
+
 def _case_input_sha256(case: ExperimentCase, atom_path: Path) -> str:
     digest = hashlib.sha256()
     for label, path in (
@@ -1198,7 +1216,7 @@ def smoke(
         directory = config.experiment_root / "smoke"
         directory.mkdir(parents=True, exist_ok=True)
         xml_path = directory / "inter-node-k01-128m.xml"
-        atomic_write_text(xml_path, benchmark.artifact.xml_text)
+        _write_or_reuse_text(xml_path, benchmark.artifact.xml_text)
         factory = factory_builder(config, 2)
         context = factory(
             benchmark.artifact,
