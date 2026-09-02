@@ -181,6 +181,10 @@ def test_smoke_preserves_runner_error_details(tmp_path, monkeypatch):
         config.experiment_root / "smoke" / "inter-node-k01-128m.xml",
         benchmark.artifact.xml_text,
     )
+    _touch(
+        config.experiment_root / "smoke" / "runner-error.log",
+        "previous failure\n",
+    )
     monkeypatch.setattr(
         v100_module,
         "load_experiment_manifest",

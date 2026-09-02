@@ -912,7 +912,7 @@ def _run_benchmark_task(
     except Exception as error:
         output_directory.mkdir(parents=True, exist_ok=True)
         error_path = output_directory / "runner-error.log"
-        atomic_write_text(error_path, "{}\n".format(error))
+        atomic_replace_text(error_path, "{}\n".format(error))
         record = TaskRecord(
             task_id=task_id,
             status=TaskStatus.FAILED,
@@ -1272,7 +1272,7 @@ def smoke(
         directory = config.experiment_root / "smoke"
         directory.mkdir(parents=True, exist_ok=True)
         error_path = directory / "runner-error.log"
-        atomic_write_text(error_path, "{}\n".format(error))
+        atomic_replace_text(error_path, "{}\n".format(error))
         record = TaskRecord(
             task_id=task_id,
             status=TaskStatus.FAILED,
