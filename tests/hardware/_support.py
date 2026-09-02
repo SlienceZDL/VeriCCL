@@ -117,7 +117,7 @@ def runtime_environment(
     trace_enabled: bool = False,
 ) -> Mapping[str, str]:
     values = {
-        "NCCL_ALGO": "MSCCL",
+        "NCCL_ALGO": "MSCCL,RING",
         "NCCL_PROTO": "Simple",
         "NCCL_BUFFSIZE": str(2 * config.slice_size_bytes),
         "MSCCL_XML_FILES": str(xml_path),
@@ -145,6 +145,8 @@ def launcher_prefix(
         "-np",
         str(process_count),
     ]
+    if config.hostfile is not None and process_count == 2:
+        command.extend(("-N", "1"))
     if config.hostfile is not None:
         command.extend(("--hostfile", str(config.hostfile)))
     exported = (

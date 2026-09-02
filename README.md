@@ -218,21 +218,25 @@ For online operation, a stable `solve --online` calibration updates matching `in
 
 For CUDA, MPI, and server configuration, see [runtime configuration](docs/runtime-configuration.md). This section records the VeriCCL-specific source, activation, and evaluation contract; it does not provide an operating-system installation procedure.
 
-### Strategy A: official source plus bundled patch
+The commands below target NVIDIA V100 (`compute_70`/`sm_70`). On NVIDIA A100, replace every `compute_70`/`sm_70` pair in `NVCC_GENCODE` and the clock-helper `nvcc` command with `compute_80`/`sm_80` before building.
 
-Strategy A starts from the official MSCCL repository at immutable commit `b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`. The verifier checks the clean pinned base in a temporary copy, including the final hashes; the actual checkout is then patched and built.
+### Strategy A: official source plus bundled patches
+
+Strategy A starts from the official MSCCL repository at immutable commit `b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`. The verifier checks the clean pinned base in a temporary copy, including both patches and the recorded hashes; the actual checkout is then patched and built.
 
 ```bash
 export VERICCL_ROOT="$(pwd)"
 export CUDA_HOME=/usr/local/cuda
+export NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
 export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/msccl-official"
 git clone https://github.com/microsoft/msccl.git "$MSCCL_ROOT"
 git -C "$MSCCL_ROOT" checkout --detach b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
 python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --base-tree
 cp "$VERICCL_ROOT/runtime/msccl-trace/include/vericcl_trace_format.h" "$MSCCL_ROOT/src/include/vericcl_trace_format.h"
 patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch"
+patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0002-vericcl-host-step-signature.patch"
 make -C "$MSCCL_ROOT" clean
-make -C "$MSCCL_ROOT" -j src.build
+make -C "$MSCCL_ROOT" -j NVCC_GENCODE="$NVCC_GENCODE" src.build
 test -d "$MSCCL_ROOT/build/lib"
 ```
 
@@ -245,16 +249,18 @@ Strategy C uses public tag `vericcl-runtime-v0.1.0` at commit `782ee5f72cf48c1ae
 ```bash
 export VERICCL_ROOT="$(pwd)"
 export CUDA_HOME=/usr/local/cuda
+export NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
 export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/VeriCCL-MSCCL"
 git clone --branch vericcl-runtime-v0.1.0 --depth 1 https://github.com/SlienceZDL/VeriCCL-MSCCL.git "$MSCCL_ROOT"
 test "$(git -C "$MSCCL_ROOT" rev-parse HEAD)" = 782ee5f72cf48c1ae1a2365bcf525019f5620175
 python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --patched-tree
+patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0002-vericcl-host-step-signature.patch"
 make -C "$MSCCL_ROOT" clean
-make -C "$MSCCL_ROOT" -j src.build
+make -C "$MSCCL_ROOT" -j NVCC_GENCODE="$NVCC_GENCODE" src.build
 test -d "$MSCCL_ROOT/build/lib"
 ```
 
-`verification passed` is the expected verifier result. Strategies A and C have the same hashes for the trace header and runtime source files recorded in `upstream.json`; both produce `$MSCCL_ROOT/build/lib`. Static verification is not evidence of CUDA compilation or GPU execution.
+`verification passed` is the expected verifier result. Strategies A and C use the same trace implementation and both apply the host-side step-signature supplement before producing `$MSCCL_ROOT/build/lib`. The supplement makes the MSCCL network proxy use the same `4/4` chunk/slice signature as the device interpreter; without it, inter-node byte counts and proxy credits are inconsistent. Static verification is not evidence of CUDA compilation or GPU execution.
 
 ### NCCL Tests and clock helper build
 
@@ -270,7 +276,7 @@ test -f "$MPI_HOME/include/mpi.h"
 test -d "$MPI_HOME/lib"
 git clone https://github.com/NVIDIA/nccl-tests "$NCCL_TESTS_ROOT"
 make -C "$NCCL_TESTS_ROOT" -j MPI=1 MPI_HOME="$MPI_HOME" CUDA_HOME="$CUDA_HOME" NCCL_HOME="$MSCCL_ROOT/build"
-nvcc -ccbin mpicxx -O2 -std=c++11 "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync.cu" -o "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
+nvcc -ccbin mpicxx -O2 -std=c++11 -gencode=arch=compute_70,code=sm_70 "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync.cu" -o "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
 test -x "$NCCL_TESTS_ROOT/build/all_reduce_perf"
 test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
 ```
@@ -285,6 +291,7 @@ test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
 export VERICCL_MSCCL_BUILD_DIR="$MSCCL_ROOT/build/lib"
 export VERICCL_NCCL_TESTS_BUILD_DIR="$NCCL_TESTS_ROOT/build"
 export VERICCL_CLOCK_SYNC_BINARY="$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
+export VERICCL_MPI_LAUNCHER="$(command -v mpirun)"
 export VERICCL_ONLINE_INTER_NODE=0
 export VERICCL_MAX_CLOCK_UNCERTAINTY_US=10
 export VERICCL_CALIBRATION_LINK_CLASS=intra_node
@@ -302,24 +309,26 @@ export VERICCL_TRACE_RECORDS=1048576
 .venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --online --output-dir runs --run-id online --timeout-s 10800
 ```
 
-Calibration uses exactly 128 MiB and the input slice size. The slice size must divide 128 MiB or calibration is `not_run`. Intra-node calibration launches one process with `-g 2`; inter-node calibration launches two MPI processes with `-g 1`.
+Calibration uses exactly 128 MiB and the input slice size. The slice size must divide 128 MiB or calibration is `not_run`. Both intra-node and inter-node calibration launch one MPI process per GPU with `-g 1`; only inter-node execution additionally requires a hostfile.
+For its two-rank representative benchmark, inter-node calibration also uses `-N 1`, placing exactly one process on each node.
+Keep the documented `--timeout-s 10800` for an uncached 32-point calibration. Each point starts 20 independent release processes plus one trace process; a 1800-second workflow budget can be insufficient even when every XML is valid.
 
 Release measurement and trace diagnosis are separate runs. Release uses five warmups, 20 measurements, correctness checks, and `VERICCL_TRACE_ENABLE=0`; trace uses zero warmups, 20 measurements, `-c 0`, and `VERICCL_TRACE_ENABLE=1`. Trace cost is never performance data.
 
 ### MSCCL activation boundary
 
-The positive XML-load signal is `NCCL INFO Connected 1 MSCCL algorithms`. Missing this signal, or any NCCL fallback to a non-MSCCL algorithm, is not VeriCCL schedule validation; stop and diagnose activation before interpreting correctness, trace, or performance output.
+The positive XML-load signal is `NCCL INFO Connected 1 MSCCL algorithms`. NCCL Tests executes both out-of-place and in-place timing blocks, while one VeriCCL XML matches exactly one placement mode. `NCCL_ALGO=MSCCL,RING` therefore runs the matching block with MSCCL and lets the non-matching block fall back to Ring. A missing load signal, missing MSCCL step trace for the selected block, or fallback of the selected block is not VeriCCL schedule validation.
 
 ### Single-node XML execution
 
-The fixed runtime contract is `MSCCL_CHUNKSTEPS=4`, `MSCCL_SLICESTEPS=4`, `NCCL_PROTO=Simple`, XML `cnt=1`, and `NCCL_BUFFSIZE=2*slice_size_bytes`. For the packaged 1 MiB slice, the buffer is 2 MiB. Set exactly one XML and match its message size, datatype, reduction operation, root, rank count, and in-place mode.
+The fixed runtime contract is `MSCCL_CHUNKSTEPS=4`, `MSCCL_SLICESTEPS=4`, the bundled host-side step-signature supplement, `NCCL_PROTO=Simple`, XML `cnt=1`, and `NCCL_BUFFSIZE=2*slice_size_bytes`. For the packaged 1 MiB slice, the buffer is 2 MiB. Set exactly one XML and match its message size, datatype, reduction operation, root, rank count, and in-place mode.
 
 Run a short INFO-level activation probe on one node with two GPUs. The `sed` check requires every reported connected-algorithm count to be exactly one and fails when the signal is absent:
 
 <!-- vericcl-msccl-run: single-node-activation -->
 ```bash
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
@@ -328,8 +337,9 @@ export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
 export VERICCL_TRACE_ENABLE=0
 export NCCL_DEBUG=INFO
 export NCCL_DEBUG_SUBSYS=INIT
+export VERICCL_MPI_LAUNCHER="$(command -v mpirun)"
 MSCCL_ACTIVATION_LOG="$(mktemp)"
-"$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 1 -c 1 -d float -o sum -g 2 2>&1 | tee "$MSCCL_ACTIVATION_LOG"
+"$VERICCL_MPI_LAUNCHER" --bind-to none -np 2 -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE -x NCCL_DEBUG -x NCCL_DEBUG_SUBSYS "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 1 -c 1 -d float -o sum -g 1 2>&1 | tee "$MSCCL_ACTIVATION_LOG"
 test "$(sed -n 's/.*NCCL INFO Connected \([0-9][0-9]*\) MSCCL algorithms.*/\1/p' "$MSCCL_ACTIVATION_LOG" | sort -u)" = 1
 rm -f "$MSCCL_ACTIVATION_LOG"
 ```
@@ -340,14 +350,15 @@ After the probe succeeds, run the formal release measurement with debug logging 
 ```bash
 unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
 export VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4
 export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
 export VERICCL_TRACE_ENABLE=0
-"$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 5 -n 20 -c 1 -d float -o sum -g 2
+export VERICCL_MPI_LAUNCHER="$(command -v mpirun)"
+"$VERICCL_MPI_LAUNCHER" --bind-to none -np 2 -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 5 -n 20 -c 1 -d float -o sum -g 1
 ```
 
 Separate diagnostic run:
@@ -356,7 +367,7 @@ Separate diagnostic run:
 ```bash
 unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
@@ -365,8 +376,11 @@ export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
 export VERICCL_TRACE_ENABLE=1
 export VERICCL_TRACE_RECORDS=1048576
 export VERICCL_TRACE_FILE_PREFIX=/absolute/path/to/vericcl-step
-"$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 20 -c 0 -d float -o sum -g 2
+export VERICCL_MPI_LAUNCHER="$(command -v mpirun)"
+"$VERICCL_MPI_LAUNCHER" --bind-to none -np 2 -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE -x VERICCL_TRACE_RECORDS -x VERICCL_TRACE_FILE_PREFIX "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 20 -c 0 -d float -o sum -g 1
 ```
+
+For inter-node validation, `VERICCL_TRACE_FILE_PREFIX` must reside on storage mounted at the same absolute path on every node so the collector can read every per-rank file. Raising the clock-uncertainty threshold permits parsing but does not make uncertain endpoint orderings eligible for tuning.
 
 ### Multi-node XML execution
 
@@ -377,7 +391,7 @@ Run the INFO-level activation probe first. Both debug variables are propagated t
 <!-- vericcl-msccl-run: multi-node-activation -->
 ```bash
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
@@ -399,7 +413,7 @@ Run the formal multi-node release measurement only after the probe succeeds. Deb
 ```bash
 unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
@@ -429,10 +443,10 @@ Common diagnoses:
 
 - CUDA/MSCCL build failure: recheck the driver/toolkit/host-compiler compatibility table, `CUDA_HOME`, GPU architecture, and the full compiler output.
 - `mpi.h` or MPI link failure: confirm that the active Open MPI wrapper reports the intended include directory and derived `MPI_HOME`, then recheck the compiler and linker output.
-- MSCCL verifier failure: use the exact upstream commit or fork tag, a clean Strategy A checkout, and an unmodified bundled header/patch.
+- MSCCL verifier failure: use the exact upstream commit or fork tag, a clean Strategy A checkout, and the unmodified bundled header and patches.
 - `Model too large...`: activate a full Gurobi license; reinstalling `gurobipy` does not expand the bundled limit.
 - Missing online binary/library: check the three `VERICCL_*_BUILD_DIR`/binary paths and propagate `LD_LIBRARY_PATH` to every MPI rank.
-- Runtime mismatch: use Simple protocol, `NCCL_BUFFSIZE=2*slice_size_bytes`, step constants `4/4`, `cnt=1`, one XML, and matching NCCL Tests arguments.
+- Runtime mismatch: apply both bundled patches, use Simple protocol, `NCCL_BUFFSIZE=2*slice_size_bytes`, step constants `4/4`, `cnt=1`, one XML, and matching NCCL Tests arguments.
 - Trace/clock failure: keep release and trace runs separate, increase `VERICCL_TRACE_RECORDS` if required, and inspect clock uncertainty and per-rank trace files.
 
 ### Software tests and references

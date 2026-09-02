@@ -16,8 +16,9 @@ import tempfile
 
 
 RUNTIME_ROOT = Path(__file__).resolve().parents[1]
-PATCH_FILE = (
-    RUNTIME_ROOT / "patches" / "0001-vericcl-fixed-step-trace.patch"
+PATCH_FILES = (
+    RUNTIME_ROOT / "patches" / "0001-vericcl-fixed-step-trace.patch",
+    RUNTIME_ROOT / "patches" / "0002-vericcl-host-step-signature.patch",
 )
 FORMAT_HEADER = RUNTIME_ROOT / "include" / "vericcl_trace_format.h"
 METADATA_FILE = RUNTIME_ROOT / "upstream.json"
@@ -29,6 +30,7 @@ REQUIRED_FILES = (
     "src/collectives/device/prims_simple.h",
     "src/collectives/device/msccl_interpreter.h",
     "src/init.cc",
+    "src/enqueue.cc",
 )
 SCAN_FILES = REQUIRED_FILES[1:]
 
@@ -87,11 +89,11 @@ def _copy_reference(source_root: Path, destination: Path) -> None:
     shutil.copy2(FORMAT_HEADER, target_header)
 
 
-def _run_patch(root: Path, *, dry_run: bool) -> None:
+def _run_patch(root: Path, patch_file: Path, *, dry_run: bool) -> None:
     command = ["patch", "--batch", "--forward", "-p1"]
     if dry_run:
         command.append("--dry-run")
-    command.extend(("-i", str(PATCH_FILE)))
+    command.extend(("-i", str(patch_file)))
     completed = subprocess.run(
         command,
         cwd=root,
@@ -125,6 +127,17 @@ def _verify_patched_sources(root: Path) -> None:
         raise ValueError("patched source still contains aggregate timing printf")
 
 
+def _verify_host_step_signature(root: Path) -> None:
+    enqueue = (root / "src/enqueue.cc").read_text(encoding="utf-8")
+    required = (
+        "if (info->algorithm == NCCL_ALGO_MSCCL)",
+        "chunkSteps = MSCCL_CHUNKSTEPS;",
+        "sliceSteps = MSCCL_SLICESTEPS;",
+    )
+    if not all(token in enqueue for token in required):
+        raise ValueError("MSCCL host proxy step signature override is missing")
+
+
 def _verify_hashes(root: Path, metadata: dict) -> None:
     for relative, expected in metadata.get("patched_files", {}).items():
         path = root / relative
@@ -152,8 +165,9 @@ def _require_clean_tree(source_root: Path) -> None:
 
 
 def verify(source_root: Path, *, patched_tree: bool = False) -> None:
-    if not PATCH_FILE.is_file():
-        raise ValueError(f"missing patch: {PATCH_FILE}")
+    for patch_file in PATCH_FILES:
+        if not patch_file.is_file():
+            raise ValueError(f"missing patch: {patch_file}")
     metadata = _load_metadata(METADATA_FILE)
     _verify_layout()
     if patched_tree:
@@ -168,9 +182,11 @@ def verify(source_root: Path, *, patched_tree: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="vericcl-msccl-patch-") as temp:
         root = Path(temp)
         _copy_reference(source_root, root)
-        _run_patch(root, dry_run=True)
-        _run_patch(root, dry_run=False)
+        for patch_file in PATCH_FILES:
+            _run_patch(root, patch_file, dry_run=True)
+            _run_patch(root, patch_file, dry_run=False)
         _verify_patched_sources(root)
+        _verify_host_step_signature(root)
         _verify_hashes(root, metadata)
 
 

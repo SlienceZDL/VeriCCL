@@ -23,6 +23,11 @@ PATCH_FILE = (
     / "patches"
     / "0001-vericcl-fixed-step-trace.patch"
 )
+HOST_SIGNATURE_PATCH = (
+    RUNTIME_ROOT
+    / "patches"
+    / "0002-vericcl-host-step-signature.patch"
+)
 VERIFY_PATCH = RUNTIME_ROOT / "tools" / "verify_patch.py"
 REFERENCE_ROOT = os.environ.get("VERICCL_MSCCL_REFERENCE_ROOT")
 STRATEGY_PATTERN = re.compile(
@@ -30,6 +35,13 @@ STRATEGY_PATTERN = re.compile(
     r"```bash\s*\n(.*?)\n```",
     re.DOTALL,
 )
+
+
+def test_setup_installs_both_runtime_patches():
+    text = Path("setup.py").read_text(encoding="ascii")
+
+    assert "0001-vericcl-fixed-step-trace.patch" in text
+    assert "0002-vericcl-host-step-signature.patch" in text
 
 
 EXPECTED_RECORD_FIELDS = (
@@ -287,6 +299,21 @@ def test_patch_uses_fixed_buffers_and_removes_device_printf_trace():
     assert "Rank:%d,Bid:%d,Count:%d" not in added_lines
 
 
+def test_host_signature_patch_forces_msccl_proxy_steps_only():
+    patch = HOST_SIGNATURE_PATCH.read_text(encoding="utf-8")
+    added_lines = "\n".join(
+        line[1:] for line in patch.splitlines() if line.startswith("+")
+    )
+
+    patched_files = tuple(
+        re.findall(r"^diff --git a/(\S+) b/\1$", patch, flags=re.MULTILINE)
+    )
+    assert patched_files == ("src/enqueue.cc",)
+    assert "if (info->algorithm == NCCL_ALGO_MSCCL)" in added_lines
+    assert "chunkSteps = MSCCL_CHUNKSTEPS;" in added_lines
+    assert "sliceSteps = MSCCL_SLICESTEPS;" in added_lines
+
+
 def test_transfer_start_is_first_captured_inside_every_primitive_protocol():
     patch = PATCH_FILE.read_text(encoding="utf-8")
     added_lines = "\n".join(
@@ -375,16 +402,23 @@ def test_trace_initialization_rolls_back_partial_allocations():
     assert "vericclTraceDiscard(comm);" in init_added
 
 
-def test_verifier_copies_every_file_modified_by_the_patch():
-    patch = PATCH_FILE.read_text(encoding="utf-8")
-    patched_files = set(
-        re.findall(r"^diff --git a/(\S+) b/\1$", patch, flags=re.MULTILINE)
-    )
+def test_verifier_copies_every_file_modified_by_the_patches():
+    patch_files = (PATCH_FILE, HOST_SIGNATURE_PATCH)
+    patched_files = {
+        relative
+        for patch_file in patch_files
+        for relative in re.findall(
+            r"^diff --git a/(\S+) b/\1$",
+            patch_file.read_text(encoding="utf-8"),
+            flags=re.MULTILINE,
+        )
+    }
     spec = importlib.util.spec_from_file_location("verify_patch", VERIFY_PATCH)
     verifier = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(verifier)
 
+    assert tuple(verifier.PATCH_FILES) == patch_files
     assert patched_files <= set(verifier.REQUIRED_FILES)
 
 
@@ -504,6 +538,7 @@ def test_runtime_readme_installation_strategies_execute_pinned_verifiers(
         assert completed.returncode == 0, completed.stdout + completed.stderr
         log = command_log.read_text(encoding="utf-8")
         assert mode in log
+        assert HOST_SIGNATURE_PATCH.name in log
         if name == "strategy-a":
             assert metadata["upstream_repository"] in log
             assert metadata["upstream_commit"] in log

@@ -198,6 +198,23 @@ def test_parser_rejects_wrong_size_and_correctness_failures():
         parse_nccl_tests_output("# no measurements", 268435456)
 
 
+def test_trace_parser_accepts_unchecked_wrong_count_only_when_enabled():
+    unchecked = _output_row("10.0", "11.0").replace(" 0 ", " N/A ")
+    unchecked = unchecked.rsplit(" 0", 1)[0] + " N/A"
+
+    with pytest.raises(SemanticError, match="wrong count"):
+        parse_nccl_tests_output(unchecked, 268435456)
+
+    runs = parse_nccl_tests_output(
+        unchecked,
+        268435456,
+        allow_unchecked=True,
+    )
+
+    assert runs[0].out_of_place.wrong_count == 0
+    assert runs[0].in_place.wrong_count == 0
+
+
 def test_help_validator_caches_binary_help_and_rejects_missing_options():
     request = _request(
         CollectiveKind.BROADCAST,

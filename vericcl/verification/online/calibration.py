@@ -17,6 +17,7 @@ from vericcl.verification.online.trace_analysis import TraceAnalysis
 BENCHMARK_SIZE_BYTES = 128 * 1024 * 1024
 MAX_CALIBRATION_CONCURRENCY = 32
 CALIBRATION_LINK_CLASSES = frozenset({"intra_node", "inter_node"})
+CALIBRATION_TRANSFER_PREFIX = "calibration-send-"
 
 
 def _identifier(value: object, field: str) -> str:
@@ -209,10 +210,11 @@ def derive_calibrated_curve(
 
 
 def _calibration_logical_index(transfer_id: str) -> int:
-    prefix = "calibration-send-"
-    if not isinstance(transfer_id, str) or not transfer_id.startswith(prefix):
+    if not isinstance(transfer_id, str) or not transfer_id.startswith(
+        CALIBRATION_TRANSFER_PREFIX
+    ):
         raise SemanticError("calibration trace contains an unknown transfer")
-    suffix = transfer_id[len(prefix) :]
+    suffix = transfer_id[len(CALIBRATION_TRANSFER_PREFIX) :]
     if len(suffix) != 8 or not suffix.isdigit():
         raise SemanticError("calibration trace transfer ID is invalid")
     return int(suffix)
@@ -240,6 +242,8 @@ def calibration_point_from_trace(
         raise SemanticError("calibration trace contains no full wave")
     intervals = {}
     for interval in analysis.intervals:
+        if interval.local is not None:
+            continue
         logical = _calibration_logical_index(interval.transfer_id)
         key = (interval.iteration, logical)
         if key in intervals:

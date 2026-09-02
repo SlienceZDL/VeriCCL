@@ -34,7 +34,9 @@ setup(
             "share/vericcl/runtime/msccl-trace/patches",
             [
                 "runtime/msccl-trace/patches/"
-                "0001-vericcl-fixed-step-trace.patch"
+                "0001-vericcl-fixed-step-trace.patch",
+                "runtime/msccl-trace/patches/"
+                "0002-vericcl-host-step-signature.patch",
             ],
         ),
         (

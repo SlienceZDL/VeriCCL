@@ -214,6 +214,18 @@ def test_calibration_point_uses_full_wave_trace_intervals_only():
                     endpoint_order_uncertain=False,
                 )
             )
+        intervals.append(
+            PhysicalTransferInterval(
+                transfer_id="copy-{:08d}".format(iteration),
+                iteration=iteration,
+                send=None,
+                receive=None,
+                local=object(),
+                physical_start=AlignedTimestamp(0.0, 0.0),
+                physical_end=AlignedTimestamp(1.0, 0.0),
+                endpoint_order_uncertain=False,
+            )
+        )
     analysis = TraceAnalysis(tuple(intervals), (), (), (), True)
     request = CalibrationRequest("intra_node", 32 * 1024 * 1024, 2, "float")
 
@@ -222,6 +234,39 @@ def test_calibration_point_uses_full_wave_trace_intervals_only():
     assert point.full_wave_count == 2
     assert point.tail_transfer_count == 0
     assert point.duration_statistics.p95_us == 7.0
+
+
+def test_calibration_point_rejects_unknown_nonlocal_transfer():
+    intervals = [
+        PhysicalTransferInterval(
+            transfer_id="calibration-send-00000000",
+            iteration=iteration,
+            send=None,
+            receive=None,
+            local=None,
+            physical_start=AlignedTimestamp(0.0, 0.0),
+            physical_end=AlignedTimestamp(5.0, 0.0),
+            endpoint_order_uncertain=False,
+        )
+        for iteration in range(20)
+    ]
+    intervals.append(
+        PhysicalTransferInterval(
+            transfer_id="unexpected-network-transfer",
+            iteration=0,
+            send=object(),
+            receive=object(),
+            local=None,
+            physical_start=AlignedTimestamp(0.0, 0.0),
+            physical_end=AlignedTimestamp(1.0, 0.0),
+            endpoint_order_uncertain=False,
+        )
+    )
+    analysis = TraceAnalysis(tuple(intervals), (), (), (), True)
+    request = CalibrationRequest("intra_node", 128 * 1024 * 1024, 1, "float")
+
+    with pytest.raises(SemanticError, match="unknown transfer"):
+        calibration_point_from_trace(request, 1, analysis)
 
 
 def test_calibration_point_rejects_missing_full_wave_interval():

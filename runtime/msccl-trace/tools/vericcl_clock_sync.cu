@@ -30,6 +30,27 @@ static uint64_t monotonicNs() {
 }
 
 
+static void selectLocalDevice(int worldRank) {
+  MPI_Comm localComm = MPI_COMM_NULL;
+  MPI_Comm_split_type(
+      MPI_COMM_WORLD,
+      MPI_COMM_TYPE_SHARED,
+      worldRank,
+      MPI_INFO_NULL,
+      &localComm);
+  int localRank = 0;
+  MPI_Comm_rank(localComm, &localRank);
+  int deviceCount = 0;
+  CUDA_CHECK(cudaGetDeviceCount(&deviceCount));
+  if (deviceCount < 1) {
+    fprintf(stderr, "no CUDA device is visible to MPI rank %d\n", worldRank);
+    MPI_Abort(MPI_COMM_WORLD, 2);
+  }
+  CUDA_CHECK(cudaSetDevice(localRank % deviceCount));
+  MPI_Comm_free(&localComm);
+}
+
+
 __global__ static void readGpuTimer(unsigned long long* output) {
   if (blockIdx.x != 0 || threadIdx.x != 0) return;
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
@@ -116,6 +137,7 @@ int main(int argc, char** argv) {
   int worldSize = 0;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &worldSize);
+  selectLocalDevice(rank);
 
   int sampleCount = 16;
   if (argc == 2) sampleCount = atoi(argv[1]);
@@ -141,6 +163,12 @@ int main(int argc, char** argv) {
   readGpuTimer<<<1, 1>>>(deviceTimer);
   CUDA_CHECK(cudaGetLastError());
   CUDA_CHECK(cudaDeviceSynchronize());
+  unsigned long long warmupGpuTicks = 0;
+  CUDA_CHECK(cudaMemcpy(
+      &warmupGpuTicks,
+      deviceTimer,
+      sizeof(warmupGpuTicks),
+      cudaMemcpyDeviceToHost));
 
   for (int sample = 0; sample < sampleCount; ++sample) {
     uint64_t hostBeforeNs = monotonicNs();

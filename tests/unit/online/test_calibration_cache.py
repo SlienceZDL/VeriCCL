@@ -80,6 +80,23 @@ def test_cache_requires_exact_environment_signature_and_force_bypasses():
         assert cache.get(replace(signature, **changes)) is None
 
 
+def test_cache_does_not_reuse_unstable_measurement():
+    signature = _signature()
+    unstable = CalibrationPoint(
+        signature.concurrency,
+        summarize_runs(
+            tuple(1.0 if index % 2 else 20.0 for index in range(20))
+        ),
+        full_wave_count=8,
+        tail_transfer_count=0,
+    )
+    cache = CalibrationCache()
+    cache.put(signature, unstable)
+
+    assert unstable.stable is False
+    assert cache.get(signature) is None
+
+
 def test_signature_normalizes_path_order_and_cache_validates_values():
     first = _signature()
     second = _signature(path_variables=tuple(reversed(first.path_variables)))

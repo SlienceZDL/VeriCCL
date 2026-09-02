@@ -1,16 +1,21 @@
-# VeriCCL MSCCL Step Trace Patch
+# VeriCCL MSCCL Step Trace Patches
 
-This patch replaces device-side per-step `printf` tracing with a fixed-size
-device record buffer. Its official source is
+The first patch replaces device-side per-step `printf` tracing with a
+fixed-size device record buffer. The second aligns the host network proxy's
+step signature with the device interpreter. Their official source is
 `https://github.com/microsoft/msccl.git` at commit
 `b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`.
 
-## Strategy A: official source plus the bundled patch
+The build commands below target NVIDIA V100 (`compute_70`/`sm_70`). For
+NVIDIA A100, replace that pair consistently with `compute_80`/`sm_80`.
+
+## Strategy A: official source plus the bundled patches
 
 <!-- vericcl-msccl-strategy: strategy-a -->
 ```bash
 export VERICCL_ROOT="$(pwd)"
 export MSCCL_SRC="${TMPDIR:-/tmp}/vericcl-msccl-base"
+export NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
 git clone https://github.com/microsoft/msccl.git "$MSCCL_SRC"
 git -C "$MSCCL_SRC" checkout --detach \
   b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
@@ -20,8 +25,10 @@ cp "$VERICCL_ROOT/runtime/msccl-trace/include/vericcl_trace_format.h" \
   "$MSCCL_SRC/src/include/vericcl_trace_format.h"
 patch --directory="$MSCCL_SRC" --strip=1 \
   --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch"
+patch --directory="$MSCCL_SRC" --strip=1 \
+  --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0002-vericcl-host-step-signature.patch"
 make -C "$MSCCL_SRC" clean
-make -C "$MSCCL_SRC" -j src.build
+make -C "$MSCCL_SRC" -j NVCC_GENCODE="$NVCC_GENCODE" src.build
 ```
 
 The verifier copies the required files to a temporary directory, dry-runs and
@@ -37,22 +44,26 @@ and every file hash recorded in `upstream.json` before the build.
 ```bash
 export VERICCL_ROOT="$(pwd)"
 export MSCCL_SRC="${TMPDIR:-/tmp}/vericcl-msccl-runtime"
+export NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
 git clone --branch vericcl-runtime-v0.1.0 --depth 1 \
   https://github.com/SlienceZDL/VeriCCL-MSCCL.git "$MSCCL_SRC"
 test "$(git -C "$MSCCL_SRC" rev-parse HEAD)" = \
   782ee5f72cf48c1ae1a2365bcf525019f5620175
 python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" \
   --source-root "$MSCCL_SRC" --patched-tree
+patch --directory="$MSCCL_SRC" --strip=1 \
+  --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0002-vericcl-host-step-signature.patch"
 make -C "$MSCCL_SRC" clean
-make -C "$MSCCL_SRC" -j src.build
+make -C "$MSCCL_SRC" -j NVCC_GENCODE="$NVCC_GENCODE" src.build
 test -d "$MSCCL_SRC/build/lib"
 ```
 
-Strategy A verification proves the pinned base revision, patch applicability,
-layout, and final hashes. Strategy C verification proves the published
-revision, clean tracked state, source invariants, and the same recorded hashes.
-Neither mode compiles CUDA sources or provides evidence of a successful CUDA
-build or GPU execution.
+Strategy A verification proves the pinned base revision, both patches'
+applicability, layout, host/device step-signature invariant, and recorded
+hashes. Strategy C first proves the published trace-enabled revision, clean
+tracked state, source invariants, and recorded hashes; it then applies the same
+host-side supplement as Strategy A. Neither mode compiles CUDA sources or
+provides evidence of a successful CUDA build or GPU execution.
 
 ## Trace controls
 
@@ -78,7 +89,11 @@ NCCL collective invocation. VeriCCL runs trace diagnostics with zero warmups,
 the setup invocation from each out-of-place or in-place timing block and sends
 exactly 20 measured invocations to trace analysis.
 
-The patch fixes `MSCCL_CHUNKSTEPS=4` and `MSCCL_SLICESTEPS=4`. Use the runtime
+The patches fix `MSCCL_CHUNKSTEPS=4` and `MSCCL_SLICESTEPS=4` on the device and
+force the MSCCL host proxy to use the same values. The host-side override is
+required for inter-node transfers; otherwise the public NCCL API supplies the
+standard AllReduce slice signature (`4/2`) while the MSCCL interpreter consumes
+`4/4`, which mismatches network proxy byte counts and credits. Use the runtime
 parameter guidance in `Vericcl-work-document.md` to keep each XML step at the
 intended software slice granularity.
 

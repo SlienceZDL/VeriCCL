@@ -4,6 +4,7 @@ import math
 import os
 import hashlib
 from pathlib import Path
+from time import monotonic as _monotonic
 from typing import Mapping
 
 from vericcl.errors import InputValidationError, SemanticError
@@ -205,10 +206,8 @@ def build_online_context_factory(
         _required(values, "VERICCL_CLOCK_SYNC_BINARY")
     )
     inter_node = _boolean(values, "VERICCL_ONLINE_INTER_NODE")
-    operator_mpi_launcher = (
-        Path(_required(values, "VERICCL_MPI_LAUNCHER"))
-        if inter_node
-        else None
+    operator_mpi_launcher = Path(
+        _required(values, "VERICCL_MPI_LAUNCHER")
     )
     operator_mpi_hostfile = (
         Path(_required(values, "VERICCL_MPI_HOSTFILE"))
@@ -274,7 +273,7 @@ def build_online_context_factory(
             root=spec.root,
             inplace=spec.inplace,
             binary_directory=str(nccl_tests_directory),
-            gpus_per_process=1 if inter_node else inputs.rank_count,
+            gpus_per_process=1,
         )
         calibration_plan = None
         if calibration_enabled:
@@ -324,8 +323,24 @@ def build_online_context_factory(
                 )
                 for concurrency in range(1, effective + 1)
             )
+            calibration_started = None
 
             def measure_point(signature):
+                nonlocal calibration_started
+                now = _monotonic()
+                if calibration_started is None:
+                    calibration_started = now
+                remaining_budget = float(timeout_s) - (
+                    now - calibration_started
+                )
+                if remaining_budget <= 0.0:
+                    raise SemanticError(
+                        "calibration wall-clock budget expired"
+                    )
+                remaining_points = max(
+                    1,
+                    effective - signature.concurrency + 1,
+                )
                 benchmark = build_calibration_benchmark(
                     calibration_request,
                     calibration_topology,
@@ -355,20 +370,14 @@ def build_online_context_factory(
                         root=0,
                         inplace=False,
                         binary_directory=str(nccl_tests_directory),
-                        gpus_per_process=(
-                            1 if calibration_inter_node else 2
-                        ),
+                        gpus_per_process=1,
                     ),
                     xml_paths=(calibration_xml,),
                     msccl_library_path=msccl_directory,
                     executor=executor,
                     environment=process_environment(values),
                     inter_node=calibration_inter_node,
-                    mpi_launcher=(
-                        calibration_mpi_launcher
-                        if calibration_inter_node
-                        else None
-                    ),
+                    mpi_launcher=calibration_mpi_launcher,
                     mpi_hostfile=(
                         calibration_mpi_hostfile
                         if calibration_inter_node
@@ -378,7 +387,7 @@ def build_online_context_factory(
                     clock_sync_binary=clock_sync_binary,
                     max_clock_uncertainty_us=uncertainty,
                     online_tuning_requested=False,
-                    timeout_s=float(timeout_s) / max(1, effective),
+                    timeout_s=remaining_budget / remaining_points,
                     trace_record_capacity=trace_record_capacity,
                 )
                 measured = run_online_validation(calibration_context)

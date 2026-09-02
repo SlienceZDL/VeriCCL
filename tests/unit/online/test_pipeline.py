@@ -306,6 +306,40 @@ def test_preflight_requires_one_matching_xml_and_inter_node_mpi(tmp_path):
     assert missing_mpi.failure_code == "mpi_launcher_missing"
 
 
+def test_preflight_requires_mpi_for_intra_node_one_process_per_gpu(tmp_path):
+    context = _context(tmp_path, mpi_launcher=None)
+
+    result = run_online_validation(context)
+
+    assert result.failure_code == "mpi_launcher_missing"
+
+
+def test_two_rank_inter_node_launcher_maps_one_process_per_node(tmp_path):
+    executor = FakeExecutor()
+    base = _context(tmp_path, executor=executor)
+    hostfile = tmp_path / "hosts"
+    hostfile.write_text("node-a slots=1\nnode-b slots=1\n", encoding="utf-8")
+    context = replace(
+        base,
+        inter_node=True,
+        mpi_hostfile=hostfile,
+    )
+
+    result = run_online_validation(context)
+
+    assert result.online_operator_validation is OnlineStageStatus.PASSED
+    command = _performance_calls(executor)[0].command
+    assert command[:7] == (
+        str(context.mpi_launcher),
+        "-np",
+        "2",
+        "-N",
+        "1",
+        "--hostfile",
+        str(hostfile),
+    )
+
+
 def test_preflight_rejects_conflicting_runtime_environment(tmp_path):
     context = _context(
         tmp_path,
@@ -390,7 +424,10 @@ def test_release_and_trace_runs_are_separate_and_share_exact_parameters(tmp_path
     assert trace_calls[0].command[
         trace_calls[0].command.index("-c") + 1
     ] == "0"
-    assert all(call.environment["NCCL_ALGO"] == "MSCCL" for call in calls)
+    assert all(
+        call.environment["NCCL_ALGO"] == "MSCCL,RING"
+        for call in calls
+    )
     assert all(call.environment["NCCL_BUFFSIZE"] == "2048" for call in calls)
     assert all(
         call.environment["VERICCL_EXPECTED_MSCCL_CHUNKSTEPS"] == "4"
@@ -597,15 +634,14 @@ def test_preflight_reports_precise_missing_prerequisite(tmp_path, case, code):
     assert result.failure_code == code
 
 
-def test_pipeline_supports_direct_intra_node_launch_without_mpi(tmp_path):
+def test_pipeline_rejects_direct_intra_node_launch_without_mpi(tmp_path):
     executor = FakeExecutor()
     context = _context(tmp_path, executor=executor, mpi_launcher=None)
 
     result = run_online_validation(context)
 
-    assert result.online_operator_validation is OnlineStageStatus.PASSED
-    first_release = _performance_calls(executor)[0]
-    assert Path(first_release.command[0]).name == "all_reduce_perf"
+    assert result.failure_code == "mpi_launcher_missing"
+    assert executor.calls == []
 
 
 def test_clock_and_trace_process_failures_preserve_release_result(tmp_path):

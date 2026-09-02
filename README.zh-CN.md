@@ -218,21 +218,25 @@ PY
 
 CUDA、MPI及服务器配置请参阅[运行时配置](docs/runtime-configuration.md)。本节仅定义VeriCCL相关的源码、激活与评估契约，不提供操作系统安装流程。
 
-### 策略A：官方源码与内置补丁
+下述命令以NVIDIA V100（`compute_70`/`sm_70`）为例。若使用NVIDIA A100，构建前应将`NVCC_GENCODE`和时钟辅助程序`nvcc`命令中的全部`compute_70`/`sm_70`替换为`compute_80`/`sm_80`。
 
-策略A基于官方MSCCL仓库的不可变commit `b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`。验证器在临时副本中检查干净的固定版本基础树及最终哈希，然后对实际checkout应用补丁并构建。
+### 策略A：官方源码与两个内置补丁
+
+策略A基于官方MSCCL仓库的不可变commit `b23e9cd5dd63f82ee1c5aae7e0a2042079be903a`。验证器在临时副本中检查干净的固定版本基础树、两个补丁及记录哈希，然后对实际checkout应用补丁并构建。
 
 ```bash
 export VERICCL_ROOT="$(pwd)"
 export CUDA_HOME=/usr/local/cuda
+export NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
 export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/msccl-official"
 git clone https://github.com/microsoft/msccl.git "$MSCCL_ROOT"
 git -C "$MSCCL_ROOT" checkout --detach b23e9cd5dd63f82ee1c5aae7e0a2042079be903a
 python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --base-tree
 cp "$VERICCL_ROOT/runtime/msccl-trace/include/vericcl_trace_format.h" "$MSCCL_ROOT/src/include/vericcl_trace_format.h"
 patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0001-vericcl-fixed-step-trace.patch"
+patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0002-vericcl-host-step-signature.patch"
 make -C "$MSCCL_ROOT" clean
-make -C "$MSCCL_ROOT" -j src.build
+make -C "$MSCCL_ROOT" -j NVCC_GENCODE="$NVCC_GENCODE" src.build
 test -d "$MSCCL_ROOT/build/lib"
 ```
 
@@ -245,16 +249,18 @@ test -d "$MSCCL_ROOT/build/lib"
 ```bash
 export VERICCL_ROOT="$(pwd)"
 export CUDA_HOME=/usr/local/cuda
+export NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70"
 export MSCCL_ROOT="$(dirname "$VERICCL_ROOT")/VeriCCL-MSCCL"
 git clone --branch vericcl-runtime-v0.1.0 --depth 1 https://github.com/SlienceZDL/VeriCCL-MSCCL.git "$MSCCL_ROOT"
 test "$(git -C "$MSCCL_ROOT" rev-parse HEAD)" = 782ee5f72cf48c1ae1a2365bcf525019f5620175
 python3 "$VERICCL_ROOT/runtime/msccl-trace/tools/verify_patch.py" --source-root "$MSCCL_ROOT" --patched-tree
+patch --directory="$MSCCL_ROOT" --strip=1 --input="$VERICCL_ROOT/runtime/msccl-trace/patches/0002-vericcl-host-step-signature.patch"
 make -C "$MSCCL_ROOT" clean
-make -C "$MSCCL_ROOT" -j src.build
+make -C "$MSCCL_ROOT" -j NVCC_GENCODE="$NVCC_GENCODE" src.build
 test -d "$MSCCL_ROOT/build/lib"
 ```
 
-验证器预期输出`verification passed`。策略A与策略C的trace头文件及运行时源码哈希均与`upstream.json`一致，并生成`$MSCCL_ROOT/build/lib`。静态验证不能证明CUDA编译或GPU执行成功。
+验证器预期输出`verification passed`。策略A与策略C使用相同的trace实现，并在生成`$MSCCL_ROOT/build/lib`前应用主机侧step签名补丁。该补丁使MSCCL网络代理与设备解释器统一使用`4/4`的chunk/slice签名；缺失该补丁会导致跨节点传输字节数和代理credit不一致。静态验证不能证明CUDA编译或GPU执行成功。
 
 ### NCCL Tests与时钟辅助程序构建
 
@@ -270,7 +276,7 @@ test -f "$MPI_HOME/include/mpi.h"
 test -d "$MPI_HOME/lib"
 git clone https://github.com/NVIDIA/nccl-tests "$NCCL_TESTS_ROOT"
 make -C "$NCCL_TESTS_ROOT" -j MPI=1 MPI_HOME="$MPI_HOME" CUDA_HOME="$CUDA_HOME" NCCL_HOME="$MSCCL_ROOT/build"
-nvcc -ccbin mpicxx -O2 -std=c++11 "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync.cu" -o "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
+nvcc -ccbin mpicxx -O2 -std=c++11 -gencode=arch=compute_70,code=sm_70 "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync.cu" -o "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
 test -x "$NCCL_TESTS_ROOT/build/all_reduce_perf"
 test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
 ```
@@ -285,6 +291,7 @@ test -x "$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
 export VERICCL_MSCCL_BUILD_DIR="$MSCCL_ROOT/build/lib"
 export VERICCL_NCCL_TESTS_BUILD_DIR="$NCCL_TESTS_ROOT/build"
 export VERICCL_CLOCK_SYNC_BINARY="$VERICCL_ROOT/runtime/msccl-trace/tools/vericcl_clock_sync"
+export VERICCL_MPI_LAUNCHER="$(command -v mpirun)"
 export VERICCL_ONLINE_INTER_NODE=0
 export VERICCL_MAX_CLOCK_UNCERTAINTY_US=10
 export VERICCL_CALIBRATION_LINK_CLASS=intra_node
@@ -302,24 +309,26 @@ export VERICCL_TRACE_RECORDS=1048576
 .venv/bin/python -m vericcl solve --topology vericcl/examples/topo/two_rank.json --sketch vericcl/examples/sketch/allreduce_8m_1m.json --atoms vericcl/examples/atom/constructive.json --online --output-dir runs --run-id online --timeout-s 10800
 ```
 
-校准固定使用128 MiB与输入slice大小。slice大小必须整除128 MiB，否则校准状态为`not_run`。机内校准由一个进程以`-g 2`启动；节点间校准由两个MPI进程分别以`-g 1`启动。
+校准固定使用128 MiB与输入slice大小。slice大小必须整除128 MiB，否则校准状态为`not_run`。机内和节点间校准均由MPI启动，每个进程只使用一个GPU（`-g 1`）；只有节点间执行额外要求hostfile。
+节点间校准的双Rank代表性基准还使用`-N 1`，确保两个进程分别位于两个节点。
+首次执行未缓存的32点校准时，应保留示例中的`--timeout-s 10800`。每个点需要20个独立release进程和1个trace进程；即使全部XML有效，1800秒工作流预算也可能不足。
 
 release测量与trace诊断必须分开运行。release使用5次预热、20次测量、正确性检查及`VERICCL_TRACE_ENABLE=0`；trace使用0次预热、20次测量、`-c 0`及`VERICCL_TRACE_ENABLE=1`。trace开销不能作为性能数据。
 
 ### MSCCL激活边界
 
-XML成功加载的正向信号是`NCCL INFO Connected 1 MSCCL algorithms`。缺少此信号或NCCL回退到非MSCCL算法，均不构成VeriCCL调度验证；在解读正确性、trace或性能输出前，应停止并诊断激活状态。
+XML成功加载的正向信号是`NCCL INFO Connected 1 MSCCL algorithms`。NCCL Tests会依次执行非原地和原地两个计时区段，而单个VeriCCL XML只匹配一种放置模式。因此使用`NCCL_ALGO=MSCCL,RING`：匹配区段使用MSCCL，非匹配区段回退到Ring。若缺少加载信号、选定区段缺少MSCCL step trace，或选定区段发生回退，则不能视为VeriCCL调度验证。
 
 ### 单节点XML执行
 
-固定运行时契约为`MSCCL_CHUNKSTEPS=4`、`MSCCL_SLICESTEPS=4`、`NCCL_PROTO=Simple`、XML `cnt=1`及`NCCL_BUFFSIZE=2*slice_size_bytes`。内置示例的slice为1 MiB，因此缓冲区为2 MiB。每次仅设置一个XML，并确保消息大小、datatype、归约操作、root、Rank数及in-place模式与XML一致。
+固定运行时契约为`MSCCL_CHUNKSTEPS=4`、`MSCCL_SLICESTEPS=4`、主机侧step签名补丁、`NCCL_PROTO=Simple`、XML `cnt=1`及`NCCL_BUFFSIZE=2*slice_size_bytes`。内置示例的slice为1 MiB，因此缓冲区为2 MiB。每次仅设置一个XML，并确保消息大小、datatype、归约操作、root、Rank数及in-place模式与XML一致。
 
 首先在单节点双GPU上执行简短的INFO级激活探测。`sed`检查要求日志中所有已连接算法数量均严格为1；缺少该信号时检查失败：
 
 <!-- vericcl-msccl-run: single-node-activation -->
 ```bash
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
@@ -328,8 +337,9 @@ export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
 export VERICCL_TRACE_ENABLE=0
 export NCCL_DEBUG=INFO
 export NCCL_DEBUG_SUBSYS=INIT
+export VERICCL_MPI_LAUNCHER="$(command -v mpirun)"
 MSCCL_ACTIVATION_LOG="$(mktemp)"
-"$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 1 -c 1 -d float -o sum -g 2 2>&1 | tee "$MSCCL_ACTIVATION_LOG"
+"$VERICCL_MPI_LAUNCHER" --bind-to none -np 2 -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE -x NCCL_DEBUG -x NCCL_DEBUG_SUBSYS "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 1 -c 1 -d float -o sum -g 1 2>&1 | tee "$MSCCL_ACTIVATION_LOG"
 test "$(sed -n 's/.*NCCL INFO Connected \([0-9][0-9]*\) MSCCL algorithms.*/\1/p' "$MSCCL_ACTIVATION_LOG" | sort -u)" = 1
 rm -f "$MSCCL_ACTIVATION_LOG"
 ```
@@ -340,14 +350,15 @@ rm -f "$MSCCL_ACTIVATION_LOG"
 ```bash
 unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
 export VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4
 export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
 export VERICCL_TRACE_ENABLE=0
-"$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 5 -n 20 -c 1 -d float -o sum -g 2
+export VERICCL_MPI_LAUNCHER="$(command -v mpirun)"
+"$VERICCL_MPI_LAUNCHER" --bind-to none -np 2 -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 5 -n 20 -c 1 -d float -o sum -g 1
 ```
 
 独立诊断运行：
@@ -356,7 +367,7 @@ export VERICCL_TRACE_ENABLE=0
 ```bash
 unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
@@ -365,8 +376,11 @@ export VERICCL_EXPECTED_MSCCL_SLICESTEPS=4
 export VERICCL_TRACE_ENABLE=1
 export VERICCL_TRACE_RECORDS=1048576
 export VERICCL_TRACE_FILE_PREFIX=/absolute/path/to/vericcl-step
-"$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 20 -c 0 -d float -o sum -g 2
+export VERICCL_MPI_LAUNCHER="$(command -v mpirun)"
+"$VERICCL_MPI_LAUNCHER" --bind-to none -np 2 -x LD_LIBRARY_PATH -x NCCL_ALGO -x NCCL_PROTO -x NCCL_BUFFSIZE -x MSCCL_XML_FILES -x VERICCL_EXPECTED_MSCCL_CHUNKSTEPS -x VERICCL_EXPECTED_MSCCL_SLICESTEPS -x VERICCL_TRACE_ENABLE -x VERICCL_TRACE_RECORDS -x VERICCL_TRACE_FILE_PREFIX "$NCCL_TESTS_ROOT/build/all_reduce_perf" -b 8388608 -e 8388608 -w 0 -n 20 -c 0 -d float -o sum -g 1
 ```
+
+跨节点验证时，`VERICCL_TRACE_FILE_PREFIX`必须位于所有节点以相同绝对路径挂载的共享存储中，使收集器能够读取全部Rank文件。提高时钟不确定度阈值只能允许解析，不能使不确定的端点顺序具备调优资格。
 
 ### 多节点XML执行
 
@@ -377,7 +391,7 @@ export VERICCL_TRACE_FILE_PREFIX=/absolute/path/to/vericcl-step
 <!-- vericcl-msccl-run: multi-node-activation -->
 ```bash
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
@@ -399,7 +413,7 @@ rm -f "$MSCCL_ACTIVATION_LOG"
 ```bash
 unset NCCL_DEBUG NCCL_DEBUG_SUBSYS
 export LD_LIBRARY_PATH="$MSCCL_ROOT/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 export NCCL_PROTO=Simple
 export NCCL_BUFFSIZE=2097152
 export MSCCL_XML_FILES=/absolute/path/to/one-schedule.xml
@@ -429,10 +443,10 @@ mpirun -np 8 -N 4 --hostfile "$VERICCL_MPI_HOSTFILE" -x LD_LIBRARY_PATH -x NCCL_
 
 - CUDA/MSCCL构建失败：重新检查驱动、Toolkit、主机编译器兼容性表、`CUDA_HOME`、GPU架构及完整编译输出。
 - 缺少`mpi.h`或MPI链接失败：确认当前Open MPI包装器报告预期包含目录及推导出的`MPI_HOME`，然后重新检查编译器和链接器输出。
-- MSCCL验证失败：使用精确的上游commit或fork tag、干净的策略A checkout及未修改的内置头文件与补丁。
+- MSCCL验证失败：使用精确的上游commit或fork tag、干净的策略A checkout及未修改的内置头文件与两个补丁。
 - `Model too large...`：激活完整Gurobi许可证；重新安装`gurobipy`不会扩大内置许可证限制。
 - 在线binary/库缺失：检查三个`VERICCL_*_BUILD_DIR`/binary路径，并向每个MPI Rank传播`LD_LIBRARY_PATH`。
-- 运行时不匹配：使用Simple协议、`NCCL_BUFFSIZE=2*slice_size_bytes`、step常量`4/4`、`cnt=1`、单个XML及匹配的NCCL Tests参数。
+- 运行时不匹配：应用两个内置补丁，并使用Simple协议、`NCCL_BUFFSIZE=2*slice_size_bytes`、step常量`4/4`、`cnt=1`、单个XML及匹配的NCCL Tests参数。
 - Trace/时钟失败：分离release与trace运行，按需增大`VERICCL_TRACE_RECORDS`，并检查时钟误差和各Rank trace文件。
 
 ### 软件测试与参考资料

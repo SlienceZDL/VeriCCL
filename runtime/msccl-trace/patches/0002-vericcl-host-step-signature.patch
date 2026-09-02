@@ -1,0 +1,15 @@
+diff --git a/src/enqueue.cc b/src/enqueue.cc
+index 7bb0ac7..e0b4a8f 100644
+--- a/src/enqueue.cc
++++ b/src/enqueue.cc
+@@ -629,6 +629,10 @@ static ncclResult_t computeColl(struct ncclInfo* info, struct ncclWork* work, str
+   int stepSize   = info->comm->buffSizes[info->protocol]/NCCL_STEPS;
+   int chunkSteps = (info->protocol == NCCL_PROTO_SIMPLE && (info->algorithm == NCCL_ALGO_RING || info->algorithm == NCCL_ALGO_MSCCL)) ? info->chunkSteps : 1;
+   int sliceSteps = (info->protocol == NCCL_PROTO_SIMPLE && (info->algorithm == NCCL_ALGO_RING || info->algorithm == NCCL_ALGO_MSCCL)) ? info->sliceSteps : 1;
++  if (info->algorithm == NCCL_ALGO_MSCCL) {
++    chunkSteps = MSCCL_CHUNKSTEPS;
++    sliceSteps = MSCCL_SLICESTEPS;
++  }
+   int chunkSize  = stepSize*chunkSteps;
+ 
+   // Compute lastChunkSize

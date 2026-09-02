@@ -103,7 +103,11 @@ def _number(value: str, field: str, *, positive: bool) -> float:
     return result
 
 
-def _measurement(values: Tuple[str, ...]) -> NcclTestMeasurement:
+def _measurement(
+    values: Tuple[str, ...],
+    *,
+    allow_unchecked: bool,
+) -> NcclTestMeasurement:
     if len(values) != 4:
         raise SemanticError("nccl-tests measurement must contain four fields")
     measurement = NcclTestMeasurement(
@@ -118,10 +122,14 @@ def _measurement(values: Tuple[str, ...]) -> NcclTestMeasurement:
             "nccl-tests bus bandwidth",
             positive=False,
         ),
-        wrong_count=_integer(
-            values[3],
-            "nccl-tests wrong count",
-            positive=False,
+        wrong_count=(
+            0
+            if allow_unchecked and values[3] == "N/A"
+            else _integer(
+                values[3],
+                "nccl-tests wrong count",
+                positive=False,
+            )
         ),
     )
     if measurement.wrong_count:
@@ -132,6 +140,8 @@ def _measurement(values: Tuple[str, ...]) -> NcclTestMeasurement:
 def _performance_row(
     fields: Tuple[str, ...],
     expected_bytes: int,
+    *,
+    allow_unchecked: bool,
 ) -> NcclTestRun:
     if len(fields) < 7:
         raise SemanticError("nccl-tests performance row is incomplete")
@@ -154,11 +164,20 @@ def _performance_row(
         raise SemanticError("nccl-tests datatype is missing")
     if len(fields) >= 11:
         prefix = fields[:-8]
-        out_of_place = _measurement(fields[-8:-4])
-        in_place = _measurement(fields[-4:])
+        out_of_place = _measurement(
+            fields[-8:-4],
+            allow_unchecked=allow_unchecked,
+        )
+        in_place = _measurement(
+            fields[-4:],
+            allow_unchecked=allow_unchecked,
+        )
     else:
         prefix = fields[:-4]
-        out_of_place = _measurement(fields[-4:])
+        out_of_place = _measurement(
+            fields[-4:],
+            allow_unchecked=allow_unchecked,
+        )
         in_place = None
     if len(prefix) < 3:
         raise SemanticError("nccl-tests performance row prefix is incomplete")
@@ -175,6 +194,8 @@ def _performance_row(
 def parse_nccl_tests_output(
     text: str,
     expected_bytes: int,
+    *,
+    allow_unchecked: bool = False,
 ) -> Tuple[NcclTestRun, ...]:
     if not isinstance(text, str):
         raise SemanticError("nccl-tests output must be a string")
@@ -196,7 +217,13 @@ def parse_nccl_tests_output(
             int(fields[0], 0)
         except ValueError:
             continue
-        runs.append(_performance_row(fields, expected_bytes))
+        runs.append(
+            _performance_row(
+                fields,
+                expected_bytes,
+                allow_unchecked=allow_unchecked,
+            )
+        )
     if not runs:
         raise SemanticError("nccl-tests output contains no performance row")
     return tuple(runs)

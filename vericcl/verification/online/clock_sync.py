@@ -241,9 +241,22 @@ def _fit_transform(
         raise SemanticError(
             "clock sync rank {} needs at least two samples".format(rank)
         )
-    origin_ticks = samples[0].gpu_ticks
-    xs = tuple(float(sample.gpu_ticks - origin_ticks) for sample in samples)
-    ys = tuple(sample.reference_midpoint_us for sample in samples)
+    retained_count = max(2, (len(samples) + 1) // 2)
+    retained = tuple(
+        sorted(
+            sorted(
+                samples,
+                key=lambda sample: (
+                    sample.sample_uncertainty_us,
+                    sample.gpu_ticks,
+                ),
+            )[:retained_count],
+            key=lambda sample: sample.gpu_ticks,
+        )
+    )
+    origin_ticks = retained[0].gpu_ticks
+    xs = tuple(float(sample.gpu_ticks - origin_ticks) for sample in retained)
+    ys = tuple(sample.reference_midpoint_us for sample in retained)
     mean_x = sum(xs) / len(xs)
     mean_y = sum(ys) / len(ys)
     variance = sum((value - mean_x) ** 2 for value in xs)
@@ -261,14 +274,14 @@ def _fit_transform(
     intercept = origin_time - slope * origin_ticks
     uncertainty = max(
         abs((slope * x + origin_time) - y) + sample.sample_uncertainty_us
-        for x, y, sample in zip(xs, ys, samples)
+        for x, y, sample in zip(xs, ys, retained)
     )
     return ClockTransform(
         rank,
         slope,
         intercept,
         uncertainty,
-        len(samples),
+        len(retained),
         origin_ticks,
         origin_time,
     )

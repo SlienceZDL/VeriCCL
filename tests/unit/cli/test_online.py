@@ -34,6 +34,7 @@ def _environment(**changes):
         "VERICCL_MSCCL_BUILD_DIR": "/tmp/msccl",
         "VERICCL_NCCL_TESTS_BUILD_DIR": "/tmp/nccl-tests",
         "VERICCL_CLOCK_SYNC_BINARY": "/tmp/vericcl-clock-sync",
+        "VERICCL_MPI_LAUNCHER": "/tmp/mpirun",
         "VERICCL_ONLINE_INTER_NODE": "0",
         "VERICCL_MAX_CLOCK_UNCERTAINTY_US": "5.0",
         "VERICCL_CALIBRATION_LINK_CLASS": "intra_node",
@@ -61,7 +62,8 @@ def test_online_factory_requires_explicit_runtime_paths():
         ({"VERICCL_ONLINE_INTER_NODE": "yes"}, "zero or one"),
         ({"VERICCL_MAX_CLOCK_UNCERTAINTY_US": "invalid"}, "numeric"),
         ({"VERICCL_MAX_CLOCK_UNCERTAINTY_US": "-1"}, "non-negative"),
-        ({"VERICCL_ONLINE_INTER_NODE": "1"}, "MPI_LAUNCHER"),
+        ({"VERICCL_MPI_LAUNCHER": ""}, "MPI_LAUNCHER"),
+        ({"VERICCL_ONLINE_INTER_NODE": "1"}, "MPI_HOSTFILE"),
         ({"VERICCL_CALIBRATION_LINK_CLASS": "invalid"}, "link class"),
         ({"VERICCL_FORCE_RECALIBRATE": "yes"}, "zero or one"),
         ({"VERICCL_TRACE_RECORDS": "0"}, "positive integer"),
@@ -104,7 +106,8 @@ def test_online_factory_builds_exact_collective_request(tmp_path):
     assert context.trace_file_prefix == tmp_path / "traces" / "msccl-step"
     assert context.online_tuning_requested is True
     assert context.max_clock_uncertainty_us == 5.0
-    assert context.request.gpus_per_process == 2
+    assert context.request.gpus_per_process == 1
+    assert context.mpi_launcher == Path("/tmp/mpirun")
     assert context.trace_record_capacity == 1048576
     assert context.calibration_plan is not None
     assert context.calibration_plan.request.link_class == "intra_node"
@@ -152,9 +155,9 @@ def test_operator_launcher_is_independent_from_inter_node_calibration(tmp_path):
     )
 
     assert context.inter_node is False
-    assert context.mpi_launcher is None
+    assert context.mpi_launcher == Path("/tmp/mpirun")
     assert context.mpi_hostfile is None
-    assert context.request.gpus_per_process == input_value.rank_count
+    assert context.request.gpus_per_process == 1
     assert context.trace_record_capacity == 2048
 
 
@@ -250,6 +253,13 @@ def test_calibration_plan_measures_full_waves_with_generated_xml(
         )
 
     monkeypatch.setattr(online_module, "run_online_validation", measured)
+    ticks = iter((100.0, 100.2))
+    monkeypatch.setattr(
+        online_module,
+        "_monotonic",
+        lambda: next(ticks),
+        raising=False,
+    )
     factory = build_online_context_factory(
         _environment(
             VERICCL_CALIBRATION_CACHE_PATH=str(tmp_path / "cache.json")
@@ -265,12 +275,18 @@ def test_calibration_plan_measures_full_waves_with_generated_xml(
         1.0,
     )
 
-    signature = context.calibration_plan.signatures[1]
-    point = context.calibration_plan.measure_point(signature)
+    first = context.calibration_plan.measure_point(
+        context.calibration_plan.signatures[0]
+    )
+    second = context.calibration_plan.measure_point(
+        context.calibration_plan.signatures[1]
+    )
 
-    assert point.concurrency == 2
-    assert point.duration_statistics.p95_us == 5.0
+    assert first.concurrency == 1
+    assert second.concurrency == 2
+    assert second.duration_statistics.p95_us == 5.0
     assert captured[0].request.kind.value == "broadcast"
-    assert captured[0].request.gpus_per_process == 2
+    assert captured[0].request.gpus_per_process == 1
     assert captured[0].timeout_s == pytest.approx(0.5)
     assert captured[0].xml_paths[0].is_file()
+    assert captured[1].timeout_s == pytest.approx(0.8)

@@ -199,6 +199,8 @@ maxBytes = runtime_bytes + 1
 #define MSCCL_SLICESTEPS 4
 ```
 
+仅修改设备侧宏不足以保证跨节点执行正确。标准AllReduce入口仍会向主机网络代理传入`chunkSteps/sliceSteps = 4/2`，而MSCCL设备解释器使用`4/4`；二者不一致会导致网络代理传输字节数和credit计算错误。`runtime/msccl-trace/patches/0002-vericcl-host-step-signature.patch`必须与trace补丁一同应用，使`NCCL_ALGO_MSCCL`的主机代理强制使用`MSCCL_CHUNKSTEPS/MSCCL_SLICESTEPS = 4/4`，其他算法保持原有参数。
+
 修改后需要在MSCCL根目录重新编译：
 
 ```sh
@@ -222,7 +224,7 @@ make -j src.build
 export NCCL_BUFFSIZE=2097152
 export LD_LIBRARY_PATH=/path/to/msccl/build/lib:${LD_LIBRARY_PATH}
 export MSCCL_XML_FILES=/path/to/vericcl.xml
-export NCCL_ALGO=MSCCL
+export NCCL_ALGO=MSCCL,RING
 ```
 
 使用MPI时，必须把变量传递到所有Rank：
@@ -232,7 +234,7 @@ mpirun -np 8 \
   -x NCCL_BUFFSIZE=2097152 \
   -x LD_LIBRARY_PATH=/path/to/msccl/build/lib:${LD_LIBRARY_PATH} \
   -x MSCCL_XML_FILES=/path/to/vericcl.xml \
-  -x NCCL_ALGO=MSCCL \
+  -x NCCL_ALGO=MSCCL,RING \
   /path/to/application
 ```
 
@@ -243,7 +245,7 @@ mpirun -np 8 \
 生成XML前和在线试运行前必须验证：
 
 1. 协议为Simple，且每个通信step的`cnt = 1`。
-2. `MSCCL_CHUNKSTEPS = MSCCL_SLICESTEPS = 4`。
+2. 设备解释器和MSCCL主机网络代理均使用`MSCCL_CHUNKSTEPS = MSCCL_SLICESTEPS = 4`。
 3. `NCCL_BUFFSIZE = 2 * slice_size_bytes`。
 4. `(args.count * sizeMultiplier * datatype_size_bytes) / nchunksperloop = slice_size_bytes`，且不存在余数。
 5. `chunkSize = NCCL_BUFFSIZE / 2 = slice_size_bytes`。
@@ -405,6 +407,8 @@ MILP达到求解时间上限时，若Gurobi已经得到可行incumbent，则提�
 
 每个XML step至少记录`rank`、`tb_id`、`step_index`、`transfer_id`、端点类型、peer、channel、iteration、`tb_reach_time`、`dependency_done_time`、`transfer_start_time`、`transfer_end_time`和trace状态标志。原始记录中的`iteration`固定存储MSCCL `workIndex`，表示一次NCCL集合调用；不得使用XML step内部的`gridOffset/iter`代替，否则无法区分`nccl-tests`的重复调用。`tb_reach_time`表示TB完成前一step并开始处理当前step；`dependency_done_time`表示当前step的XML依赖全部满足；`transfer_start_time`表示peer、FIFO、credit和通信primitive均已就绪并实际开始数据操作；`transfer_end_time`表示完整slice的当前端点操作完成。`cpy`记录本地复制起止时间，`nop`记录依赖满足和完成时间。
 
+跨节点trace前缀必须位于所有节点以相同绝对路径挂载的共享存储中，每个Rank写入`<prefix>.rank-<rank>.bin`，收集器在统一路径读取全部文件。提高允许的时钟不确定度仅控制是否接受样本，不改变偏序判定：落入合并不确定区间的跨Rank比较仍为无序，存在此类关键比较时不得将trace标记为可用于在线调优。
+
 MSCCL只有执行到某个step时才检查其依赖，无法直接记录后续step本来可以更早就绪的时间。因此XML生成器必须输出sidecar，将`(rank, tb_id, step_index)`映射到`transfer_id`、atom、flow以及降低前的完整语义前驱集合。在线分析器使用全部语义前驱的实测物理完成时间重建：
 
 \[
@@ -443,7 +447,7 @@ transfer\_duration=physical\_end-physical\_start
 
 完整且时钟误差合格的trace生成候选级`OnlineTuningEvidence`，其中保存逐`transfer_id`的实测等待总量和带完整定位信息的瓶颈优先级。该证据通过`attach_online_result_to_tuning_context`写入`TuningContext.online_trace_evidence[candidate_id]`；BDD flow替换和TB顺序提示优先处理实测等待更长、瓶颈优先级更高的候选，但替换、后缀修复、时间重排和完整验证流程不变。
 
-`B_link(k)`不依赖目标调度是否实际出现并发度`k`。VeriCCL预先为不同channel并发度生成基准测试XML，基准消息大小固定为128 MiB。机内链路只在`1机*2卡`环境测试，机间链路只在`2机*1卡`环境测试；其余逻辑链路仅在方向角色、gateway角色、链路参数、最大channel以及共享资源结构和参数均精确同构时复用测量结果，不执行更大规模的链路基准测试。任一同类链路不满足该条件时拒绝更新，禁止按机内/机间标签粗粒度传播。每次在线执行通过`VERICCL_CALIBRATION_LINK_CLASS`选择一个与当前硬件布局一致的代表类别，未选择类别继续使用topo输入中的保守参数。算子执行与校准分别维护MPI launcher和hostfile，机间校准不得改变机内算子的单进程`-g rank_count`几何。基准结果按链路类别和完整环境签名分别持久化；`solve --online`用稳定结果更新同类链路及同类共享资源后重新构建Plan并二次求解，同时保留首轮候选、校准后二次候选及其父子关系；`verify --online`不改写输入XML，而在报告中设置`requires_resolve=true`。
+`B_link(k)`不依赖目标调度是否实际出现并发度`k`。VeriCCL预先为不同channel并发度生成基准测试XML，基准消息大小固定为128 MiB。机内链路只在`1机*2卡`环境测试，机间链路只在`2机*1卡`环境测试；其余逻辑链路仅在方向角色、gateway角色、链路参数、最大channel以及共享资源结构和参数均精确同构时复用测量结果，不执行更大规模的链路基准测试。任一同类链路不满足该条件时拒绝更新，禁止按机内/机间标签粗粒度传播。每次在线执行通过`VERICCL_CALIBRATION_LINK_CLASS`选择一个与当前硬件布局一致的代表类别，未选择类别继续使用topo输入中的保守参数。全部在线任务均由MPI按每进程一张GPU启动并使用`-g 1`；机内校准使用`-np 2`，机间校准额外使用`-N 1`和hostfile，保证两个Rank分别位于两个节点。全局算子按全局Rank数启动，并由hostfile slot分布决定每节点进程数。基准结果按链路类别和完整环境签名分别持久化；`solve --online`用稳定结果更新同类链路及同类共享资源后重新构建Plan并二次求解，同时保留首轮候选、校准后二次候选及其父子关系；`verify --online`不改写输入XML，而在报告中设置`requires_resolve=true`。
 
 基准XML使用当前任务的`slice_size_bytes = S`，基准slice数量为`N_bench = 128 MiB / S`。输入参数`max_calibration_channels`默认值为32，有效最大并发度为`K_effective = min(max_calibration_channels, 32, N_bench, link_max_channels)`，保证每个活跃channel至少传输一个完整slice。VeriCCL为每个`k = 1..K_effective`生成独立基准XML并逐一测试，不使用插值、外推或提前停止。更新后的链路与共享资源`max_channels`保守限制为`K_effective`，求解器不得使用未测并发度。如果`S`不能整除128 MiB，则跳过该任务的在线链路校准并在报告中提示，不自动改变slice大小，也不使用其他slice大小的基准结果替代。
 
@@ -459,7 +463,7 @@ B_{link}(k)=\frac{kS}{\max(D_{safe}(k)-alpha, \epsilon)}
 
 求解器使用`b_safe(K) = min_{1<=k<=K}(B_link(k)/k)`以及`D(K) = alpha + S/b_safe(K)`计算保守并发开销。若`D_safe(k) <= alpha`，该测量点无效，保留原拓扑参数并在报告中记录。在线校准只更新`beta`、`invbw`和`B_link(k)`，不修改`alpha`。
 
-基准XML和测量结果均允许缓存。环境签名完全匹配时，VeriCCL默认自动复用已有测量结果，不重复运行基准测试。签名至少包含链路类别、拓扑签名、GPU和NIC型号、CUDA/NCCL/MSCCL版本、Simple协议、slice大小、128 MiB基准消息大小、channel并发度、`NCCL_BUFFSIZE`、MSCCL chunk/slice steps、`CUDA_VISIBLE_DEVICES`、`LD_LIBRARY_PATH`以及全部输入的`NCCL_*`和`UCX_*`环境变量；hostfile与`NCCL_TOPO_FILE`同时记录规范路径和文件内容SHA-256。任一字段不匹配时缓存失效并重新测试。持久化缓存使用文件锁、锁内重读合并、同目录临时文件、原子替换及文件/目录`fsync`，避免并发CLI丢失测量点。用户可以设置`force_recalibrate=true`忽略缓存并强制重测。
+基准XML和测量结果均允许缓存。环境签名完全匹配且测量点稳定时，VeriCCL默认自动复用已有测量结果，不重复运行基准测试；不稳定点保留用于审计，但后续执行必须自动重测，不得将其视为缓存命中。签名至少包含链路类别、拓扑签名、GPU和NIC型号、CUDA/NCCL/MSCCL版本、Simple协议、slice大小、128 MiB基准消息大小、channel并发度、`NCCL_BUFFSIZE`、MSCCL chunk/slice steps、`CUDA_VISIBLE_DEVICES`、`LD_LIBRARY_PATH`以及全部输入的`NCCL_*`和`UCX_*`环境变量；hostfile与`NCCL_TOPO_FILE`同时记录规范路径和文件内容SHA-256。任一字段不匹配时缓存失效并重新测试。持久化缓存使用文件锁、锁内重读合并、同目录临时文件、原子替换及文件/目录`fsync`，避免并发CLI丢失测量点。用户可以设置`force_recalibrate=true`忽略缓存并强制重测。
 
 链路基准统一使用定制Broadcast XML和`broadcast_perf`。Rank 0作为root，将128 MiB数据按当前slice大小划分，并在并发度`k`下将slice分配到`k`个channel。该基准只激活root到目标Rank的单向传输，不包含REDUCE计算，也不同时激活反向链路。每类机内和机间链路只测试一个代表方向，反向链路及其他有向链路仅在拓扑证明其与代表链路精确同构时复用测量结果。
 
@@ -496,6 +500,8 @@ CollectiveSpec、总数据量、slice大小、slice ID、用户禁用atom、手�
 输入参数`max_tuning_iterations`默认值为20。调优在达到验证调优时间上限、候选空间耗尽、无法生成新的合法修复或达到最大迭代次数时停止。最终结果始终选择全部历史中通过相应验证且性能最好的候选，不得默认选择最后生成的候选。
 
 `total_verification_timeout_s`默认值为10800秒，按墙钟时间覆盖一次`vericcl verify`调用中的离线验证、在线校准、在线测试、候选重求解和重新验证。每次内部重求解的有效总预算为`min(total_solve_timeout_s, remaining_verification_time)`；每个MILP的有效预算进一步限制为`min(per_model_timeout_s, remaining_solve_time, remaining_verification_time)`。达到验证总预算后不得启动新的验证或候选求解。截止时尚未完成全部必要检查的候选不得被接受，最终仍返回此前已经完整验证的最佳候选；`max_tuning_iterations`不得突破该总预算。
+
+在线校准按并发度顺序执行。开始每个未缓存测量点前，将当前剩余墙钟预算平均分配给当前点及其后的未测并发度；前序测量提前结束所节省的时间自动滚动给后续测量，避免固定静态分片因单次MPI启动抖动而提前终止。该动态分配不得延长外层`total_verification_timeout_s`截止时间。
 
 ### (5)测试与验收
 

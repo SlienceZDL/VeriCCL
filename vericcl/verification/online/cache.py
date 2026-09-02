@@ -266,4 +266,7 @@ class CalibrationCache:
             with self._locked():
                 if self._path.exists():
                     self._load()
-        return self._points.get(environment_signature_sha256(signature))
+        point = self._points.get(environment_signature_sha256(signature))
+        if point is not None and not point.stable:
+            return None
+        return point

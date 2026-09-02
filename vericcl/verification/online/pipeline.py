@@ -553,7 +553,7 @@ def _runtime_values(
         2 * (MEASUREMENT_SAMPLE_COUNT + 1) * entries_per_rank,
     )
     expected = {
-        "NCCL_ALGO": "MSCCL",
+        "NCCL_ALGO": "MSCCL,RING",
         "NCCL_BUFFSIZE": str(2 * context.schedule.slice_size_bytes),
         "NCCL_PROTO": "Simple",
         "MSCCL_XML_FILES": str(xml_path),
@@ -601,6 +601,8 @@ def _launcher_prefix(
         "-np",
         str(context.inputs.rank_count),
     ]
+    if context.inter_node and context.inputs.rank_count == 2:
+        command.extend(("-N", "1"))
     if context.mpi_hostfile is not None:
         command.extend(("--hostfile", str(context.mpi_hostfile)))
     for key in exported_keys:
@@ -652,8 +654,11 @@ def _preflight(context: OnlineContext) -> _Prepared:
         if located is not None:
             binary = Path(located)
     _executable(binary, "nccl_tests_binary_missing", "nccl-tests binary")
-    if context.inter_node and context.mpi_launcher is None:
-        _fail("mpi_launcher_missing", "inter-node validation requires MPI")
+    if context.mpi_launcher is None:
+        _fail(
+            "mpi_launcher_missing",
+            "online validation requires one MPI process per GPU",
+        )
     if context.mpi_launcher is not None:
         _executable(context.mpi_launcher, "mpi_launcher_missing", "MPI launcher")
     if context.mpi_hostfile is not None and not context.mpi_hostfile.is_file():
@@ -901,6 +906,7 @@ def run_online_validation(context: OnlineContext) -> OnlineValidationResult:
         rows = parse_nccl_tests_output(
             diagnostic.stdout,
             context.request.message_size_bytes,
+            allow_unchecked=True,
         )
         if len(rows) != 1:
             raise SemanticError(
