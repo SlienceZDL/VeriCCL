@@ -281,7 +281,7 @@ class OnlineContext:
     chunk_steps: int = EXPECTED_MSCCL_CHUNK_STEPS
     slice_steps: int = EXPECTED_MSCCL_SLICE_STEPS
     trace_record_capacity: int = 1048576
-    clock_sync_samples: int = 16
+    clock_sync_samples: int = 256
     timeout_s: Optional[float] = 3600.0
     cwd: Optional[Path] = None
 

@@ -85,6 +85,9 @@ The CLI reads:
 - `VERICCL_MSCCL_BUILD_DIR`: the selected `$MSCCL_ROOT/build/lib` directory.
 - `VERICCL_NCCL_TESTS_BUILD_DIR`: the directory containing the six direct-collective NCCL Tests binaries.
 - `VERICCL_CLOCK_SYNC_BINARY`: the compiled GPU/MPI clock helper.
+- The online validator requests 256 samples per rank by default. The helper uses
+  the same count for GPU timer fitting and MPI reference-clock estimation to
+  reduce transient cross-node round-trip jitter without changing host clocks.
 - `VERICCL_ONLINE_INTER_NODE=0|1`: single-node or inter-node operator execution.
 - `VERICCL_MPI_LAUNCHER`: required for all online execution; VeriCCL launches one MPI process per GPU.
 - `VERICCL_MPI_HOSTFILE`: additionally required for inter-node execution.

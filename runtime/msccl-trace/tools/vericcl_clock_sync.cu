@@ -7,8 +7,6 @@
 #include <time.h>
 
 
-#define VERICCL_MPI_SYNC_SAMPLES 16
-
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
     cudaError_t result = (call);                                             \
@@ -66,6 +64,7 @@ __global__ static void readGpuTimer(unsigned long long* output) {
 static void estimateReferenceOffset(
     int rank,
     int worldSize,
+    int sampleCount,
     int64_t* offsetNs,
     uint64_t* uncertaintyNs) {
   *offsetNs = 0;
@@ -74,7 +73,7 @@ static void estimateReferenceOffset(
 
   if (rank == 0) {
     for (int peer = 1; peer < worldSize; ++peer) {
-      for (int sample = 0; sample < VERICCL_MPI_SYNC_SAMPLES; ++sample) {
+      for (int sample = 0; sample < sampleCount; ++sample) {
         uint64_t request = 0;
         MPI_Recv(
             &request,
@@ -99,7 +98,7 @@ static void estimateReferenceOffset(
 
   uint64_t bestUncertainty = UINT64_MAX;
   int64_t bestOffset = 0;
-  for (int sample = 0; sample < VERICCL_MPI_SYNC_SAMPLES; ++sample) {
+  for (int sample = 0; sample < sampleCount; ++sample) {
     uint64_t before = monotonicNs();
     MPI_Send(
         &before,
@@ -154,6 +153,7 @@ int main(int argc, char** argv) {
   estimateReferenceOffset(
       rank,
       worldSize,
+      sampleCount,
       &referenceOffsetNs,
       &referenceUncertaintyNs);
   MPI_Barrier(MPI_COMM_WORLD);

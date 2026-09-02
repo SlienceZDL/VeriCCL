@@ -111,9 +111,18 @@ def test_clock_helper_warms_up_device_to_host_timer_copy():
     source = CLOCK_SYNC_SOURCE.read_text(encoding="utf-8")
 
     assert "warmupGpuTicks" in source
-    assert source.index("warmupGpuTicks") < source.index(
-        "for (int sample = 0; sample < sampleCount; ++sample)"
+    warmup_index = source.index("warmupGpuTicks")
+    assert warmup_index < source.index(
+        "for (int sample = 0; sample < sampleCount; ++sample)",
+        warmup_index,
     )
+
+
+def test_clock_helper_uses_requested_sample_count_for_reference_sync():
+    source = CLOCK_SYNC_SOURCE.read_text(encoding="utf-8")
+
+    assert "VERICCL_MPI_SYNC_SAMPLES" not in source
+    assert "estimateReferenceOffset(\n      rank,\n      worldSize,\n      sampleCount," in source
 
 
 def test_alignment_rejects_missing_or_degenerate_rank_samples():

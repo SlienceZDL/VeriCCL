@@ -508,6 +508,12 @@ def test_single_process_release_still_runs_correctness_and_trace(tmp_path):
     assert release[release.index("-c") + 1] == "1"
 
 
+def test_online_context_defaults_to_robust_clock_sync_sampling(tmp_path):
+    context = _context(tmp_path)
+
+    assert context.clock_sync_samples == 256
+
+
 def test_trace_capacity_is_raised_to_cover_both_timing_blocks(tmp_path):
     executor = FakeExecutor()
     context = _context(
