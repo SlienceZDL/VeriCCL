@@ -429,6 +429,7 @@ def _factory_environment(
             ),
             "VERICCL_MPI_HOSTFILE": str(config.hostfile(rank_count)),
             "VERICCL_MPI_LAUNCHER": str(config.mpi_launcher),
+            "VERICCL_MPI_TCP_IF_INCLUDE": "10.0.0.0/24",
             "VERICCL_MSCCL_BUILD_DIR": str(config.msccl_library_path),
             "VERICCL_NCCL_TESTS_BUILD_DIR": str(
                 config.nccl_tests_binary_directory
@@ -1250,6 +1251,10 @@ def smoke(
             finished_at_utc=_utc_now(),
         )
     except Exception as error:
+        directory = config.experiment_root / "smoke"
+        directory.mkdir(parents=True, exist_ok=True)
+        error_path = directory / "runner-error.log"
+        atomic_write_text(error_path, "{}\n".format(error))
         record = TaskRecord(
             task_id=task_id,
             status=TaskStatus.FAILED,
@@ -1258,6 +1263,7 @@ def smoke(
             command=command,
             returncode=1,
             failure_code=type(error).__name__,
+            log_path=str(error_path),
             started_at_utc=started,
             finished_at_utc=_utc_now(),
         )

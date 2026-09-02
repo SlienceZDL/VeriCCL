@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import vericcl.experiments.v100 as v100_module
 from vericcl.errors import SemanticError
 from vericcl.experiments.model import ExperimentCase
 from vericcl.experiments.state import TaskStatus
@@ -15,6 +16,7 @@ from vericcl.experiments.v100 import (
     build_performance_environment,
     load_v100_config,
     preflight,
+    smoke,
     solve_case,
     write_hostfile,
 )
@@ -161,6 +163,50 @@ def test_solve_case_requests_online_validation_and_tuning(tmp_path):
     assert calls[0].timeout_s == 10800.0
     assert calls[0].online_context_factory is not None
     assert result.status is TaskStatus.PASSED
+
+
+def test_smoke_preserves_runner_error_details(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    case = _case(tmp_path)
+    atom = _touch(config.repo_root / "vericcl/examples/atom/default.json", "{}")
+    inputs = SimpleNamespace(
+        hyperparameters=SimpleNamespace(slice_size_bytes=512 * 1024)
+    )
+    benchmark = SimpleNamespace(
+        artifact=SimpleNamespace(xml_text="<algo/>"),
+        schedule=object(),
+        inputs=inputs,
+    )
+    monkeypatch.setattr(
+        v100_module,
+        "load_experiment_manifest",
+        lambda *args, **kwargs: SimpleNamespace(
+            cases=(case,), atom_path=atom
+        ),
+    )
+    monkeypatch.setattr(v100_module, "resolve_inputs", lambda *args: inputs)
+    monkeypatch.setattr(v100_module, "load_topology", lambda value: object())
+    monkeypatch.setattr(
+        v100_module,
+        "representative_calibration_topology",
+        lambda *args: object(),
+    )
+    monkeypatch.setattr(
+        v100_module,
+        "build_calibration_benchmark",
+        lambda *args, **kwargs: benchmark,
+    )
+
+    def fail_factory(*args):
+        raise RuntimeError("launcher failed")
+
+    result = smoke(config, factory_builder=fail_factory)
+
+    assert result.status is TaskStatus.FAILED
+    assert result.log_path is not None
+    error_path = Path(result.log_path)
+    assert error_path.name == "runner-error.log"
+    assert error_path.read_text(encoding="ascii") == "launcher failed\n"
 
 
 def test_load_v100_config_rejects_unknown_fields(tmp_path):

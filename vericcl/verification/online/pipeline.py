@@ -53,6 +53,10 @@ from vericcl.xml.trace_sidecar import TraceSidecar, build_trace_sidecar
 
 EXPECTED_MSCCL_CHUNK_STEPS = 4
 EXPECTED_MSCCL_SLICE_STEPS = 4
+_MPI_EXPORTED_NAMES = frozenset(
+    {"PATH", "LD_LIBRARY_PATH", "CUDA_VISIBLE_DEVICES"}
+)
+_MPI_EXPORTED_PREFIXES = ("NCCL_", "MSCCL_", "VERICCL_")
 _monotonic = time.monotonic
 
 
@@ -606,6 +610,27 @@ def _launcher_prefix(
         command.extend(("-N", "1"))
     if context.mpi_hostfile is not None:
         command.extend(("--hostfile", str(context.mpi_hostfile)))
+    if context.inter_node:
+        command.extend(
+            (
+                "-mca",
+                "pml",
+                "ob1",
+                "-mca",
+                "btl",
+                "tcp,self,vader",
+                "-mca",
+                "btl_vader_single_copy_mechanism",
+                "none",
+            )
+        )
+        tcp_interface = context.environment.get(
+            "VERICCL_MPI_TCP_IF_INCLUDE"
+        )
+        if tcp_interface:
+            command.extend(
+                ("-mca", "btl_tcp_if_include", tcp_interface)
+            )
     for key in exported_keys:
         command.extend(("-x", key))
     return tuple(command)
@@ -685,7 +710,14 @@ def _preflight(context: OnlineContext) -> _Prepared:
     release_additions["VERICCL_TRACE_ENABLE"] = "0"
     trace_additions = dict(additions)
     trace_additions["VERICCL_TRACE_ENABLE"] = "1"
-    exported_keys = tuple(sorted(trace_additions))
+    exported_keys = tuple(
+        sorted(
+            key
+            for key in trace_additions
+            if key in _MPI_EXPORTED_NAMES
+            or key.startswith(_MPI_EXPORTED_PREFIXES)
+        )
+    )
     return _Prepared(
         release_environment=process_environment(release_additions),
         trace_environment=process_environment(trace_additions),

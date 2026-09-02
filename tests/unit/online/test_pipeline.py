@@ -340,13 +340,17 @@ def test_two_rank_inter_node_launcher_maps_one_process_per_node(tmp_path):
         base,
         inter_node=True,
         mpi_hostfile=hostfile,
+        environment={
+            **base.environment,
+            "VERICCL_MPI_TCP_IF_INCLUDE": "10.0.0.0/24",
+        },
     )
 
     result = run_online_validation(context)
 
     assert result.online_operator_validation is OnlineStageStatus.PASSED
     command = _performance_calls(executor)[0].command
-    assert command[:7] == (
+    assert command[:19] == (
         str(context.mpi_launcher),
         "-np",
         "2",
@@ -354,7 +358,20 @@ def test_two_rank_inter_node_launcher_maps_one_process_per_node(tmp_path):
         "1",
         "--hostfile",
         str(hostfile),
+        "-mca",
+        "pml",
+        "ob1",
+        "-mca",
+        "btl",
+        "tcp,self,vader",
+        "-mca",
+        "btl_vader_single_copy_mechanism",
+        "none",
+        "-mca",
+        "btl_tcp_if_include",
+        "10.0.0.0/24",
     )
+    assert "OLDPWD" not in command
 
 
 def test_preflight_rejects_conflicting_runtime_environment(tmp_path):
