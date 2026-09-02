@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "atom": "vericcl/examples/atom/default.json",
+  "topologies": [
+    "v100-n2g4",
+    "v100-n2g8"
+  ],
+  "collectives": [
+    "ag",
+    "ar"
+  ],
+  "sizes": [
+    "4m",
+    "16m",
+    "64m",
+    "256m",
+    "1g",
+    "2g"
+  ]
+}
