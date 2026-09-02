@@ -196,7 +196,7 @@ def test_topology_update_rejects_different_communication_domain_sizes():
         apply_calibration_to_topology(topology, result)
 
 
-def test_calibration_point_uses_full_wave_trace_intervals_only():
+def test_calibration_point_normalizes_full_wave_aggregate_elapsed_time():
     intervals = []
     for iteration in range(20):
         for logical, (start, end) in enumerate(
@@ -235,7 +235,34 @@ def test_calibration_point_uses_full_wave_trace_intervals_only():
 
     assert point.full_wave_count == 2
     assert point.tail_transfer_count == 0
-    assert point.duration_statistics.p95_us == 7.0
+    assert point.duration_statistics.p95_us == 8.5
+
+
+def test_calibration_point_does_not_require_channels_to_advance_in_lockstep():
+    intervals = []
+    times = ((0.0, 5.0), (2.0, 7.0), (5.0, 10.0), (7.0, 12.0))
+    for iteration in range(20):
+        for logical, (start, end) in enumerate(times):
+            intervals.append(
+                PhysicalTransferInterval(
+                    transfer_id="calibration-send-{:08d}".format(logical),
+                    iteration=iteration,
+                    send=None,
+                    receive=None,
+                    local=None,
+                    physical_start=AlignedTimestamp(start, 0.0),
+                    physical_end=AlignedTimestamp(end, 0.0),
+                    endpoint_order_uncertain=False,
+                    sender_start=AlignedTimestamp(start, 0.0),
+                    sender_end=AlignedTimestamp(end, 0.0),
+                )
+            )
+    analysis = TraceAnalysis(tuple(intervals), (), (), (), True)
+    request = CalibrationRequest("intra_node", 32 * 1024 * 1024, 2, "float")
+
+    point = calibration_point_from_trace(request, 2, analysis)
+
+    assert point.duration_statistics.p95_us == 6.0
 
 
 def test_calibration_uses_sender_local_wave_when_endpoints_are_uncertain():

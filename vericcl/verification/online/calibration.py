@@ -255,6 +255,9 @@ def calibration_point_from_trace(
         raise SemanticError("calibration trace requires exactly 20 iterations")
     expected_logical = set(range(slice_count))
     samples = []
+    measured_logical = range(
+        full_wave_count * normalized_concurrency
+    )
     for iteration in iterations:
         actual_logical = {
             logical
@@ -263,26 +266,19 @@ def calibration_point_from_trace(
         }
         if actual_logical != expected_logical:
             raise SemanticError("calibration trace is incomplete")
-        wave_durations = []
-        for wave in range(full_wave_count):
-            wave_intervals = tuple(
-                intervals[(iteration, logical)]
-                for logical in range(
-                    wave * normalized_concurrency,
-                    (wave + 1) * normalized_concurrency,
-                )
-            )
-            duration = max(
-                interval.sender_end_us for interval in wave_intervals
-            ) - min(
-                interval.sender_start_us for interval in wave_intervals
-            )
-            if duration <= 0.0:
-                raise SemanticError("calibration trace wave is not positive")
-            wave_durations.append(duration)
-        ordered = tuple(sorted(wave_durations))
-        p95_rank = math.ceil(0.95 * len(ordered))
-        samples.append(ordered[p95_rank - 1])
+        full_intervals = tuple(
+            intervals[(iteration, logical)]
+            for logical in measured_logical
+        )
+        elapsed = max(
+            interval.sender_end_us for interval in full_intervals
+        ) - min(
+            interval.sender_start_us for interval in full_intervals
+        )
+        duration = elapsed / full_wave_count
+        if duration <= 0.0:
+            raise SemanticError("calibration trace wave is not positive")
+        samples.append(duration)
     return CalibrationPoint(
         concurrency=normalized_concurrency,
         duration_statistics=summarize_runs(samples),
