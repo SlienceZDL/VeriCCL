@@ -42,6 +42,8 @@ class PhysicalTransferInterval:
     physical_start: AlignedTimestamp
     physical_end: AlignedTimestamp
     endpoint_order_uncertain: bool
+    sender_start: Optional[AlignedTimestamp] = None
+    sender_end: Optional[AlignedTimestamp] = None
 
     @property
     def physical_start_us(self) -> float:
@@ -50,6 +52,18 @@ class PhysicalTransferInterval:
     @property
     def physical_end_us(self) -> float:
         return self.physical_end.value_us
+
+    @property
+    def sender_start_us(self) -> float:
+        if self.sender_start is None:
+            raise SemanticError("network interval has no sender start")
+        return self.sender_start.value_us
+
+    @property
+    def sender_end_us(self) -> float:
+        if self.sender_end is None:
+            raise SemanticError("network interval has no sender end")
+        return self.sender_end.value_us
 
 
 @dataclass(frozen=True)
@@ -165,6 +179,8 @@ def pair_endpoints(
         physical_start=_aligned_max(send_start, receive_start),
         physical_end=_aligned_max(send_end, receive_end),
         endpoint_order_uncertain=uncertainty,
+        sender_start=send_start,
+        sender_end=send_end,
     )
 
 
@@ -183,6 +199,8 @@ def _local_interval(
         physical_start=_record_timestamp(record, "transfer_start", alignment),
         physical_end=_record_timestamp(record, "transfer_end", alignment),
         endpoint_order_uncertain=False,
+        sender_start=None,
+        sender_end=None,
     )
 
 

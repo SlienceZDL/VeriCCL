@@ -249,8 +249,6 @@ def calibration_point_from_trace(
         key = (interval.iteration, logical)
         if key in intervals:
             raise SemanticError("calibration trace contains duplicate transfer")
-        if interval.endpoint_order_uncertain:
-            raise SemanticError("calibration trace endpoint order is uncertain")
         intervals[key] = interval
     iterations = tuple(sorted({iteration for iteration, _ in intervals}))
     if len(iterations) != MEASUREMENT_SAMPLE_COUNT:
@@ -275,9 +273,9 @@ def calibration_point_from_trace(
                 )
             )
             duration = max(
-                interval.physical_end_us for interval in wave_intervals
+                interval.sender_end_us for interval in wave_intervals
             ) - min(
-                interval.physical_start_us for interval in wave_intervals
+                interval.sender_start_us for interval in wave_intervals
             )
             if duration <= 0.0:
                 raise SemanticError("calibration trace wave is not positive")

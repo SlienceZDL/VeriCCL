@@ -177,6 +177,22 @@ def test_physical_interval_uses_both_endpoints():
     assert pair.physical_end_us == 25
 
 
+def test_pair_retains_sender_local_interval():
+    send, recv = _pair(
+        "x",
+        start_send=10,
+        end_send=20,
+        start_recv=100,
+        end_recv=110,
+    )
+
+    interval = pair_endpoints(send, recv, _alignment(uncertainty=50.0))
+
+    assert interval.endpoint_order_uncertain is True
+    assert interval.sender_start_us == 10.0
+    assert interval.sender_end_us == 20.0
+
+
 def test_analysis_accepts_and_validates_explicit_sidecar():
     records = _pair(
         "x",

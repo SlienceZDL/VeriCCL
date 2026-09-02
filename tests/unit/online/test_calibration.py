@@ -212,6 +212,8 @@ def test_calibration_point_uses_full_wave_trace_intervals_only():
                     physical_start=AlignedTimestamp(start, 0.0),
                     physical_end=AlignedTimestamp(end, 0.0),
                     endpoint_order_uncertain=False,
+                    sender_start=AlignedTimestamp(start, 0.0),
+                    sender_end=AlignedTimestamp(end, 0.0),
                 )
             )
         intervals.append(
@@ -236,6 +238,34 @@ def test_calibration_point_uses_full_wave_trace_intervals_only():
     assert point.duration_statistics.p95_us == 7.0
 
 
+def test_calibration_uses_sender_local_wave_when_endpoints_are_uncertain():
+    intervals = []
+    for iteration in range(20):
+        for logical, (start, end) in enumerate(
+            ((0.0, 5.0), (0.5, 4.5))
+        ):
+            intervals.append(
+                PhysicalTransferInterval(
+                    transfer_id="calibration-send-{:08d}".format(logical),
+                    iteration=iteration,
+                    send=object(),
+                    receive=object(),
+                    local=None,
+                    physical_start=AlignedTimestamp(start + 100.0, 50.0),
+                    physical_end=AlignedTimestamp(end + 200.0, 50.0),
+                    endpoint_order_uncertain=True,
+                    sender_start=AlignedTimestamp(start, 50.0),
+                    sender_end=AlignedTimestamp(end, 50.0),
+                )
+            )
+    analysis = TraceAnalysis(tuple(intervals), (), (), (), False)
+    request = CalibrationRequest("inter_node", 64 * 1024 * 1024, 2, "float")
+
+    point = calibration_point_from_trace(request, 2, analysis)
+
+    assert point.duration_statistics.p95_us == 5.0
+
+
 def test_calibration_point_rejects_unknown_nonlocal_transfer():
     intervals = [
         PhysicalTransferInterval(
@@ -247,6 +277,8 @@ def test_calibration_point_rejects_unknown_nonlocal_transfer():
             physical_start=AlignedTimestamp(0.0, 0.0),
             physical_end=AlignedTimestamp(5.0, 0.0),
             endpoint_order_uncertain=False,
+            sender_start=AlignedTimestamp(0.0, 0.0),
+            sender_end=AlignedTimestamp(5.0, 0.0),
         )
         for iteration in range(20)
     ]
@@ -260,6 +292,8 @@ def test_calibration_point_rejects_unknown_nonlocal_transfer():
             physical_start=AlignedTimestamp(0.0, 0.0),
             physical_end=AlignedTimestamp(1.0, 0.0),
             endpoint_order_uncertain=False,
+            sender_start=AlignedTimestamp(0.0, 0.0),
+            sender_end=AlignedTimestamp(1.0, 0.0),
         )
     )
     analysis = TraceAnalysis(tuple(intervals), (), (), (), True)
