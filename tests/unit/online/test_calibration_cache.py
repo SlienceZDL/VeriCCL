@@ -31,6 +31,7 @@ def _signature(**changes):
         "nccl_buffsize_bytes": 2 * 1024 * 1024,
         "chunk_steps": 4,
         "slice_steps": 4,
+        "benchmark_inplace": True,
         "path_variables": (
             ("LD_LIBRARY_PATH", "/opt/msccl/lib"),
             ("MSCCL_XML_FILES", "/tmp/calibration.xml"),
@@ -74,6 +75,7 @@ def test_cache_requires_exact_environment_signature_and_force_bypasses():
         {"nccl_buffsize_bytes": 4 * 1024 * 1024},
         {"chunk_steps": 2},
         {"slice_steps": 2},
+        {"benchmark_inplace": False},
         {"path_variables": (("LD_LIBRARY_PATH", "/other"),)},
     )
     for changes in mismatches:
@@ -122,6 +124,7 @@ def test_environment_signature_rejects_invalid_fields():
         {"topology_signature": "short"},
         {"slice_size_bytes": 0},
         {"concurrency": 0},
+        {"benchmark_inplace": "yes"},
         {"path_variables": (("A", "1"), ("A", "2"))},
         {"path_variables": (("", "1"),)},
     ):

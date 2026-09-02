@@ -360,8 +360,10 @@ def test_calibration_plan_measures_full_waves_with_generated_xml(
     assert repeated.concurrency == 1
     assert second.duration_statistics.p95_us == 5.0
     assert captured[0].request.kind.value == "broadcast"
+    assert captured[0].request.inplace is True
     assert captured[0].request.gpus_per_process == 1
     assert captured[0].single_process_release_validation is True
     assert captured[0].timeout_s == pytest.approx(0.5)
     assert captured[0].xml_paths[0].is_file()
     assert captured[1].timeout_s == pytest.approx(0.8)
+    assert context.calibration_plan.signatures[0].benchmark_inplace is True

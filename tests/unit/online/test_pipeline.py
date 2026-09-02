@@ -194,6 +194,7 @@ def _signature(concurrency=1):
         nccl_buffsize_bytes=2048,
         chunk_steps=4,
         slice_steps=4,
+        benchmark_inplace=True,
         path_variables=(("LD_LIBRARY_PATH", "/opt/msccl/lib"),),
     )
 

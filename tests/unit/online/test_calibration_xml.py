@@ -86,6 +86,8 @@ def test_calibration_assigns_round_robin_channels_and_full_waves():
     root = etree.fromstring(artifact.xml_text.encode("utf-8"))
     assert root.attrib["nchannels"] == "3"
     assert root.attrib["nchunksperloop"] == "128"
+    assert root.attrib["inplace"] == "1"
+    assert not root.xpath(".//step[@type='cpy']")
     assert root.attrib["minBytes"] == str(128 * MIB)
     assert root.attrib["maxBytes"] == str(128 * MIB + 1)
 
@@ -120,6 +122,7 @@ def test_calibration_benchmark_exposes_matching_schedule_and_inputs():
 
     assert benchmark.schedule.metadata["calibration_concurrency"] == 2
     assert benchmark.inputs.rank_count == 2
+    assert benchmark.inputs.collective.inplace is True
     assert benchmark.inputs.hyperparameters.total_size_bytes == 128 * MIB
     assert benchmark.artifact == build_calibration_artifact(
         _request(),

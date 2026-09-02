@@ -72,7 +72,7 @@ def _inputs(request: CalibrationRequest) -> ResolvedInput:
         datatype=request.datatype,
         reduction_op=None,
         root=0,
-        inplace=False,
+        inplace=True,
     )
     hyperparameters = Hyperparameters(
         total_size_bytes=request.benchmark_size_bytes,

@@ -55,6 +55,7 @@ class EnvironmentSignature:
     nccl_buffsize_bytes: int
     chunk_steps: int
     slice_steps: int
+    benchmark_inplace: bool
     path_variables: Tuple[Tuple[str, str], ...]
 
     def __post_init__(self) -> None:
@@ -88,6 +89,8 @@ class EnvironmentSignature:
                 getattr(self, field),
                 "environment.{}".format(field),
             )
+        if not isinstance(self.benchmark_inplace, bool):
+            raise SemanticError("environment.benchmark_inplace must be boolean")
         try:
             paths = tuple(self.path_variables)
         except TypeError as error:

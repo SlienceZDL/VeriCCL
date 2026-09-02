@@ -351,6 +351,7 @@ def build_online_context_factory(
                     ),
                     chunk_steps=4,
                     slice_steps=4,
+                    benchmark_inplace=True,
                     path_variables=_calibration_path_variables(values),
                 )
                 for concurrency in range(1, effective + 1)
@@ -400,7 +401,7 @@ def build_online_context_factory(
                         datatype=calibration_request.datatype,
                         reduction_op=None,
                         root=0,
-                        inplace=False,
+                        inplace=True,
                         binary_directory=str(nccl_tests_directory),
                         gpus_per_process=1,
                     ),
