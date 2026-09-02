@@ -87,6 +87,24 @@ def _required(environment: Mapping[str, str], name: str) -> str:
     return value
 
 
+def _write_or_reuse_text(path: Path, text: str) -> None:
+    try:
+        atomic_write_text(path, text)
+        return
+    except FileExistsError:
+        pass
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise InputValidationError(
+            "existing calibration XML is unreadable"
+        ) from error
+    if existing != text:
+        raise InputValidationError(
+            "existing calibration XML has conflicting content"
+        )
+
+
 def _boolean(environment: Mapping[str, str], name: str) -> bool:
     value = environment.get(name, "0")
     if value not in {"0", "1"}:
@@ -366,7 +384,7 @@ def build_online_context_factory(
                 )
                 directory.mkdir(parents=True, exist_ok=True)
                 calibration_xml = directory / "benchmark.xml"
-                atomic_write_text(
+                _write_or_reuse_text(
                     calibration_xml,
                     benchmark.artifact.xml_text,
                 )

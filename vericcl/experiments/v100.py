@@ -1225,7 +1225,7 @@ def smoke(
             xml_path,
             directory / "traces",
             False,
-            1800.0,
+            10800.0,
             False,
         )
         result = run(context)

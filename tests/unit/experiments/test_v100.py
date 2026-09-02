@@ -205,12 +205,19 @@ def test_smoke_preserves_runner_error_details(tmp_path, monkeypatch):
         lambda *args, **kwargs: benchmark,
     )
 
-    def fail_factory(*args):
+    context_calls = []
+
+    def fail_context(*args):
+        context_calls.append(args)
         raise RuntimeError("launcher failed")
+
+    def fail_factory(*args):
+        return fail_context
 
     result = smoke(config, factory_builder=fail_factory)
 
     assert result.status is TaskStatus.FAILED
+    assert context_calls[0][6] == 10800.0
     assert result.log_path is not None
     error_path = Path(result.log_path)
     assert error_path.name == "runner-error.log"

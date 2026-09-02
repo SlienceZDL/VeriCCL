@@ -323,7 +323,7 @@ def test_calibration_plan_measures_full_waves_with_generated_xml(
         )
 
     monkeypatch.setattr(online_module, "run_online_validation", measured)
-    ticks = iter((100.0, 100.2))
+    ticks = iter((100.0, 100.2, 100.4))
     monkeypatch.setattr(
         online_module,
         "_monotonic",
@@ -351,9 +351,13 @@ def test_calibration_plan_measures_full_waves_with_generated_xml(
     second = context.calibration_plan.measure_point(
         context.calibration_plan.signatures[1]
     )
+    repeated = context.calibration_plan.measure_point(
+        context.calibration_plan.signatures[0]
+    )
 
     assert first.concurrency == 1
     assert second.concurrency == 2
+    assert repeated.concurrency == 1
     assert second.duration_statistics.p95_us == 5.0
     assert captured[0].request.kind.value == "broadcast"
     assert captured[0].request.gpus_per_process == 1
