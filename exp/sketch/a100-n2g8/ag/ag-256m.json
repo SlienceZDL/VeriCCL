@@ -1,0 +1,32 @@
+{
+  "collective": {
+    "operator": "allgather",
+    "root": null,
+    "datatype": "float32",
+    "reduction_op": null,
+    "inplace": true
+  },
+  "hyperparameters": {
+    "total_size_bytes": 16777216,
+    "slice_size_bytes": 1048576,
+    "input_chunkup": 16,
+    "objective_mode": "auto",
+    "max_calibration_channels": 32,
+    "min_expected_improvement": 0.01,
+    "min_tuning_improvement": 0.01,
+    "max_tuning_iterations": 20,
+    "total_verification_timeout_s": 10800,
+    "force_recalibrate": false
+  },
+  "solver": {
+    "total_solve_timeout_s": 10800,
+    "per_model_timeout_s": 1800,
+    "mip_gap": 0.0001,
+    "require_proven_optimal": false,
+    "solver_seed": 0,
+    "max_channels": 32,
+    "max_threads_per_model": 12,
+    "max_parallel_models": 4,
+    "force_resolve": false
+  }
+}
