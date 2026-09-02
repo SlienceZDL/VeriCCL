@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 from pathlib import Path
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 from vericcl.errors import SemanticError
 from vericcl.semantics.collective import CollectiveKind
@@ -139,7 +139,7 @@ def _measurement(
 
 def _performance_row(
     fields: Tuple[str, ...],
-    expected_bytes: int,
+    expected_bytes: Optional[int],
     *,
     allow_unchecked: bool,
 ) -> NcclTestRun:
@@ -150,7 +150,7 @@ def _performance_row(
         "nccl-tests message size",
         positive=True,
     )
-    if message_size != expected_bytes:
+    if expected_bytes is not None and message_size != expected_bytes:
         raise SemanticError(
             "nccl-tests message size does not match the request"
         )
@@ -191,20 +191,13 @@ def _performance_row(
     )
 
 
-def parse_nccl_tests_output(
+def parse_nccl_tests_table(
     text: str,
-    expected_bytes: int,
     *,
     allow_unchecked: bool = False,
 ) -> Tuple[NcclTestRun, ...]:
     if not isinstance(text, str):
         raise SemanticError("nccl-tests output must be a string")
-    if (
-        isinstance(expected_bytes, bool)
-        or not isinstance(expected_bytes, int)
-        or expected_bytes < 1
-    ):
-        raise SemanticError("expected_bytes must be a positive integer")
     runs = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -220,13 +213,39 @@ def parse_nccl_tests_output(
         runs.append(
             _performance_row(
                 fields,
-                expected_bytes,
+                None,
                 allow_unchecked=allow_unchecked,
             )
         )
     if not runs:
         raise SemanticError("nccl-tests output contains no performance row")
     return tuple(runs)
+
+
+def parse_nccl_tests_output(
+    text: str,
+    expected_bytes: int,
+    *,
+    allow_unchecked: bool = False,
+) -> Tuple[NcclTestRun, ...]:
+    if (
+        isinstance(expected_bytes, bool)
+        or not isinstance(expected_bytes, int)
+        or expected_bytes < 1
+    ):
+        raise SemanticError("expected_bytes must be a positive integer")
+    rows = parse_nccl_tests_table(
+        text,
+        allow_unchecked=allow_unchecked,
+    )
+    selected = tuple(
+        row for row in rows if row.message_size_bytes == expected_bytes
+    )
+    if not selected:
+        raise SemanticError(
+            "nccl-tests output contains no requested message size"
+        )
+    return selected
 
 
 class NcclTestsHelpValidator:

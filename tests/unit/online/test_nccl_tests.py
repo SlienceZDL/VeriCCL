@@ -16,6 +16,7 @@ from vericcl.verification.online.nccl_tests import (
     build_nccl_tests_command,
     build_nccl_tests_trace_command,
     parse_nccl_tests_output,
+    parse_nccl_tests_table,
 )
 
 
@@ -180,6 +181,22 @@ def test_parser_accepts_twenty_independent_process_rows():
     assert len(runs) == 20
     assert tuple(run.out_of_place.time_us for run in runs) == tuple(
         float(index) for index in range(1, 21)
+    )
+
+
+def test_parse_nccl_tests_table_keeps_every_size():
+    text = "\n".join(
+        (
+            _output_row(10.0, 11.0, size=4 * 1024 * 1024),
+            _output_row(20.0, 21.0, size=8 * 1024 * 1024),
+        )
+    )
+
+    rows = parse_nccl_tests_table(text)
+
+    assert tuple(row.message_size_bytes for row in rows) == (
+        4 * 1024 * 1024,
+        8 * 1024 * 1024,
     )
 
 
