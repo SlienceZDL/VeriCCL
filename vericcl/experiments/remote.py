@@ -8,7 +8,13 @@ from typing import Mapping, Optional
 import uuid
 
 from vericcl.errors import SemanticError
-from vericcl.verification.online.runner import ProcessRequest, ProcessResult
+from vericcl.verification.online.runner import (
+    ProcessRequest,
+    ProcessResult,
+    TraceCollectionRequest,
+    TraceCollectionResult,
+    collect_trace_files,
+)
 
 
 REMOTE_ENVIRONMENT_NAMES = frozenset(
@@ -272,4 +278,27 @@ class SshStagingCommandExecutor:
         result = self._delegate.run(remote_request)
         if not isinstance(result, ProcessResult):
             raise SemanticError("remote delegate returned an invalid process result")
+        return result
+
+
+class RemoteTraceCollector:
+    def __init__(self, *, stager, delegate=collect_trace_files) -> None:
+        if not callable(getattr(stager, "fetch", None)):
+            raise SemanticError("remote trace stager is invalid")
+        if not callable(delegate):
+            raise SemanticError("remote trace delegate must be callable")
+        self._stager = stager
+        self._delegate = delegate
+
+    def __call__(self, request: TraceCollectionRequest) -> TraceCollectionResult:
+        if not isinstance(request, TraceCollectionRequest):
+            raise SemanticError("remote trace request is invalid")
+        if request.rank_count < 2 or request.rank_count % 2:
+            raise SemanticError("split-host trace rank count must be even")
+        for rank in range(request.rank_count // 2):
+            path = Path("{}.rank-{}.bin".format(request.file_prefix, rank))
+            self._stager.fetch(path, path)
+        result = self._delegate(request)
+        if not isinstance(result, TraceCollectionResult):
+            raise SemanticError("remote trace delegate returned an invalid result")
         return result

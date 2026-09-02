@@ -1,5 +1,6 @@
 from vericcl.experiments.remote import (
     ExperimentPathPolicy,
+    RemoteTraceCollector,
     SshFileStager,
     SshStagingCommandExecutor,
 )
@@ -7,6 +8,7 @@ from vericcl.experiments.remote import (
 
 __all__ = [
     "ExperimentPathPolicy",
+    "RemoteTraceCollector",
     "SshFileStager",
     "SshStagingCommandExecutor",
 ]

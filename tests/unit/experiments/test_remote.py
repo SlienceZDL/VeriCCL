@@ -5,10 +5,19 @@ import pytest
 from vericcl.errors import SemanticError
 from vericcl.experiments.remote import (
     ExperimentPathPolicy,
+    RemoteTraceCollector,
     SshFileStager,
     SshStagingCommandExecutor,
 )
-from vericcl.verification.online.runner import ProcessRequest, ProcessResult
+from vericcl.verification.online.runner import (
+    ProcessRequest,
+    ProcessResult,
+    TraceCollectionRequest,
+    TraceCollectionResult,
+)
+from vericcl.verification.online.trace_analysis import TraceAnalysis
+from vericcl.xml.endpoints import EndpointType
+from vericcl.xml.trace_sidecar import TraceSidecar, TraceStepMetadata
 
 
 class RecordingExecutor:
@@ -31,15 +40,28 @@ class RecordingExecutor:
 
 
 class RecordingStager:
-    def __init__(self):
+    def __init__(self, *, create_downloads=False, fail_fetch=False):
         self.uploads = []
         self.directories = []
+        self.downloads = []
+        self.create_downloads = create_downloads
+        self.fail_fetch = fail_fetch
 
     def upload(self, local, remote):
         self.uploads.append((Path(local), Path(remote)))
 
     def ensure_directory(self, path):
         self.directories.append(Path(path))
+
+    def fetch(self, remote, local):
+        remote_path = Path(remote)
+        local_path = Path(local)
+        self.downloads.append((remote_path, local_path))
+        if self.fail_fetch:
+            raise SemanticError("download failed")
+        if self.create_downloads:
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(b"trace")
 
 
 def _request(xml, trace_prefix, **environment):
@@ -60,6 +82,48 @@ def _request(xml, trace_prefix, **environment):
         environment=values,
         label="remote test",
         timeout_s=30.0,
+    )
+
+
+def _trace_request(tmp_path, *, rank_count):
+    entry = TraceStepMetadata(
+        rank=0,
+        tb_id=0,
+        step_index=0,
+        xml_step_index=0,
+        step_id="copy:cpy",
+        transfer_id="copy",
+        endpoint_type=EndpointType.COPY,
+        runtime_endpoint_type=6,
+        peer=-1,
+        runtime_channel=0,
+        stage_id=-1,
+        atom_ids=(),
+        flow_ids=(),
+        lane=None,
+        semantic_predecessor_ids=(),
+        member_slice_ids=frozenset(),
+    )
+    sidecar = TraceSidecar(
+        xml_sha256="a" * 64,
+        schedule_id="remote-test",
+        rank_count=rank_count,
+        entries={entry.key: entry},
+    )
+    return TraceCollectionRequest(
+        sidecar=sidecar,
+        file_prefix=tmp_path / "trace" / "step",
+        rank_count=rank_count,
+        clock_sync_output="clock-sync",
+        max_clock_uncertainty_us=10.0,
+    )
+
+
+def _trace_result():
+    return TraceCollectionResult(
+        TraceAnalysis((), (), (), (), True),
+        (Path("/tmp/trace.rank-0.bin"),),
+        True,
     )
 
 
@@ -249,3 +313,62 @@ def test_remote_components_reject_unsafe_host(tmp_path, host):
             remote_host=host,
             path_policy=ExperimentPathPolicy(tmp_path),
         )
+
+
+def test_remote_trace_collector_fetches_node4_ranks_before_analysis(tmp_path):
+    stager = RecordingStager(create_downloads=True)
+    delegated = []
+    collector = RemoteTraceCollector(
+        stager=stager,
+        delegate=lambda request: delegated.append(request) or _trace_result(),
+    )
+    request = _trace_request(tmp_path, rank_count=8)
+
+    result = collector(request)
+
+    assert tuple(path.name for _, path in stager.downloads) == (
+        "step.rank-0.bin",
+        "step.rank-1.bin",
+        "step.rank-2.bin",
+        "step.rank-3.bin",
+    )
+    assert delegated == [request]
+    assert result.complete is True
+
+
+def test_remote_trace_collector_fetches_rank_zero_for_two_rank_calibration(
+    tmp_path,
+):
+    stager = RecordingStager(create_downloads=True)
+    collector = RemoteTraceCollector(
+        stager=stager,
+        delegate=lambda request: _trace_result(),
+    )
+
+    collector(_trace_request(tmp_path, rank_count=2))
+
+    assert tuple(path.name for _, path in stager.downloads) == (
+        "step.rank-0.bin",
+    )
+
+
+def test_remote_trace_collector_stops_when_fetch_fails(tmp_path):
+    delegated = []
+    collector = RemoteTraceCollector(
+        stager=RecordingStager(fail_fetch=True),
+        delegate=lambda request: delegated.append(request) or _trace_result(),
+    )
+
+    with pytest.raises(SemanticError, match="download failed"):
+        collector(_trace_request(tmp_path, rank_count=8))
+    assert delegated == []
+
+
+def test_remote_trace_collector_rejects_odd_rank_count(tmp_path):
+    collector = RemoteTraceCollector(
+        stager=RecordingStager(),
+        delegate=lambda request: _trace_result(),
+    )
+
+    with pytest.raises(SemanticError, match="even"):
+        collector(_trace_request(tmp_path, rank_count=3))
