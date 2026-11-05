@@ -296,8 +296,14 @@ def _allreduce_plan(
     edges = []
     gather_nodes = []
     for logical_address in range(slice_count):
-        owner = logical_address // quotient
-        offset = logical_address % quotient
+        if slice_count % rank_count:
+            # AllReduce permits any positive slice count. Distribute uneven
+            # intermediate results without changing their logical addresses.
+            owner = logical_address % rank_count
+            offset = logical_address // rank_count
+        else:
+            owner = logical_address // quotient
+            offset = logical_address % quotient
         contributors = frozenset(
             rank * slice_count + logical_address
             for rank in range(rank_count)

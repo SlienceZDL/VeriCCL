@@ -125,6 +125,24 @@ def test_allreduce_has_reduce_scatter_dependencies_before_allgather():
     assert all(edge.consumer_id.startswith("allreduce-ag") for edge in plan.edges)
 
 
+@pytest.mark.parametrize("slice_count", [1, 3, 5])
+def test_allreduce_preserves_every_slice_with_uneven_reduction_owners(slice_count):
+    inputs = resolved_input(CollectiveKind.ALL_REDUCE, slice_count=slice_count)
+    plan = build_direct_plan(inputs, topology_for(inputs))
+    reduction_nodes = [node for node in plan.nodes if node.stage_id == 0]
+    assert len(reduction_nodes) == slice_count
+    intermediate_slots = []
+    for logical_address, node in enumerate(reduction_nodes):
+        assert len(node.logical_output.values) == 1
+        slot, contributors = next(iter(node.logical_output.values.items()))
+        assert 0 <= slot.rank < inputs.rank_count
+        assert contributors == frozenset(rank * slice_count + logical_address for rank in range(inputs.rank_count))
+        intermediate_slots.append(slot)
+    assert len(set(intermediate_slots)) == slice_count
+    assert len(plan.edges) == slice_count
+    assert plan.final_outputs.values == required_outputs(inputs.collective, inputs.rank_count, slice_count)
+
+
 def test_direct_plan_records_direct_request_metadata():
     inputs = resolved_input(CollectiveKind.ALL_REDUCE)
 
