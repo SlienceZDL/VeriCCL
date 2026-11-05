@@ -176,19 +176,20 @@ PY
 
 **验证已有调度：`verify`**
 
-`verify` 使用原配置检查已有 XML。`--sidecar` 指定随 XML 生成的调度说明文件，`--model` 指定本次评估使用的代价模型：
+`verify` 使用原配置检查已有 XML。`--sidecar` 指定随 XML 生成的调度说明文件，`--model` 指定本次评估使用的代价模型。命令格式如下，尖括号中的内容替换为实际路径或名称：
 
-```bash
-"$VERICCL_PYTHON" -m vericcl verify --project-root "$VERICCL_ROOT" --case my-case \
-  --topology topology.json --sketch sketch.json \
-  --atom atom.json --runtime runtime.json \
-  --xml schedule.xml --sidecar sidecar.json --model model.json
+```text
+python -m vericcl verify --project-root <项目目录> --case <案例名> \
+  --topology <原输入目录>/topology.json --sketch <原输入目录>/sketch.json \
+  --atom <原输入目录>/atom.json --runtime <原输入目录>/runtime.json \
+  --xml <XML路径> --sidecar <sidecar路径> --model <模型路径>
 ```
 
-检查结果保存到新运行目录的 `run-summary.json` 和 `reports/`。下面读取刚才合成的 XML、sidecar 和模型，执行一次复验：
+检查结果保存到新运行目录的 `run-summary.json` 和 `reports/`。下面从 `VERICCL_RUN` 读取该次运行保存的原始输入、最佳 XML、sidecar 和模型，执行一次复验：
 
 <!-- vericcl-v5-command: quickstart-verify -->
 ```bash
+export VERICCL_INPUT="$VERICCL_RUN/input_snapshot"
 export VERICCL_XML="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(open(os.environ["VERICCL_RUN"]+"/best/accepted.json"))["candidate"]["xml"])')"
 export VERICCL_SIDECAR="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(open(os.environ["VERICCL_RUN"]+"/best/accepted.json"))["candidate"]["sidecar"])')"
 export VERICCL_MODEL="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(open(os.environ["VERICCL_RUN"]+"/best/accepted.json"))["model_version"])')"
@@ -199,7 +200,7 @@ export VERICCL_MODEL="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(op
   --model "$VERICCL_RUN/models/$VERICCL_MODEL.json"
 ```
 
-合成时通过命令行修改的参数，在复验时也一并传入。
+合成时使用 `--set` 修改的参数，复验时也传入相同设置。再次验证可省略 `--run-id`，由程序生成新编号。
 
 **设置调优时间与轮数**
 
