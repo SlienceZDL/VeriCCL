@@ -1,0 +1,759 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VeriCCL sketch",
+  "type": "object",
+  "properties": {
+    "collective": {
+      "type": "object",
+      "properties": {
+        "operator": {
+          "type": "string",
+          "enum": [
+            "broadcast",
+            "reduce",
+            "allgather",
+            "allreduce",
+            "alltoall",
+            "reduce_scatter"
+          ],
+          "minLength": 1
+        },
+        "datatype": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": "float32",
+          "enum": [
+            "float16",
+            "float32",
+            "float64",
+            "bfloat16",
+            "int8",
+            "uint8",
+            "int32",
+            "uint32",
+            "int64",
+            "uint64",
+            null
+          ],
+          "minLength": 1
+        },
+        "root": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "reduction_op": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "sum",
+            "prod",
+            "min",
+            "max",
+            "avg",
+            null
+          ],
+          "minLength": 1
+        },
+        "inplace": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        }
+      },
+      "required": [
+        "operator"
+      ],
+      "additionalProperties": false
+    },
+    "hyperparameters": {
+      "type": "object",
+      "properties": {
+        "total_size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "slice_size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": null,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "reference_slice_size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": null,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": [
+        "total_size_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "solver": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "backend": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": "scip",
+          "enum": [
+            "scip",
+            null
+          ],
+          "minLength": 1
+        },
+        "per_model_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "cpu_budget": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "max_threads_per_model": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 12,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "max_parallel_models": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "max_channels": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 7,
+          "minimum": 1,
+          "maximum": 16
+        },
+        "solver_seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 0,
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "mip_gap": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 0,
+          "minimum": 0,
+          "maximum": 1
+        },
+        "require_proven_optimal": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        },
+        "bdd_backend": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": "cudd",
+          "enum": [
+            "cudd",
+            "autoref",
+            null
+          ],
+          "minLength": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "budgets": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "max_initial_synthesis_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "max_online_validation_per_round_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "max_online_validation_total_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "max_offline_validation_per_round_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "max_offline_validation_total_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "max_repair_per_round_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "max_repair_total_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "max_run_wall_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "cleanup_reserve_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "max_tuning_rounds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "tolerances": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "absolute": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "relative": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "calibration": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": true
+        },
+        "launches": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 20,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "warmup_iterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 5,
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "timed_iterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 20,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "max_rounds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 3,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "max_cv": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 0.05,
+          "exclusiveMinimum": 0
+        },
+        "max_relative_fit_error": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "job_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "payload_sizes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "minItems": 0,
+          "default": []
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "trace_and_measure": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        },
+        "pairs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 20,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "warmup_iterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 5,
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "timed_iterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 20,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "max_rounds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 3,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "max_cv": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 0.05,
+          "exclusiveMinimum": 0
+        },
+        "min_relative_gain": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 0,
+          "minimum": 0,
+          "maximum": 1
+        },
+        "task_alpha": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 0.05,
+          "maximum": 0.05,
+          "exclusiveMinimum": 0
+        },
+        "single_attempt_alpha_cap": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 0.05,
+          "maximum": 0.05,
+          "exclusiveMinimum": 0
+        },
+        "seed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 0,
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "job_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "trace_capacity_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "repair": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": "strategy_first",
+          "enum": [
+            "strategy_first",
+            "joint",
+            null
+          ],
+          "minLength": 1
+        },
+        "candidate_batch_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 4,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "analysis_batch_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 16,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "runtime_compatibility": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": true
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "history": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "schedule_reuse": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        },
+        "calibration_reuse": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        },
+        "relative_bandwidth_tolerance": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "max_schedule_candidates": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "calibration_max_age_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "schedule_index": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "calibration_index": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "live": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        },
+        "request_prepare_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "execution_attempt_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "background_tuning_task_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "version_prepare_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "control_phase_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "recovery_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "close_cleanup_timeout_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "window_requests": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 8,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "consecutive_windows": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 2,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "relative_change_threshold": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": 0.1,
+          "exclusiveMinimum": 0
+        },
+        "min_residence_requests": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 32,
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "max_retries": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 2,
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    }
+  },
+  "required": [
+    "collective",
+    "hyperparameters"
+  ],
+  "additionalProperties": false
+}

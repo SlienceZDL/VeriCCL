@@ -1,0 +1,39 @@
+--- a/src/enqueue.cc
++++ b/src/enqueue.cc
+@@ -1481,6 +1481,36 @@
+   return ncclSuccess;
+ }
+ 
++extern "C" __attribute__((visibility("default")))
++ncclResult_t vericclNcclPlanAdmission(ncclComm_t comm, size_t bytes,
++    ncclDataType_t datatype, ncclRedOp_t op, int* residentLimit) {
++  if (comm == NULL || residentLimit == NULL || bytes == 0 ||
++      datatype < 0 || datatype >= ncclNumTypes || ncclTypeSize(datatype) <= 0 ||
++      bytes % ncclTypeSize(datatype) || op < ncclSum || op > ncclMin)
++    return ncclInvalidArgument;
++  if (ncclAsyncMode()) return ncclInvalidUsage;
++  CUDACHECK(cudaSetDevice(comm->cudaDev));
++  struct ncclInfo info = {ncclFuncCustomCollective, "VeriCCLPlanAdmission", NULL, NULL,
++    bytes / ncclTypeSize(datatype), datatype, op, 0, comm, NULL, MSCCL_CHUNKSTEPS, MSCCL_SLICESTEPS};
++  info.nBytes = bytes;
++  info.mscclInfo.mscclAlgoIndex = 0;
++  NCCLCHECK(hostToDevRedOp(&info.opFull, op, datatype, comm));
++  struct ncclWorkElem work = {};
++  struct ncclProxyOp proxy = {};
++  NCCLCHECK(computeColl(&info, &work, &proxy));
++  if (info.algorithm != NCCL_ALGO_MSCCL || info.protocol != NCCL_PROTO_SIMPLE)
++    return ncclInvalidUsage;
++  cudaDeviceProp properties;
++  int resident = 0;
++  CUDACHECK(cudaGetDeviceProperties(&properties, comm->cudaDev));
++  CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&resident,
++    ncclKerns[work.header.funcIndex], info.nThreads, 0));
++  *residentLimit = resident * properties.multiProcessorCount;
++  if (resident <= 0 || comm->mscclHostComm.mscclDevComm.mscclAlgos[0].nBlocks > *residentLimit)
++    return ncclInvalidUsage;
++  return ncclSuccess;
++}
++
+ ncclResult_t ncclEnqueueCheck(struct ncclInfo* info) {
+   ncclResult_t ret = ncclSuccess;
+   bool isAsync = ncclAsyncMode();

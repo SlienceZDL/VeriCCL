@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "upstream_repository": "https://github.com/microsoft/msccl.git",
+  "upstream_commit": "b23e9cd5dd63f82ee1c5aae7e0a2042079be903a",
+  "patched_files": {
+    "src/collectives/device/msccl_interpreter.h": "6aa8dd23a94cd45ddafbfda6bbc77989bc124592714e185ef7f950d3391585af",
+    "src/collectives/device/primitives.h": "78b1f8ef7a5bb7db5692c841a2ecc161da0f9da030d1cc65a217396701f409cc",
+    "src/collectives/device/prims_ll.h": "944aba23dd3111bed0b5502f81905fc2117bb2f35c260105c37a32d4ec8e342a",
+    "src/collectives/device/prims_ll128.h": "bac03f319df7e7ffbb480993b9369d283a144509b6e42de10ff4e85e507e3896",
+    "src/collectives/device/prims_simple.h": "a546d91811de4ccb1e27fb71aed2d822d1a61e7507d5902129a8bca4feab8ed2",
+    "src/include/msccl.h": "a47fa754f0a2709aada41f388d769649331d638cf6c67b2b2bebd130fe7723a4",
+    "src/include/vericcl_trace_format.h": "d9bc36fd6c039867fc13f1ff898fcd972bf2a5be457670b24e14430bba358e78",
+    "src/init.cc": "65a427fa028f40c7b92c36579a150f558ef0dd4d1c94c47748187a76036f0108",
+    "src/enqueue.cc": "96cd8933315019099177125a9d9667befa096cdabb7086feb928a8b4ab90bfa8",
+    "src/include/vericcl_probe.h": "d66af0c7ffb12afea0a7032ba415657ed21c92de6e8108b7e3eaae88085306a8",
+    "src/include/comm.h": "3c3a656faf2005925aaa4511f3759c9e969ebce027e8369cd4630e1a85b2ed92",
+    "src/include/vericcl_plan.h": "e9e41964b303d7f47ea81ccaf69f79c127a6c0f96c58152e6605e405b99281b6"
+  },
+  "v5_overlay": "light probe counters, validated explicit CustomCollective index including single-rank execution, actual-kernel occupancy guard",
+  "trace_base_commit": "782ee5f72cf48c1ae1a2365bcf525019f5620175",
+  "trace_base_tag": "vericcl-runtime-v0.1.0",
+  "patched_commit": "782ee5f72cf48c1ae1a2365bcf525019f5620175",
+  "trace_base_files": {
+    "src/collectives/device/msccl_interpreter.h": "5230e88cc2baebc713c5d5451f509dbeb09f41a185ab7f1d88307379323cc990",
+    "src/collectives/device/primitives.h": "78b1f8ef7a5bb7db5692c841a2ecc161da0f9da030d1cc65a217396701f409cc",
+    "src/collectives/device/prims_ll.h": "944aba23dd3111bed0b5502f81905fc2117bb2f35c260105c37a32d4ec8e342a",
+    "src/collectives/device/prims_ll128.h": "bac03f319df7e7ffbb480993b9369d283a144509b6e42de10ff4e85e507e3896",
+    "src/collectives/device/prims_simple.h": "a546d91811de4ccb1e27fb71aed2d822d1a61e7507d5902129a8bca4feab8ed2",
+    "src/include/msccl.h": "ea31bbb95ca96c9f62ac40262da83eb70ca472ff10c06a697b82f93be5d5d595",
+    "src/include/vericcl_trace_format.h": "d9bc36fd6c039867fc13f1ff898fcd972bf2a5be457670b24e14430bba358e78",
+    "src/init.cc": "5226fbaae48fb03d4088218c976adb5be9831f3f9ca6967a3080a8f2e7aecd08"
+  },
+  "published_revision_scope": "trace_base_only",
+  "v5_trace_control": "preallocated buffers; pause warmup, synchronized reset, one target call, flush and disable",
+  "v5_explicit_plan": "independent communicator XML and trace parameters; legacy APIs unchanged; no setenv during version preparation",
+  "v5_prepared_admission": "actual selected kernel occupancy, Simple geometry and allocated scratch checked before READY",
+  "v5_full_collective_dispatch": "explicit XML index supports external collective labels and rank-dependent AllGather/ReduceScatter in-place partitions",
+  "v5_abort": "signal before freeing; dependency waits observe abort; application confirms stream completion before communicator destruction",
+  "v5_trace_cycle": "idle version can alternate light counters, trace-off sampling and one complete detailed trace; reset preserves allocation"
+}

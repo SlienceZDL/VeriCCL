@@ -1,0 +1,195 @@
+--- a/src/collectives/device/msccl_interpreter.h
++++ b/src/collectives/device/msccl_interpreter.h
+@@ -136,6 +136,8 @@
+     struct mscclDevCommInfo* traceCommInfo = ncclShmem.comm.mscclInfo;
+     const bool traceEnabled =
+         traceCommInfo != NULL && traceCommInfo->traceRecords != NULL;
++    const bool probeEnabled = traceCommInfo != NULL && traceCommInfo->probeTable != NULL;
++    const bool timingEnabled = traceEnabled || probeEnabled;
+ 
+     for (ssize_t gridOffset = 0, iter = 0; gridOffset < sizePerMscclChunk; gridOffset += chunkSize, iter++) {
+       ssize_t realChunkSize;
+@@ -156,11 +158,11 @@
+         uint64_t tbReach = 0;
+         uint64_t dependencyDone = 0;
+         VericclRawStepTraceRecord* rawTrace = NULL;
+-        if (traceEnabled) {
++        if (timingEnabled) {
+           if (tid == 0) {
+             tbReach = mscclTraceClock();
+             ncclShmem.mscclShmem.traceRecord =
+-                vericclTraceReserve(traceCommInfo);
++                probeEnabled ? &ncclShmem.mscclShmem.probeRecord : vericclTraceReserve(traceCommInfo);
+             if (ncclShmem.mscclShmem.traceRecord != NULL) {
+               ncclShmem.mscclShmem.traceRecord->transfer_start = 0;
+             }
+@@ -188,7 +190,7 @@
+ 
+           NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DEP_CHECK_EXIT, msccltran->numDependences);
+         }
+-        if (traceEnabled) {
++        if (timingEnabled) {
+           barrier(nthreads);
+           if (tid == 0) dependencyDone = mscclTraceClock();
+           barrier(nthreads);
+@@ -213,7 +215,7 @@
+               NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_REDUCE_ENTRY, thisNelem*sizeof(T));
+ 
+               if (thisNelem > 0) mscclTraceStart(rawTrace);
+-              if (traceEnabled) barrier(nthreads);
++              if (timingEnabled) barrier(nthreads);
+ 
+               if (tid < thisNelem){
+                 dstoffset = gridOffset + (ssize_t) (msccltran->dstoffset+c) * sizePerMscclChunk;
+@@ -258,7 +260,7 @@
+           else
+             return;
+         }
+-        if (traceEnabled) {
++        if (timingEnabled) {
+           barrier(nthreads);
+           if (tid == 0 && rawTrace != NULL) {
+             rawTrace->rank = (uint32_t)rank;
+@@ -273,10 +275,27 @@
+             rawTrace->dependency_done = dependencyDone;
+             rawTrace->transfer_end = mscclTraceClock();
+             if (rawTrace->transfer_start == 0) {
+-              atomicExch(traceCommInfo->traceOverflow, 1U);
++              if (traceEnabled) atomicExch(traceCommInfo->traceOverflow, 1U);
+             }
+             rawTrace->flags = mscclTraceResourceMask(msccltran->type);
+             rawTrace->reserved = 0;
++            if (probeEnabled) {
++              const size_t slot = (size_t)bid * MSCCL_MAX_NUM_STEPS + (size_t)i;
++              if (slot < traceCommInfo->probeTableEntries) {
++                VericclProbeCounter* counter = traceCommInfo->probeTable + slot;
++                counter->kind = msccltran->type;
++                counter->channel = channelId;
++                if (rawTrace->transfer_start == 0 || rawTrace->transfer_end < rawTrace->transfer_start) {
++                  counter->invalid_samples++;
++                } else {
++                  counter->service_ns += rawTrace->transfer_end - rawTrace->transfer_start;
++                  counter->dependency_wait_ns += dependencyDone - tbReach;
++                  if (counter->samples == 0) counter->first_start_ns = rawTrace->transfer_start;
++                  counter->last_end_ns = rawTrace->transfer_end;
++                  counter->samples++;
++                }
++              }
++            }
+           }
+           barrier(nthreads);
+         }
+--- a/src/enqueue.cc
++++ b/src/enqueue.cc
+@@ -440,7 +440,20 @@
+ // numPipeOps: number of pipelined ops. Can be greater than 1 in aggregation mode. Used to adjust latency.
+ static ncclResult_t getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, int numPipeOps) {
+   struct ncclComm* comm = info->comm;
+-  if (comm->nRanks == 1) {
++  if (info->coll == ncclFuncCustomCollective) {
++    const int index = info->mscclInfo.mscclAlgoIndex;
++    if (index < 0 || index >= comm->mscclHostComm.numberOfMSCCLAlgorithms) return ncclInvalidArgument;
++    const struct mscclAlgorithm* selected = &comm->mscclHostComm.mscclDevComm.mscclAlgos[index];
++    if (!selected->isValid || selected->collectiveType != ncclFuncCustomCollective ||
++        selected->ngpus != comm->nRanks || selected->inPlace != (info->sendbuff == info->recvbuff) ||
++        selected->nchunksPerLoop <= 0 || info->count % selected->nchunksPerLoop != 0 ||
++        info->nBytes < selected->minBytes || info->nBytes >= selected->maxBytes ||
++        (info->opFull.op != ncclDevSum && info->opFull.op != ncclDevProd &&
++         info->opFull.op != ncclDevMin && info->opFull.op != ncclDevMax)) return ncclInvalidUsage;
++    info->algorithm = NCCL_ALGO_MSCCL;
++    info->protocol = selected->protocol;
++  }
++  if (comm->nRanks == 1 && info->coll != ncclFuncCustomCollective) {
+     info->algorithm = NCCL_ALGO_RING;
+     info->protocol = NCCL_PROTO_SIMPLE;
+   }
+@@ -618,7 +631,7 @@
+   work->redOpArgIsPtr = info->opFull.scalarArgIsPtr;
+   work->mscclWork.mscclAlgoIndex = info->mscclInfo.mscclAlgoIndex;
+ 
+-  if (info->comm->nRanks == 1) {
++  if (info->comm->nRanks == 1 && info->coll != ncclFuncCustomCollective) {
+     // one-rank reduce index
+     work->header.funcIndex = 1 + int(info->datatype);
+     return ncclSuccess;
+@@ -812,7 +825,7 @@
+ // Capture time code in view of CUDA graph
+ static ncclResult_t ncclSetupCollKernel(struct ncclInfo* info) {
+   ncclComm_t comm = info->comm;
+-  if (comm->nRanks == 1 &&
++  if (comm->nRanks == 1 && info->coll != ncclFuncCustomCollective &&
+       // User-defined reduction ops may need alter the data even for unitary reductions
+       info->op < ncclNumOps) {
+     if (info->sendbuff != info->recvbuff)
+@@ -832,6 +845,17 @@
+   params->blockDim.x = std::max<unsigned>(params->blockDim.x, info->nThreads);
+   if (info->algorithm == NCCL_ALGO_MSCCL){
+     struct mscclAlgorithm* mscclAlgo = &info->comm->mscclHostComm.mscclDevComm.mscclAlgos[info->mscclInfo.mscclAlgoIndex];
++    int residentBlocks = 0;
++    cudaDeviceProp deviceProperties;
++    CUDACHECK(cudaGetDeviceProperties(&deviceProperties, comm->cudaDev));
++    CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
++        &residentBlocks, ncclKerns[work->header.funcIndex], info->nThreads, 0));
++    if (residentBlocks <= 0 || mscclAlgo->nBlocks > residentBlocks * deviceProperties.multiProcessorCount) {
++      WARN("VeriCCL: MSCCL plan has %d TBs but this kernel/device permits at most %d resident TBs", 
++           mscclAlgo->nBlocks, residentBlocks * deviceProperties.multiProcessorCount);
++      return ncclInvalidUsage;
++    }
++
+     params->gridDim.x = mscclAlgo->nBlocks;
+     comm->enqueueInfo->maxChannels = 0; // nchannels with MSCCL is set to 0 since first is always inlined and MSCCL can be used only that way
+   } else {
+--- a/src/include/msccl.h
++++ b/src/include/msccl.h
+@@ -2,6 +2,7 @@
+ #define MSCCL_H_
+ 
+ #include <stdint.h>
++#include "vericcl_probe.h"
+ #include "vericcl_trace_format.h"
+ 
+ #define MSCCL_MAX_NUM_STEPS 256
+@@ -130,6 +131,7 @@
+   volatile struct mscclFlag* flags;
+   void* scratchBuffer;
+   VericclRawStepTraceRecord* traceRecord;
++  VericclRawStepTraceRecord probeRecord;
+   int nchunksPerLoop;
+   int8_t needsFence;
+   uint32_t workIndex;
+@@ -145,6 +147,8 @@
+   void* scratchBuffer;
+   VericclRawStepTraceRecord* traceRecords;
+   unsigned long long* traceRecordCount;
++  VericclProbeCounter* probeTable;
++  size_t probeTableEntries;
+   unsigned int* traceOverflow;
+   unsigned long long traceCapacity;
+ };
+--- a/src/init.cc
++++ b/src/init.cc
+@@ -1451,3 +1451,24 @@
+ const char* ncclGetLastError(ncclComm_t comm) {
+   return "";
+ }
++
++
++extern "C" __attribute__((visibility("default")))
++ncclResult_t vericclProbeAttach(ncclComm_t comm, VericclProbeCounter* table, size_t entries) {
++  if (comm == NULL || (table == NULL) != (entries == 0)) return ncclInvalidArgument;
++  int device = -1;
++  CUDACHECK(cudaGetDevice(&device));
++  if (device != comm->cudaDev || comm->hostDevComm.mscclInfo == NULL) return ncclInvalidUsage;
++  if (comm->mscclHostComm.traceEnabled) return ncclInvalidUsage;
++  if (table != NULL) {
++    cudaPointerAttributes attributes;
++    CUDACHECK(cudaPointerGetAttributes(&attributes, table));
++    if (attributes.type != cudaMemoryTypeDevice || attributes.device != device) return ncclInvalidArgument;
++  }
++  CUDACHECK(cudaDeviceSynchronize());
++  comm->mscclHostComm.mscclDevComm.probeTable = table;
++  comm->mscclHostComm.mscclDevComm.probeTableEntries = entries;
++  CUDACHECK(cudaMemcpy(&comm->hostDevComm.mscclInfo->probeTable, &table, sizeof(table), cudaMemcpyHostToDevice));
++  CUDACHECK(cudaMemcpy(&comm->hostDevComm.mscclInfo->probeTableEntries, &entries, sizeof(entries), cudaMemcpyHostToDevice));
++  return ncclSuccess;
++}

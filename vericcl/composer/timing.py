@@ -1,0 +1,405 @@
+from typing import Mapping, Optional, Tuple
+
+from vericcl.errors import SemanticError
+from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.topology.model import LaneKey, LinkKey, Topology
+
+
+def _semantic_predecessors(schedule: Schedule) -> Mapping[str, frozenset]:
+    raw = schedule.metadata.get("semantic_predecessors")
+    if raw is None:
+        return {
+            transfer.transfer_id: transfer.predecessor_ids
+            for transfer in schedule.transfers
+        }
+    if not isinstance(raw, Mapping):
+        raise SemanticError("semantic_predecessors metadata must be a mapping")
+    if set(raw) != {transfer.transfer_id for transfer in schedule.transfers}:
+        raise SemanticError(
+            "semantic_predecessors must cover every transfer exactly"
+        )
+    transfer_ids = {transfer.transfer_id for transfer in schedule.transfers}
+    result = {}
+    for transfer_id in sorted(transfer_ids):
+        values = raw[transfer_id]
+        if isinstance(values, (str, bytes)):
+            raise SemanticError("semantic predecessors must be iterable")
+        try:
+            predecessors = tuple(values)
+        except TypeError as error:
+            raise SemanticError(
+                "semantic predecessors must be iterable"
+            ) from error
+        if any(
+            not isinstance(predecessor, str) or not predecessor
+            for predecessor in predecessors
+        ):
+            raise SemanticError(
+                "semantic predecessor IDs must be non-empty strings"
+            )
+        if not set(predecessors) <= transfer_ids:
+            raise SemanticError(
+                "semantic predecessor is missing from the schedule"
+            )
+        result[transfer_id] = frozenset(predecessors)
+    return result
+
+
+def _resource_slots(schedule: Schedule) -> Mapping[str, Mapping[str, int]]:
+    raw = schedule.metadata.get("resource_slots", {})
+    if not isinstance(raw, Mapping):
+        raise SemanticError("resource_slots metadata must be a mapping")
+    result = {}
+    for transfer in schedule.transfers:
+        values = raw.get(transfer.transfer_id, {})
+        if not isinstance(values, Mapping):
+            raise SemanticError("transfer resource slots must be a mapping")
+        result[transfer.transfer_id] = dict(values)
+    return result
+
+
+def _final_dependencies(
+    schedule: Schedule,
+) -> Optional[Mapping[str, frozenset]]:
+    raw = schedule.metadata.get("final_dependencies")
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise SemanticError("final_dependencies metadata must be a mapping")
+    transfer_ids = {transfer.transfer_id for transfer in schedule.transfers}
+    result = {}
+    for key, values in raw.items():
+        if not isinstance(key, str) or not key:
+            raise SemanticError("final dependency key must be a non-empty string")
+        try:
+            dependencies = tuple(values)
+        except TypeError as error:
+            raise SemanticError(
+                "final dependencies must be iterable"
+            ) from error
+        if len(dependencies) != len(set(dependencies)):
+            raise SemanticError("final dependencies must be unique")
+        if any(
+            not isinstance(transfer_id, str) or not transfer_id
+            for transfer_id in dependencies
+        ):
+            raise SemanticError("final dependency IDs must be non-empty strings")
+        if not set(dependencies) <= transfer_ids:
+            raise SemanticError("final dependency is missing from the schedule")
+        result[key] = frozenset(dependencies)
+    final_outputs = schedule.metadata.get("final_outputs")
+    if isinstance(final_outputs, Mapping) and set(result) != set(final_outputs):
+        raise SemanticError(
+            "final_dependencies must cover every final output exactly"
+        )
+    return result
+
+
+def _validate_topology(
+    transfer: Transfer,
+    slots: Mapping[str, int],
+    topology: Topology,
+) -> None:
+    link = LinkKey(transfer.src_rank, transfer.dst_rank)
+    if link not in topology.links:
+        raise SemanticError("schedule transfer is absent from the topology")
+    edge = topology.link(link)
+    if transfer.channel >= edge.max_channels:
+        raise SemanticError("schedule channel exceeds the topology limit")
+    if not set(slots) <= set(edge.resource_ids):
+        raise SemanticError("schedule uses an unrelated shared resource")
+    for resource_id, slot in slots.items():
+        resource = topology.shared_resources[resource_id]
+        if slot < 0 or slot >= resource.max_channels:
+            raise SemanticError("schedule resource slot exceeds its limit")
+
+
+def _validate_fixed_resource_intervals(
+    schedule: Schedule,
+    times: Mapping[str, Tuple[float, float, float]],
+    resource_slots: Mapping[str, Mapping[str, int]],
+) -> None:
+    lanes = {}
+    resources = {}
+    for transfer in schedule.transfers:
+        start, end, _ = times[transfer.transfer_id]
+        if end <= start:
+            continue
+        lane = LaneKey(
+            transfer.src_rank,
+            transfer.dst_rank,
+            transfer.channel,
+        )
+        lanes.setdefault(lane, []).append(
+            (start, end, transfer.transfer_id)
+        )
+        for resource_id, slot in resource_slots[transfer.transfer_id].items():
+            resources.setdefault((resource_id, slot), []).append(
+                (start, end, transfer.transfer_id)
+            )
+    for groups in (lanes, resources):
+        for intervals in groups.values():
+            previous_end = 0.0
+            for start, end, _ in sorted(intervals):
+                if start < previous_end:
+                    raise SemanticError(
+                        "fixed resource intervals must not overlap"
+                    )
+                previous_end = end
+
+
+def _retime(
+    schedule: Schedule,
+    topology: Optional[Topology],
+    *,
+    preserve_predecessor_order: bool = False,
+    lease=None,
+) -> Schedule:
+    def check_budget():
+        if lease is not None:
+            lease.check()
+
+    check_budget()
+    if not isinstance(schedule, Schedule):
+        raise SemanticError("schedule must be a Schedule")
+    if topology is not None:
+        if not isinstance(topology, Topology):
+            raise SemanticError("topology must be a Topology")
+        if topology.rank_count != schedule.rank_count:
+            raise SemanticError("schedule and topology rank counts must agree")
+    semantic = _semantic_predecessors(schedule)
+    resource_slots = _resource_slots(schedule)
+    by_id = {transfer.transfer_id: transfer for transfer in schedule.transfers}
+    if topology is not None:
+        for transfer in schedule.transfers:
+            _validate_topology(
+                transfer,
+                resource_slots[transfer.transfer_id],
+                topology,
+            )
+    pending = dict(by_id)
+    times = {}
+    all_predecessors = {}
+    lane_ready = {}
+    lane_last = {}
+    resource_ready = {}
+    resource_last = {}
+    if preserve_predecessor_order:
+        for transfer in schedule.transfers:
+            if not semantic[transfer.transfer_id] <= transfer.predecessor_ids:
+                raise SemanticError(
+                    "fixed predecessor order must include semantic predecessors"
+                )
+    while pending:
+        check_budget()
+        completed_ids = times.keys()
+        ready = [
+            transfer
+            for transfer in pending.values()
+            if (
+                transfer.predecessor_ids
+                if preserve_predecessor_order
+                else semantic[transfer.transfer_id]
+            )
+            <= completed_ids
+        ]
+        if not ready:
+            if preserve_predecessor_order:
+                raise SemanticError(
+                    "schedule predecessor dependencies contain a cycle"
+                )
+            raise SemanticError("schedule semantic dependencies contain a cycle")
+        if preserve_predecessor_order:
+            transfer = min(ready, key=lambda item: item.transfer_id)
+            transfer_id = transfer.transfer_id
+            semantic_ready = max(
+                (
+                    times[predecessor][1]
+                    for predecessor in semantic[transfer_id]
+                ),
+                default=0.0,
+            )
+            start = max(
+                (
+                    times[predecessor][1]
+                    for predecessor in transfer.predecessor_ids
+                ),
+                default=0.0,
+            )
+            duration = transfer.ed_time - transfer.st_time
+            times[transfer_id] = (
+                start,
+                start + duration,
+                semantic_ready,
+            )
+            all_predecessors[transfer_id] = transfer.predecessor_ids
+            del pending[transfer_id]
+            continue
+        choices = []
+        for index, transfer in enumerate(ready):
+            if index % 128 == 0:
+                check_budget()
+            transfer_id = transfer.transfer_id
+            semantic_ready = max(
+                (
+                    times[predecessor][1]
+                    for predecessor in semantic[transfer_id]
+                ),
+                default=0.0,
+            )
+            lane = LaneKey(
+                transfer.src_rank,
+                transfer.dst_rank,
+                transfer.channel,
+            )
+            start = max(
+                [semantic_ready, lane_ready.get(lane, 0.0)]
+                + [
+                    resource_ready.get((resource_id, slot), 0.0)
+                    for resource_id, slot in resource_slots[
+                        transfer_id
+                    ].items()
+                ]
+            )
+            choices.append(
+                (
+                    start,
+                    transfer.st_time,
+                    transfer_id,
+                    semantic_ready,
+                    lane,
+                    transfer,
+                )
+            )
+        start, _, transfer_id, semantic_ready, lane, transfer = min(choices)
+        duration = transfer.ed_time - transfer.st_time
+        end = start + duration
+        predecessors = set(semantic[transfer_id])
+        if lane in lane_last:
+            predecessors.add(lane_last[lane])
+        for resource_id, slot in resource_slots[transfer_id].items():
+            key = (resource_id, slot)
+            if key in resource_last:
+                predecessors.add(resource_last[key])
+        times[transfer_id] = (start, end, semantic_ready)
+        all_predecessors[transfer_id] = frozenset(predecessors)
+        del pending[transfer_id]
+        lane_ready[lane] = end
+        lane_last[lane] = transfer_id
+        for resource_id, slot in resource_slots[transfer_id].items():
+            key = (resource_id, slot)
+            resource_ready[key] = end
+            resource_last[key] = transfer_id
+    check_budget()
+    if preserve_predecessor_order:
+        _validate_fixed_resource_intervals(
+            schedule,
+            times,
+            resource_slots,
+        )
+    operation_ids = {}
+    for index, transfer in enumerate(schedule.transfers):
+        if index % 128 == 0:
+            check_budget()
+        for member in transfer.member_slice_ids:
+            key = (
+                transfer.stage_id,
+                transfer.src_rank,
+                transfer.dst_rank,
+                member,
+            )
+            if key in operation_ids and operation_ids[key] != transfer.transfer_id:
+                raise SemanticError("slice operation is duplicated in the schedule")
+            operation_ids[key] = transfer.transfer_id
+    rebuilt = []
+    for index, transfer in enumerate(schedule.transfers):
+        if index % 128 == 0:
+            check_budget()
+        start, end, _ = times[transfer.transfer_id]
+        atoms = []
+        for atom in transfer.atoms:
+            path = []
+            for stage in atom.path:
+                symbols = []
+                for symbol in stage.symbols:
+                    key = (
+                        stage.stage_id,
+                        symbol.src_rank,
+                        symbol.dst_rank,
+                        atom.slice_id,
+                    )
+                    operation_id = operation_ids.get(key)
+                    if operation_id is None:
+                        raise SemanticError(
+                            "atom path operation is missing from the schedule"
+                        )
+                    symbols.append(
+                        Symbol(
+                            symbol.src_rank,
+                            symbol.dst_rank,
+                            times[operation_id][2],
+                        )
+                    )
+                path.append(PathStage(stage.stage_id, stage.operator, tuple(symbols)))
+            atoms.append(
+                Atom(
+                    slice_id=atom.slice_id,
+                    slice_size_bytes=atom.slice_size_bytes,
+                    path=tuple(path),
+                    st_time=start,
+                    ed_time=end,
+                )
+            )
+        rebuilt.append(
+            Transfer(
+                transfer_id=transfer.transfer_id,
+                kind=transfer.kind,
+                src_rank=transfer.src_rank,
+                dst_rank=transfer.dst_rank,
+                channel=transfer.channel,
+                stage_id=transfer.stage_id,
+                member_slice_ids=transfer.member_slice_ids,
+                atoms=tuple(atoms),
+                st_time=start,
+                ed_time=end,
+                predecessor_ids=all_predecessors[transfer.transfer_id],
+            )
+        )
+    final_dependencies = _final_dependencies(schedule)
+    metadata = dict(schedule.metadata)
+    metadata["semantic_predecessors"] = {
+        key: tuple(sorted(values)) for key, values in semantic.items()
+    }
+    metadata["resource_slots"] = {
+        key: dict(sorted(values.items()))
+        for key, values in sorted(resource_slots.items())
+    }
+    if final_dependencies is not None:
+        metadata["final_dependencies"] = {
+            key: tuple(sorted(values))
+            for key, values in sorted(final_dependencies.items())
+        }
+        metadata["final_ready_times"] = {
+            key: max(
+                (times[transfer_id][1] for transfer_id in values),
+                default=0.0,
+            )
+            for key, values in sorted(final_dependencies.items())
+        }
+    metadata["timing_recomputed"] = True
+    return Schedule(
+        schedule_id=schedule.schedule_id,
+        transfers=tuple(sorted(rebuilt, key=lambda item: item.transfer_id)),
+        final_state_ids=schedule.final_state_ids,
+        rank_count=schedule.rank_count,
+        slice_count=schedule.slice_count,
+        slice_size_bytes=schedule.slice_size_bytes,
+        metadata=metadata,
+    )
+
+
+def recompute_earliest_times(
+    schedule: Schedule,
+    topology: Topology,
+) -> Schedule:
+    return _retime(schedule, topology)

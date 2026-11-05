@@ -1,0 +1,59 @@
+--- a/src/init.cc
++++ b/src/init.cc
+@@ -254,6 +254,7 @@
+         records, sizeof(VericclRawStepTraceRecord),
+         (size_t)recordCount, output) == (size_t)recordCount;
+   }
++  if (fflush(output) != 0 || fsync(fileno(output)) != 0) writeOk = false;
+   if (fclose(output) != 0) writeOk = false;
+   free(records);
+   return writeOk ? ncclSuccess : ncclSystemError;
+@@ -1472,3 +1473,48 @@
+   CUDACHECK(cudaMemcpy(&comm->hostDevComm.mscclInfo->probeTableEntries, &entries, sizeof(entries), cudaMemcpyHostToDevice));
+   return ncclSuccess;
+ }
++
++
++static ncclResult_t vericclTraceControlCheck(ncclComm_t comm) {
++  if (comm == NULL) return ncclInvalidArgument;
++  int device = -1;
++  CUDACHECK(cudaGetDevice(&device));
++  if (device != comm->cudaDev || comm->hostDevComm.mscclInfo == NULL ||
++      !comm->mscclHostComm.traceEnabled ||
++      comm->mscclHostComm.mscclDevComm.traceRecords == NULL ||
++      comm->mscclHostComm.mscclDevComm.probeTable != NULL) return ncclInvalidUsage;
++  CUDACHECK(cudaDeviceSynchronize());
++  return ncclSuccess;
++}
++
++extern "C" __attribute__((visibility("default")))
++ncclResult_t vericclTracePause(ncclComm_t comm) {
++  NCCLCHECK(vericclTraceControlCheck(comm));
++  VericclRawStepTraceRecord* disabled = NULL;
++  CUDACHECK(cudaMemcpy(&comm->hostDevComm.mscclInfo->traceRecords, &disabled,
++                      sizeof(disabled), cudaMemcpyHostToDevice));
++  return ncclSuccess;
++}
++
++extern "C" __attribute__((visibility("default")))
++ncclResult_t vericclTraceReset(ncclComm_t comm, size_t expected_records) {
++  NCCLCHECK(vericclTraceControlCheck(comm));
++  struct mscclDevCommInfo* traceInfo = &comm->mscclHostComm.mscclDevComm;
++  if (expected_records == 0 || expected_records > traceInfo->traceCapacity) return ncclInvalidArgument;
++  CUDACHECK(cudaMemset(traceInfo->traceRecordCount, 0, sizeof(*traceInfo->traceRecordCount)));
++  CUDACHECK(cudaMemset(traceInfo->traceOverflow, 0, sizeof(*traceInfo->traceOverflow)));
++  CUDACHECK(cudaMemcpy(&comm->hostDevComm.mscclInfo->traceRecords, &traceInfo->traceRecords,
++                      sizeof(traceInfo->traceRecords), cudaMemcpyHostToDevice));
++  return ncclSuccess;
++}
++
++extern "C" __attribute__((visibility("default")))
++ncclResult_t vericclTraceFinish(ncclComm_t comm) {
++  NCCLCHECK(vericclTraceControlCheck(comm));
++  ncclResult_t result = vericclTraceFlush(comm);
++  VericclRawStepTraceRecord* disabled = NULL;
++  CUDACHECK(cudaMemcpy(&comm->hostDevComm.mscclInfo->traceRecords, &disabled,
++                      sizeof(disabled), cudaMemcpyHostToDevice));
++  comm->mscclHostComm.traceEnabled = 0;
++  return result;
++}

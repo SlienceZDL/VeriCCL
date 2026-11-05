@@ -1,0 +1,40 @@
+--- a/src/enqueue.cc
++++ b/src/enqueue.cc
+@@ -444,8 +444,16 @@
+     const int index = info->mscclInfo.mscclAlgoIndex;
+     if (index < 0 || index >= comm->mscclHostComm.numberOfMSCCLAlgorithms) return ncclInvalidArgument;
+     const struct mscclAlgorithm* selected = &comm->mscclHostComm.mscclDevComm.mscclAlgos[index];
+-    if (!selected->isValid || selected->collectiveType != ncclFuncCustomCollective ||
+-        selected->ngpus != comm->nRanks || selected->inPlace != (info->sendbuff == info->recvbuff) ||
++    // The caller explicitly selected this XML index. Its external collective
++    // label describes geometry; it need not be the generic "custom" label.
++    uintptr_t send = (uintptr_t)info->sendbuff, recv = (uintptr_t)info->recvbuff;
++    bool inPlace = send == recv;
++    const size_t rankOffset = (info->nBytes / comm->nRanks) * comm->rank;
++    if (selected->collectiveType == ncclFuncAllGather && recv <= UINTPTR_MAX - rankOffset)
++      inPlace = send == recv + rankOffset;
++    if (selected->collectiveType == ncclFuncReduceScatter && send <= UINTPTR_MAX - rankOffset)
++      inPlace = recv == send + rankOffset;
++    if (!selected->isValid || selected->ngpus != comm->nRanks || selected->inPlace != inPlace ||
+         selected->nchunksPerLoop <= 0 || info->count % selected->nchunksPerLoop != 0 ||
+         info->nBytes < selected->minBytes || info->nBytes >= selected->maxBytes ||
+         (info->opFull.op != ncclDevSum && info->opFull.op != ncclDevProd &&
+@@ -1494,6 +1502,18 @@
+     bytes / ncclTypeSize(datatype), datatype, op, 0, comm, NULL, MSCCL_CHUNKSTEPS, MSCCL_SLICESTEPS};
+   info.nBytes = bytes;
+   info.mscclInfo.mscclAlgoIndex = 0;
++  if (comm->mscclHostComm.numberOfMSCCLAlgorithms < 1 || bytes > SIZE_MAX - 8192)
++    return ncclInvalidArgument;
++  const struct mscclAlgorithm* selected = &comm->mscclHostComm.mscclDevComm.mscclAlgos[0];
++  // computeColl does not dereference application buffers. Distinct sentinel
++  // addresses reproduce the exact in-place/out-of-place predicate checked at
++  // execution, without allocating or enqueueing a dummy collective.
++  uintptr_t send = 4096, recv = selected->inPlace ? send : send + bytes + 4096;
++  const size_t rankOffset = (bytes / comm->nRanks) * comm->rank;
++  if (selected->inPlace && selected->collectiveType == ncclFuncAllGather) send = recv + rankOffset;
++  if (selected->inPlace && selected->collectiveType == ncclFuncReduceScatter) recv = send + rankOffset;
++  info.sendbuff = (const void*)send;
++  info.recvbuff = (void*)recv;
+   NCCLCHECK(hostToDevRedOp(&info.opFull, op, datatype, comm));
+   struct ncclWorkElem work = {};
+   struct ncclProxyOp proxy = {};

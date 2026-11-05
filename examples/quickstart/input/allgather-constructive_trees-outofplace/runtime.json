@@ -1,0 +1,18 @@
+{
+  "rank_map": [
+    {
+      "rank": 0,
+      "host": "localhost",
+      "device": 0
+    },
+    {
+      "rank": 1,
+      "host": "localhost",
+      "device": 1
+    }
+  ],
+  "environment": {
+    "NCCL_BUFFSIZE": "16777216"
+  },
+  "scratch_bytes_per_rank": 16777216
+}

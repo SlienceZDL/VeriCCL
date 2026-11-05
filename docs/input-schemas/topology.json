@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VeriCCL topology",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "ranks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "ranks": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9223372036854775807
+            },
+            "minItems": 1
+          },
+          "gateways": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9223372036854775807
+            },
+            "minItems": 0,
+            "default": []
+          }
+        },
+        "required": [
+          "id",
+          "ranks"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "directed_links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "src": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "dst": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "alpha_us": {
+            "type": "number",
+            "minimum": 0
+          },
+          "beta_us_per_byte": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "max_channels": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": 16,
+            "minimum": 1,
+            "maximum": 16
+          },
+          "resources": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 0,
+            "default": []
+          },
+          "physical_path": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 0,
+            "default": []
+          }
+        },
+        "required": [
+          "src",
+          "dst",
+          "alpha_us",
+          "beta_us_per_byte"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0
+    },
+    "shared_resources": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capacity_bytes_per_us": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "links": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036854775807
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 0,
+            "default": []
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": "other",
+            "enum": [
+              "nic",
+              "pcie",
+              "switch_port",
+              "link",
+              "other",
+              null
+            ],
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "capacity_bytes_per_us"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "default": []
+    },
+    "groups": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "minItems": 1
+      },
+      "minItems": 0,
+      "default": []
+    },
+    "local_costs": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "properties": {
+          "rank": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "copy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "alpha_us": {
+                "type": "number",
+                "minimum": 0
+              },
+              "beta_us_per_byte": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "alpha_us",
+              "beta_us_per_byte"
+            ],
+            "additionalProperties": false
+          },
+          "reduce": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "alpha_us": {
+                "type": "number",
+                "minimum": 0
+              },
+              "beta_us_per_byte": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "alpha_us",
+              "beta_us_per_byte"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "rank"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 0,
+      "default": []
+    }
+  },
+  "required": [
+    "ranks",
+    "nodes",
+    "directed_links"
+  ],
+  "additionalProperties": false
+}

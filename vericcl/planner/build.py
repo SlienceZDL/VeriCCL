@@ -1,0 +1,69 @@
+from vericcl.errors import InputValidationError
+from vericcl.input.models import ResolvedInput
+from vericcl.planner.direct import build_direct_plan
+from vericcl.planner.groups import (
+    discover_communication_groups,
+    eligible_gateway_group,
+    eligible_gateway_groups,
+)
+from vericcl.planner.hierarchy import (
+    build_gateway_allgather_plan,
+    build_gateway_allreduce_plan,
+    build_manual_plan,
+)
+from vericcl.planner.model import PlanDAG
+from vericcl.semantics.collective import CollectiveKind
+from vericcl.topology.model import Topology
+
+
+def _validate_stage_count(plan: PlanDAG, expected: object) -> None:
+    stage_ids = sorted({node.stage_id for node in plan.nodes})
+    if stage_ids != list(range(len(stage_ids))):
+        raise InputValidationError("plan stage IDs must be contiguous from zero")
+    if expected is not None and expected != len(stage_ids):
+        raise InputValidationError(
+            "atom stage_num does not match the generated plan"
+        )
+
+
+def build_plan(inputs: ResolvedInput, topology: Topology) -> PlanDAG:
+    if not isinstance(inputs, ResolvedInput):
+        raise InputValidationError("inputs must be a ResolvedInput")
+    if not isinstance(topology, Topology):
+        raise InputValidationError("topology must be a Topology")
+    if inputs.rank_count != topology.rank_count:
+        raise InputValidationError("input and topology rank counts do not match")
+    if inputs.request_config:
+        from vericcl.planner.group_search import enumerate_hierarchy_plans
+        candidate = next(enumerate_hierarchy_plans(inputs, topology), None)
+        if candidate is None:
+            raise InputValidationError('no initial hierarchy candidate satisfies the requested stage count')
+        return candidate.plan
+    if inputs.strategies.manual_hierarchy:
+        plan = build_manual_plan(inputs, topology)
+    elif (
+        inputs.strategies.hierarchy
+        and inputs.collective.kind
+        in {CollectiveKind.ALL_GATHER, CollectiveKind.ALL_REDUCE}
+    ):
+        groups = discover_communication_groups(topology)
+        if (
+            inputs.collective.kind is CollectiveKind.ALL_REDUCE
+            and eligible_gateway_group(topology, groups) is not None
+        ):
+            plan = build_gateway_allreduce_plan(inputs, topology, groups)
+        elif (
+            inputs.collective.kind is CollectiveKind.ALL_GATHER
+            and eligible_gateway_groups(topology, groups)
+        ):
+            plan = build_gateway_allgather_plan(inputs, topology, groups)
+        else:
+            plan = build_direct_plan(
+                inputs,
+                topology,
+                planning_reason="no_eligible_gateway_domain",
+            )
+    else:
+        plan = build_direct_plan(inputs, topology)
+    _validate_stage_count(plan, inputs.atom_constraints.stage_num)
+    return plan

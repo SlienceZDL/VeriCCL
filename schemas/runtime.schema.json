@@ -1,0 +1,406 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VeriCCL runtime",
+  "type": "object",
+  "properties": {
+    "rank_map": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rank": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1
+          },
+          "device": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          }
+        },
+        "required": [
+          "rank",
+          "host",
+          "device"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "environment": {
+      "type": "object",
+      "properties": {
+        "CUDA_HOME": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "CUDA_PATH": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "CUDA_VISIBLE_DEVICES": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "LD_LIBRARY_PATH": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "MSCCL_ROOT": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "MSCCL_XML_FILES": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_ALGO": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_BUFFSIZE": {
+          "type": "string",
+          "minLength": 1
+        },
+        "NCCL_DEBUG": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_DEBUG_SUBSYS": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_IB_GID_INDEX": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_IB_HCA": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_P2P_DISABLE": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_PROTO": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_SHM_DISABLE": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_SOCKET_IFNAME": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_TESTS_ROOT": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "OMPI_MCA_btl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "OMPI_MCA_pml": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "OMP_NUM_THREADS": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "PATH": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "PYTHONPATH": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "UCX_NET_DEVICES": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "UCX_TLS": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "required": [
+        "NCCL_BUFFSIZE"
+      ],
+      "additionalProperties": false
+    },
+    "paths": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "cuda_home": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "mpi_bin": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "msccl_root": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "nccl_tests_root": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "vericcl_driver": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "vericcl_native": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "device_memory_budget_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "default": 0,
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "protocol": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": "Simple",
+      "enum": [
+        "Simple",
+        null
+      ],
+      "minLength": 1
+    },
+    "scratch_bytes_per_rank": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "limits": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "steps_per_tb": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 256,
+          "minimum": 1,
+          "maximum": 256
+        },
+        "tbs_per_rank": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 216,
+          "minimum": 1,
+          "maximum": 216
+        },
+        "send_tbs_per_channel": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 32,
+          "minimum": 1,
+          "maximum": 32
+        },
+        "recv_tbs_per_channel": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 32,
+          "minimum": 1,
+          "maximum": 32
+        },
+        "dependency_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 127,
+          "minimum": 0,
+          "maximum": 127
+        },
+        "buffer_offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 32767,
+          "minimum": 0,
+          "maximum": 32767
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "tb_layout": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": "separate",
+      "enum": [
+        "separate",
+        "fused",
+        null
+      ],
+      "minLength": 1
+    },
+    "control": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "bind_address": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "port": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "unix_socket": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    }
+  },
+  "required": [
+    "rank_map",
+    "environment",
+    "scratch_bytes_per_rank"
+  ],
+  "additionalProperties": false
+}

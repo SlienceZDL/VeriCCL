@@ -1,0 +1,2080 @@
+{
+  "name": "a100-n2g8",
+  "ranks": 16,
+  "nodes": [
+    {
+      "id": 0,
+      "ranks": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "gateways": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "id": 1,
+      "ranks": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "gateways": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ]
+    }
+  ],
+  "directed_links": [
+    {
+      "src": 0,
+      "dst": 1,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 0,
+      "dst": 2,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 0,
+      "dst": 3,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 0,
+      "dst": 4,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 0,
+      "dst": 5,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 0,
+      "dst": 6,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 0,
+      "dst": 7,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 1,
+      "dst": 0,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 1,
+      "dst": 2,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 1,
+      "dst": 3,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 1,
+      "dst": 4,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 1,
+      "dst": 5,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 1,
+      "dst": 6,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 1,
+      "dst": 7,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 2,
+      "dst": 0,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 2,
+      "dst": 1,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 2,
+      "dst": 3,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 2,
+      "dst": 4,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 2,
+      "dst": 5,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 2,
+      "dst": 6,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 2,
+      "dst": 7,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 3,
+      "dst": 0,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 3,
+      "dst": 1,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 3,
+      "dst": 2,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 3,
+      "dst": 4,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 3,
+      "dst": 5,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 3,
+      "dst": 6,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 3,
+      "dst": 7,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 4,
+      "dst": 0,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 4,
+      "dst": 1,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 4,
+      "dst": 2,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 4,
+      "dst": 3,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 4,
+      "dst": 5,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 4,
+      "dst": 6,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 4,
+      "dst": 7,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 5,
+      "dst": 0,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 5,
+      "dst": 1,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 5,
+      "dst": 2,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 5,
+      "dst": 3,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 5,
+      "dst": 4,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 5,
+      "dst": 6,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 5,
+      "dst": 7,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 6,
+      "dst": 0,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 6,
+      "dst": 1,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 6,
+      "dst": 2,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 6,
+      "dst": 3,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 6,
+      "dst": 4,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 6,
+      "dst": 5,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 6,
+      "dst": 7,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 7,
+      "dst": 0,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 7,
+      "dst": 1,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 7,
+      "dst": 2,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 7,
+      "dst": 3,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 7,
+      "dst": 4,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 7,
+      "dst": 5,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 7,
+      "dst": 6,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 8,
+      "dst": 9,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 8,
+      "dst": 10,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 8,
+      "dst": 11,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 8,
+      "dst": 12,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 8,
+      "dst": 13,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 8,
+      "dst": 14,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 8,
+      "dst": 15,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 9,
+      "dst": 8,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 9,
+      "dst": 10,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 9,
+      "dst": 11,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 9,
+      "dst": 12,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 9,
+      "dst": 13,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 9,
+      "dst": 14,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 9,
+      "dst": 15,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 10,
+      "dst": 8,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 10,
+      "dst": 9,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 10,
+      "dst": 11,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 10,
+      "dst": 12,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 10,
+      "dst": 13,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 10,
+      "dst": 14,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 10,
+      "dst": 15,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 11,
+      "dst": 8,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 11,
+      "dst": 9,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 11,
+      "dst": 10,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 11,
+      "dst": 12,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 11,
+      "dst": 13,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 11,
+      "dst": 14,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 11,
+      "dst": 15,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 12,
+      "dst": 8,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 12,
+      "dst": 9,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 12,
+      "dst": 10,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 12,
+      "dst": 11,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 12,
+      "dst": 13,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 12,
+      "dst": 14,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 12,
+      "dst": 15,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 13,
+      "dst": 8,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 13,
+      "dst": 9,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 13,
+      "dst": 10,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 13,
+      "dst": 11,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 13,
+      "dst": 12,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 13,
+      "dst": 14,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 13,
+      "dst": 15,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 14,
+      "dst": 8,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 14,
+      "dst": 9,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 14,
+      "dst": 10,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 14,
+      "dst": 11,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 14,
+      "dst": 12,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 14,
+      "dst": 13,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 14,
+      "dst": 15,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 15,
+      "dst": 8,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 15,
+      "dst": 9,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 15,
+      "dst": 10,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 15,
+      "dst": 11,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 15,
+      "dst": 12,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 15,
+      "dst": 13,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 15,
+      "dst": 14,
+      "max_channels": 32,
+      "alpha": 1.0,
+      "beta": 1.0,
+      "invbw": 2.0,
+      "resources": []
+    },
+    {
+      "src": 0,
+      "dst": 8,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic0-n0-to-n1",
+        "nic-n0-0-egress",
+        "nic-n1-0-ingress"
+      ]
+    },
+    {
+      "src": 0,
+      "dst": 9,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic0-n0-to-n1",
+        "nic-n0-0-egress",
+        "nic-n1-0-ingress"
+      ]
+    },
+    {
+      "src": 1,
+      "dst": 8,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic0-n0-to-n1",
+        "nic-n0-0-egress",
+        "nic-n1-0-ingress"
+      ]
+    },
+    {
+      "src": 1,
+      "dst": 9,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic0-n0-to-n1",
+        "nic-n0-0-egress",
+        "nic-n1-0-ingress"
+      ]
+    },
+    {
+      "src": 8,
+      "dst": 0,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic0-n1-to-n0",
+        "nic-n1-0-egress",
+        "nic-n0-0-ingress"
+      ]
+    },
+    {
+      "src": 8,
+      "dst": 1,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic0-n1-to-n0",
+        "nic-n1-0-egress",
+        "nic-n0-0-ingress"
+      ]
+    },
+    {
+      "src": 9,
+      "dst": 0,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic0-n1-to-n0",
+        "nic-n1-0-egress",
+        "nic-n0-0-ingress"
+      ]
+    },
+    {
+      "src": 9,
+      "dst": 1,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic0-n1-to-n0",
+        "nic-n1-0-egress",
+        "nic-n0-0-ingress"
+      ]
+    },
+    {
+      "src": 2,
+      "dst": 10,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic1-n0-to-n1",
+        "nic-n0-1-egress",
+        "nic-n1-1-ingress"
+      ]
+    },
+    {
+      "src": 2,
+      "dst": 11,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic1-n0-to-n1",
+        "nic-n0-1-egress",
+        "nic-n1-1-ingress"
+      ]
+    },
+    {
+      "src": 3,
+      "dst": 10,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic1-n0-to-n1",
+        "nic-n0-1-egress",
+        "nic-n1-1-ingress"
+      ]
+    },
+    {
+      "src": 3,
+      "dst": 11,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic1-n0-to-n1",
+        "nic-n0-1-egress",
+        "nic-n1-1-ingress"
+      ]
+    },
+    {
+      "src": 10,
+      "dst": 2,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic1-n1-to-n0",
+        "nic-n1-1-egress",
+        "nic-n0-1-ingress"
+      ]
+    },
+    {
+      "src": 10,
+      "dst": 3,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic1-n1-to-n0",
+        "nic-n1-1-egress",
+        "nic-n0-1-ingress"
+      ]
+    },
+    {
+      "src": 11,
+      "dst": 2,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic1-n1-to-n0",
+        "nic-n1-1-egress",
+        "nic-n0-1-ingress"
+      ]
+    },
+    {
+      "src": 11,
+      "dst": 3,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic1-n1-to-n0",
+        "nic-n1-1-egress",
+        "nic-n0-1-ingress"
+      ]
+    },
+    {
+      "src": 4,
+      "dst": 12,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic2-n0-to-n1",
+        "nic-n0-2-egress",
+        "nic-n1-2-ingress"
+      ]
+    },
+    {
+      "src": 4,
+      "dst": 13,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic2-n0-to-n1",
+        "nic-n0-2-egress",
+        "nic-n1-2-ingress"
+      ]
+    },
+    {
+      "src": 5,
+      "dst": 12,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic2-n0-to-n1",
+        "nic-n0-2-egress",
+        "nic-n1-2-ingress"
+      ]
+    },
+    {
+      "src": 5,
+      "dst": 13,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic2-n0-to-n1",
+        "nic-n0-2-egress",
+        "nic-n1-2-ingress"
+      ]
+    },
+    {
+      "src": 12,
+      "dst": 4,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic2-n1-to-n0",
+        "nic-n1-2-egress",
+        "nic-n0-2-ingress"
+      ]
+    },
+    {
+      "src": 12,
+      "dst": 5,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic2-n1-to-n0",
+        "nic-n1-2-egress",
+        "nic-n0-2-ingress"
+      ]
+    },
+    {
+      "src": 13,
+      "dst": 4,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic2-n1-to-n0",
+        "nic-n1-2-egress",
+        "nic-n0-2-ingress"
+      ]
+    },
+    {
+      "src": 13,
+      "dst": 5,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic2-n1-to-n0",
+        "nic-n1-2-egress",
+        "nic-n0-2-ingress"
+      ]
+    },
+    {
+      "src": 6,
+      "dst": 14,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic3-n0-to-n1",
+        "nic-n0-3-egress",
+        "nic-n1-3-ingress"
+      ]
+    },
+    {
+      "src": 6,
+      "dst": 15,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic3-n0-to-n1",
+        "nic-n0-3-egress",
+        "nic-n1-3-ingress"
+      ]
+    },
+    {
+      "src": 7,
+      "dst": 14,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic3-n0-to-n1",
+        "nic-n0-3-egress",
+        "nic-n1-3-ingress"
+      ]
+    },
+    {
+      "src": 7,
+      "dst": 15,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic3-n0-to-n1",
+        "nic-n0-3-egress",
+        "nic-n1-3-ingress"
+      ]
+    },
+    {
+      "src": 14,
+      "dst": 6,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic3-n1-to-n0",
+        "nic-n1-3-egress",
+        "nic-n0-3-ingress"
+      ]
+    },
+    {
+      "src": 14,
+      "dst": 7,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic3-n1-to-n0",
+        "nic-n1-3-egress",
+        "nic-n0-3-ingress"
+      ]
+    },
+    {
+      "src": 15,
+      "dst": 6,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic3-n1-to-n0",
+        "nic-n1-3-egress",
+        "nic-n0-3-ingress"
+      ]
+    },
+    {
+      "src": 15,
+      "dst": 7,
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0,
+      "resources": [
+        "ib-nic3-n1-to-n0",
+        "nic-n1-3-egress",
+        "nic-n0-3-ingress"
+      ]
+    }
+  ],
+  "shared_resources": [
+    {
+      "id": "ib-nic0-n0-to-n1",
+      "member_links": [
+        [
+          0,
+          8
+        ],
+        [
+          0,
+          9
+        ],
+        [
+          1,
+          8
+        ],
+        [
+          1,
+          9
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "ib-nic0-n1-to-n0",
+      "member_links": [
+        [
+          8,
+          0
+        ],
+        [
+          8,
+          1
+        ],
+        [
+          9,
+          0
+        ],
+        [
+          9,
+          1
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n0-0-egress",
+      "member_links": [
+        [
+          0,
+          8
+        ],
+        [
+          0,
+          9
+        ],
+        [
+          1,
+          8
+        ],
+        [
+          1,
+          9
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n0-0-ingress",
+      "member_links": [
+        [
+          8,
+          0
+        ],
+        [
+          8,
+          1
+        ],
+        [
+          9,
+          0
+        ],
+        [
+          9,
+          1
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n1-0-egress",
+      "member_links": [
+        [
+          8,
+          0
+        ],
+        [
+          8,
+          1
+        ],
+        [
+          9,
+          0
+        ],
+        [
+          9,
+          1
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n1-0-ingress",
+      "member_links": [
+        [
+          0,
+          8
+        ],
+        [
+          0,
+          9
+        ],
+        [
+          1,
+          8
+        ],
+        [
+          1,
+          9
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "ib-nic1-n0-to-n1",
+      "member_links": [
+        [
+          2,
+          10
+        ],
+        [
+          2,
+          11
+        ],
+        [
+          3,
+          10
+        ],
+        [
+          3,
+          11
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "ib-nic1-n1-to-n0",
+      "member_links": [
+        [
+          10,
+          2
+        ],
+        [
+          10,
+          3
+        ],
+        [
+          11,
+          2
+        ],
+        [
+          11,
+          3
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n0-1-egress",
+      "member_links": [
+        [
+          2,
+          10
+        ],
+        [
+          2,
+          11
+        ],
+        [
+          3,
+          10
+        ],
+        [
+          3,
+          11
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n0-1-ingress",
+      "member_links": [
+        [
+          10,
+          2
+        ],
+        [
+          10,
+          3
+        ],
+        [
+          11,
+          2
+        ],
+        [
+          11,
+          3
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n1-1-egress",
+      "member_links": [
+        [
+          10,
+          2
+        ],
+        [
+          10,
+          3
+        ],
+        [
+          11,
+          2
+        ],
+        [
+          11,
+          3
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n1-1-ingress",
+      "member_links": [
+        [
+          2,
+          10
+        ],
+        [
+          2,
+          11
+        ],
+        [
+          3,
+          10
+        ],
+        [
+          3,
+          11
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "ib-nic2-n0-to-n1",
+      "member_links": [
+        [
+          4,
+          12
+        ],
+        [
+          4,
+          13
+        ],
+        [
+          5,
+          12
+        ],
+        [
+          5,
+          13
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "ib-nic2-n1-to-n0",
+      "member_links": [
+        [
+          12,
+          4
+        ],
+        [
+          12,
+          5
+        ],
+        [
+          13,
+          4
+        ],
+        [
+          13,
+          5
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n0-2-egress",
+      "member_links": [
+        [
+          4,
+          12
+        ],
+        [
+          4,
+          13
+        ],
+        [
+          5,
+          12
+        ],
+        [
+          5,
+          13
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n0-2-ingress",
+      "member_links": [
+        [
+          12,
+          4
+        ],
+        [
+          12,
+          5
+        ],
+        [
+          13,
+          4
+        ],
+        [
+          13,
+          5
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n1-2-egress",
+      "member_links": [
+        [
+          12,
+          4
+        ],
+        [
+          12,
+          5
+        ],
+        [
+          13,
+          4
+        ],
+        [
+          13,
+          5
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n1-2-ingress",
+      "member_links": [
+        [
+          4,
+          12
+        ],
+        [
+          4,
+          13
+        ],
+        [
+          5,
+          12
+        ],
+        [
+          5,
+          13
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "ib-nic3-n0-to-n1",
+      "member_links": [
+        [
+          6,
+          14
+        ],
+        [
+          6,
+          15
+        ],
+        [
+          7,
+          14
+        ],
+        [
+          7,
+          15
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "ib-nic3-n1-to-n0",
+      "member_links": [
+        [
+          14,
+          6
+        ],
+        [
+          14,
+          7
+        ],
+        [
+          15,
+          6
+        ],
+        [
+          15,
+          7
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n0-3-egress",
+      "member_links": [
+        [
+          6,
+          14
+        ],
+        [
+          6,
+          15
+        ],
+        [
+          7,
+          14
+        ],
+        [
+          7,
+          15
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n0-3-ingress",
+      "member_links": [
+        [
+          14,
+          6
+        ],
+        [
+          14,
+          7
+        ],
+        [
+          15,
+          6
+        ],
+        [
+          15,
+          7
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n1-3-egress",
+      "member_links": [
+        [
+          14,
+          6
+        ],
+        [
+          14,
+          7
+        ],
+        [
+          15,
+          6
+        ],
+        [
+          15,
+          7
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    },
+    {
+      "id": "nic-n1-3-ingress",
+      "member_links": [
+        [
+          6,
+          14
+        ],
+        [
+          6,
+          15
+        ],
+        [
+          7,
+          14
+        ],
+        [
+          7,
+          15
+        ]
+      ],
+      "max_channels": 32,
+      "alpha": 4.0,
+      "beta": 12.0,
+      "invbw": 16.0
+    }
+  ]
+}

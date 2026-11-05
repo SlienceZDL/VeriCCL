@@ -1,0 +1,54 @@
+--- a/src/collectives/device/msccl_interpreter.h
++++ b/src/collectives/device/msccl_interpreter.h
+@@ -91,6 +91,14 @@
+     return NULL;
+   }
+ 
++  inline __device__ bool vericclAbortRequested(int tid, int nthreads) {
++    const int bit = tid == 0 && load(ncclShmem.comm.abortFlag) != 0;
++    int count;
++    asm volatile("{ .reg .pred p; setp.ne.u32 p, %1, 0; bar.red.popc.u32 %0, 15, %2, p; }"
++                 : "=r"(count) : "r"(bit), "r"(nthreads));
++    return count != 0;
++  }
++
+   template<typename T, typename RedOp, typename Proto>
+   __device__ __forceinline__ void runInterpreter(ncclWorkElem *args, int sizeMultiplier) {
+     const int tid = threadIdx.x;
+@@ -154,6 +162,7 @@
+       T* srcPointer, * dstPointer;
+       int step = 0;
+       for (int i = 0; i < mscclTB->nsteps; i++){
++        if (vericclAbortRequested(tid, nthreads)) return;
+         struct mscclTransfer* msccltran = &mscclTB->transfers[i];
+         uint64_t tbReach = 0;
+         uint64_t dependencyDone = 0;
+@@ -181,6 +190,7 @@
+             int16_t dependentStep = mscclTB->dependentStep[dependentPointer+tid];
+             uint64_t goalFlag = COMPUTE_FLAG(workIndex, iter, dependentStep);
+             while (true){
++              if (load(ncclShmem.comm.abortFlag) != 0) break;
+               uint64_t curFlag = (mscclFlags + dependentBid)->flag;
+               if (curFlag >= goalFlag && GET_WORKINDEX_FROM_FLAG(curFlag) == workIndex) break;
+             }
+@@ -188,6 +198,7 @@
+           step += numDependences-1;
+           barrier(nthreads);
+ 
++          if (vericclAbortRequested(tid, nthreads)) return;
+           NPKIT_GPU_ENTER_EVENT(NPKIT_EVENT_DEP_CHECK_EXIT, msccltran->numDependences);
+         }
+         if (timingEnabled) {
+--- a/src/init.cc
++++ b/src/init.cc
+@@ -1546,3 +1546,10 @@
+   comm->mscclHostComm.traceEnabled = 0;
+   return result;
+ }
++
++extern "C" __attribute__((visibility("default"))) ncclResult_t vericclNcclAbortSignal(ncclComm_t comm) {
++  if (comm == NULL || comm->abortFlag == NULL) return ncclInvalidArgument;
++  *comm->abortFlag = 1;
++  __sync_synchronize();
++  return ncclSuccess;
++}

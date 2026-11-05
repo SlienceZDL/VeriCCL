@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VeriCCL atom",
+  "type": "object",
+  "properties": {
+    "synthesis_method": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": "auto",
+      "enum": [
+        "auto",
+        "hierarchy",
+        "constructive_trees",
+        null
+      ],
+      "minLength": 1
+    },
+    "M_switch": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "stage_num": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "default": null,
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "forbidden_transfers": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "minItems": 4,
+        "maxItems": 4
+      },
+      "minItems": 0,
+      "default": []
+    },
+    "strategies": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "symmetry": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        },
+        "shortest_paths": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        },
+        "batching": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        },
+        "objective_mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "enum": [
+            "latency",
+            "throughput",
+            "auto",
+            null
+          ],
+          "minLength": 1
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
+    "manual": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": false
+        },
+        "nodes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "stage_id": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036854775807
+              },
+              "operator": {
+                "type": "string",
+                "enum": [
+                  "broadcast",
+                  "reduce",
+                  "scatter",
+                  "gather",
+                  "allgather",
+                  "allreduce",
+                  "alltoall",
+                  "reduce_scatter"
+                ],
+                "minLength": 1
+              },
+              "group": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "minItems": 1
+              },
+              "root": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 9223372036854775807
+              },
+              "relay_ranks": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "minItems": 0,
+                "default": []
+              },
+              "depends_on": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 0,
+                "default": []
+              },
+              "input_states": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "rank": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9223372036854775807
+                    },
+                    "offset": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9223372036854775807
+                    },
+                    "contributors": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036854775807
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "rank",
+                    "offset",
+                    "contributors"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1
+              },
+              "output_states": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "rank": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9223372036854775807
+                    },
+                    "offset": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9223372036854775807
+                    },
+                    "contributors": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036854775807
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "rank",
+                    "offset",
+                    "contributors"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 1
+              }
+            },
+            "required": [
+              "id",
+              "stage_id",
+              "operator",
+              "group"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "default": []
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

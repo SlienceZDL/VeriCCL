@@ -1,0 +1,26 @@
+--- a/src/init.cc
++++ b/src/init.cc
+@@ -1508,7 +1508,6 @@
+   int device = -1;
+   CUDACHECK(cudaGetDevice(&device));
+   if (device != comm->cudaDev || comm->hostDevComm.mscclInfo == NULL ||
+-      !comm->mscclHostComm.traceEnabled ||
+       comm->mscclHostComm.mscclDevComm.traceRecords == NULL ||
+       comm->mscclHostComm.mscclDevComm.probeTable != NULL) return ncclInvalidUsage;
+   CUDACHECK(cudaDeviceSynchronize());
+@@ -1521,6 +1520,7 @@
+   VericclRawStepTraceRecord* disabled = NULL;
+   CUDACHECK(cudaMemcpy(&comm->hostDevComm.mscclInfo->traceRecords, &disabled,
+                       sizeof(disabled), cudaMemcpyHostToDevice));
++  comm->mscclHostComm.traceEnabled = 0;
+   return ncclSuccess;
+ }
+ 
+@@ -1533,6 +1533,7 @@
+   CUDACHECK(cudaMemset(traceInfo->traceOverflow, 0, sizeof(*traceInfo->traceOverflow)));
+   CUDACHECK(cudaMemcpy(&comm->hostDevComm.mscclInfo->traceRecords, &traceInfo->traceRecords,
+                       sizeof(traceInfo->traceRecords), cudaMemcpyHostToDevice));
++  comm->mscclHostComm.traceEnabled = 1;
+   return ncclSuccess;
+ }
+ 

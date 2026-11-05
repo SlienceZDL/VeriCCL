@@ -1,0 +1,151 @@
+import pytest
+
+from vericcl.input.models import ObjectiveMode
+from vericcl.solver.budget import ModelBudget
+from tests.scip.helpers import fresh_budget
+from vericcl.solver.demands import routing_unit_key
+from vericcl.solver.milp import _build_model, _trees, solve_milp
+from vericcl.topology.model import LinkKey
+
+from tests.scip.helpers import (
+    batching_problem,
+    multihop_problem,
+    require_scip,
+    throughput_tradeoff_problem,
+    zero_duration_cycle_problem,
+)
+
+
+pytestmark = [pytest.mark.phase03, pytest.mark.scip]
+
+
+def test_milp_tree_grouping_matches_the_stable_routing_unit_key():
+    problem = batching_problem()
+
+    assert tuple(tree.key for tree in _trees(problem)) == tuple(
+        sorted({routing_unit_key(demand) for demand in problem.demands})
+    )
+
+
+@pytest.mark.parametrize("shared_resource", [False, True])
+def test_multihop_transfer_preserves_ready_chain_and_resource_slots(
+    shared_resource,
+):
+    require_scip()
+    problem = multihop_problem(shared_resource=shared_resource)
+
+    candidate = solve_milp(
+        problem,
+        channel_count=2,
+        objective=ObjectiveMode.LATENCY,
+        budget=fresh_budget(30),
+        warm_start=None,
+    )
+    schedule = candidate.node_schedules[problem.node.node_id]
+    first = next(
+        transfer
+        for transfer in schedule.transfers
+        if (transfer.src_rank, transfer.dst_rank) == (0, 1)
+    )
+    second = next(
+        transfer
+        for transfer in schedule.transfers
+        if (transfer.src_rank, transfer.dst_rank) == (1, 2)
+    )
+
+    assert first.ed_time <= second.st_time
+    assert first.transfer_id in second.predecessor_ids
+    assert second.atoms[0].path[0].symbols[1].ready_time == first.ed_time
+    if shared_resource:
+        slots = schedule.metadata["resource_slots"]
+        assert slots[first.transfer_id]["shared-path"] == 0
+        assert slots[second.transfer_id]["shared-path"] == 0
+
+
+def test_batching_constrains_payloads_to_the_same_tree():
+    require_scip()
+    problem = batching_problem()
+
+    candidate = solve_milp(
+        problem,
+        channel_count=2,
+        objective=ObjectiveMode.LATENCY,
+        budget=fresh_budget(30),
+        warm_start=None,
+    )
+    schedule = candidate.node_schedules[problem.node.node_id]
+    flows = schedule.metadata["selected_flows"]
+    first_tree = set()
+    second_tree = set()
+    for demand_id, edges in flows.items():
+        target = first_tree if "-a00000000-" in demand_id else second_tree
+        target.update(edges)
+
+    assert first_tree == second_tree
+    assert candidate.search_space_restricted
+    assert candidate.restrictions == ("batching",)
+
+
+def test_tree_constraints_reject_a_disconnected_zero_duration_cycle():
+    require_scip()
+    problem = zero_duration_cycle_problem()
+    gp = __import__("pyscipopt")
+    model, variables, _, _, _ = _build_model(
+        gp,
+        problem,
+        _trees(problem),
+        channel_count=1,
+        objective=ObjectiveMode.LATENCY,
+        budget=fresh_budget(30),
+        warm_start=None,
+    )
+    demand_id = problem.demands[0].demand_id
+    model.addCons(
+        variables.flow_selected[(demand_id, LinkKey(2, 3))] == 1
+    )
+    model.addCons(
+        variables.flow_selected[(demand_id, LinkKey(3, 2))] == 1
+    )
+
+    model.optimize()
+
+    assert model.result.status == "infeasible"
+    model.freeProb()
+
+
+def test_latency_and_throughput_use_distinct_lexicographic_priorities():
+    require_scip()
+    problem = throughput_tradeoff_problem()
+    budget = fresh_budget(30)
+
+    latency = solve_milp(
+        problem,
+        channel_count=2,
+        objective=ObjectiveMode.LATENCY,
+        budget=budget,
+        warm_start=None,
+    )
+    throughput = solve_milp(
+        problem,
+        channel_count=2,
+        objective=ObjectiveMode.THROUGHPUT,
+        budget=budget,
+        warm_start=None,
+    )
+
+    latency_edges = {
+        (item.src_rank, item.dst_rank)
+        for item in next(iter(latency.node_schedules.values())).transfers
+    }
+    throughput_edges = {
+        (item.src_rank, item.dst_rank)
+        for item in next(iter(throughput.node_schedules.values())).transfers
+    }
+    assert latency_edges == {(0, 2)}
+    assert throughput_edges == {(0, 1), (1, 2)}
+    assert len(latency.metrics.objective_values) == 3
+    assert len(throughput.metrics.objective_values) == 2
+    assert (
+        throughput.metrics.maximum_normalized_resource_load
+        == throughput.metrics.objective_values[0]
+    )
