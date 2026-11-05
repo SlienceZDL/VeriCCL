@@ -92,9 +92,25 @@ M 表示每个 rank 的输入字节数，S 表示每个 slice 的字节数。M �
 
 ## 运行合成器
 
-**生成示例并合成**
+以下命令在项目目录中运行。`solve`、`verify`、`calibrate` 和 `live` 使用四份 JSON 配置，并通过以下参数设置结果位置：
 
-下面生成输入示例，并合成一份两 rank 的 AllReduce 调度。该示例使用预设通信开销，在 CPU 上完成合成与验证。
+| 参数 | 用途 | 默认值 |
+|---|---|---|
+| `--project-root` | 项目目录 | 当前目录 |
+| `--case` | 案例名称 | 由用户填写 |
+| `--run-id` | 本次运行的编号 | 按启动时间生成 |
+
+结果保存到 `<项目目录>/examples/<case>/output/<run_id>/`。下面的通用命令使用文件名表示输入，使用时将其换成实际路径。
+
+**生成输入示例**
+
+`tools.generate_examples` 生成可修改的输入配置，命令如下：
+
+```bash
+"$VERICCL_PYTHON" -m tools.generate_examples --project-root "$VERICCL_ROOT" --case my-case
+```
+
+配置保存在 `examples/my-case/input/`。下面生成两 rank 的示例，并选取 AllReduce 配置：
 
 <!-- vericcl-v5-command: quickstart-setup -->
 ```bash
@@ -109,6 +125,18 @@ export VERICCL_RUN="$VERICCL_ROOT/examples/tutorial/output/first"
 "$VERICCL_PYTHON" -m tools.generate_examples --project-root "$VERICCL_ROOT" --case tutorial
 ```
 
+**合成调度：`solve`**
+
+`solve` 根据配置合成调度，并执行已开启的测量与修复。通过四个参数指定输入文件：
+
+```bash
+"$VERICCL_PYTHON" -m vericcl solve --case my-case \
+  --topology topology.json --sketch sketch.json \
+  --atom atom.json --runtime runtime.json
+```
+
+结果目录中的 `best/accepted.json` 记录当前最佳调度及 XML 的位置。以下使用上面的 AllReduce 配置，将运行编号设为 `first`；该示例在 CPU 上完成合成与验证：
+
 <!-- vericcl-v5-command: quickstart-solve -->
 ```bash
 "$VERICCL_PYTHON" -m vericcl solve --project-root "$VERICCL_ROOT" --case tutorial --run-id first \
@@ -118,7 +146,15 @@ export VERICCL_RUN="$VERICCL_ROOT/examples/tutorial/output/first"
 
 AllGather 的输入目录为 `examples/tutorial/input/allgather-hierarchy-outofplace`，修改 `VERICCL_INPUT` 即可使用。将目录名中的 `hierarchy` 换为 `constructive_trees`，即可选择另一种合成方法。每次运行用新的 `--run-id` 保存结果。
 
-**查看和复验结果**
+**查看结果：`inspect`**
+
+`inspect` 通过 `--run` 读取已有结果目录，将任务状态、当前最佳调度和检查点信息以 JSON 打印到终端：
+
+```bash
+"$VERICCL_PYTHON" -m vericcl inspect --run /path/to/run
+```
+
+例如，查看刚生成的调度并打印 XML 路径：
 
 <!-- vericcl-v5-command: quickstart-inspect -->
 ```bash
@@ -137,6 +173,19 @@ print('结束原因：', s['stop_reason'])
 PY
 ```
 
+**验证已有调度：`verify`**
+
+`verify` 使用原配置检查已有 XML。`--sidecar` 指定随 XML 生成的调度说明文件，`--model` 指定本次评估使用的代价模型：
+
+```bash
+"$VERICCL_PYTHON" -m vericcl verify --case my-case \
+  --topology topology.json --sketch sketch.json \
+  --atom atom.json --runtime runtime.json \
+  --xml schedule.xml --sidecar sidecar.json --model model.json
+```
+
+检查结果保存到新运行目录的 `run-summary.json` 和 `reports/`。下面读取刚才合成的 XML、sidecar 和模型，执行一次复验：
+
 <!-- vericcl-v5-command: quickstart-verify -->
 ```bash
 export VERICCL_XML="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(open(os.environ["VERICCL_RUN"]+"/best/accepted.json"))["candidate"]["xml"])')"
@@ -149,11 +198,13 @@ export VERICCL_MODEL="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(op
   --model "$VERICCL_RUN/models/$VERICCL_MODEL.json"
 ```
 
-`inspect` 查看结果，`verify` 复验已有调度。复验时使用合成时的输入、XML、sidecar 和代价模型；合成时通过命令行修改的参数也一并传入。
+合成时通过命令行修改的参数，在复验时也一并传入。
 
 **设置调优时间与轮数**
 
-`sketch.budgets.max_run_wall_s` 设置整项任务的最长运行时间。`T_pred` 表示调度的预测通信时间，单位为微秒，用于比较修复前后的调度。下面通过 `--override-input` 和 `--set` 修改输入中的参数，开启两轮调优：
+`sketch.budgets.max_run_wall_s` 设置整项任务的最长运行时间。`T_pred` 表示调度的预测通信时间，单位为微秒，用于比较修复前后的调度。
+
+修改输入参数时，使用 `--override-input --set 字段=JSON值`；多项修改可重复添加 `--set`。例如，开启两轮调优：
 
 ```bash
 "$VERICCL_PYTHON" -m vericcl solve --project-root "$VERICCL_ROOT" --case tutorial --run-id tuned \
@@ -202,19 +253,35 @@ GPU_ARGS=(--project-root "$VERICCL_ROOT" --case gpu-tutorial
   --atom "$VERICCL_GPU_INPUT/atom.json" --runtime "$VERICCL_GPU_INPUT/runtime.json")
 ```
 
+使用上述 GPU 配置运行 `solve`，结果保存在 `examples/gpu-tutorial/output/first/`：
+
 ```bash
 "$VERICCL_PYTHON" -m vericcl solve "${GPU_ARGS[@]}" --run-id first
 ```
 
 `trace_and_measure.enabled` 同时控制 trace 记录和实测比较。程序预热后记录一次完整调用的 trace，再单独测量调度执行时间。`NCCL_BUFFSIZE` 设置通信缓冲区大小，本例为 16 MiB。
 
-**校准代价模型并迭代修复**
+**测量代价模型：`calibrate`**
 
-`calibrate` 测量链路、共享带宽、本地计算和访存开销，并生成代价模型。在 `solve` 中开启 `calibration.enabled` 后，程序会根据测量结果继续验证和修复调度：
+`calibrate` 独立测量链路、共享带宽、本地计算和访存开销。通过 `sketch.calibration.enabled` 开启测量：
+
+```bash
+"$VERICCL_PYTHON" -m vericcl calibrate --case my-case \
+  --topology topology.json --sketch sketch.json \
+  --atom atom.json --runtime runtime.json \
+  --override-input --set sketch.calibration.enabled=true
+```
+
+模型保存在运行目录的 `models/`，测量任务与日志保存在 `jobs/`。例如，测量上述两 GPU 配置：
 
 ```bash
 "$VERICCL_PYTHON" -m vericcl calibrate "${GPU_ARGS[@]}" --run-id calibrated \
   --override-input --set sketch.calibration.enabled=true
+```
+
+若要在测量后继续验证和修复调度，使用 `solve` 并设置调优轮数与修复时间：
+
+```bash
 "$VERICCL_PYTHON" -m vericcl solve "${GPU_ARGS[@]}" --run-id calibrated-tuned \
   --override-input --set sketch.calibration.enabled=true \
   --set sketch.budgets.max_tuning_rounds=3 \
@@ -223,9 +290,19 @@ GPU_ARGS=(--project-root "$VERICCL_ROOT" --case gpu-tutorial
 
 模型更新后，程序使用同一模型比较原调度和修复后的调度。测量与修复流程见 [架构说明](docs/architecture.md)。
 
-**常驻在线模式**
+**常驻在线运行：`live`**
 
-`live` 连续处理集合通信请求，并在两次请求之间更新调度。以下沿用上述 GPU 配置，执行 40 次 AllReduce：
+`live` 连续处理集合通信请求，并在两次请求之间更新调度。`--requests` 设置请求次数，`--session-timeout-s` 设置常驻阶段的时限，单位为秒：
+
+```bash
+"$VERICCL_PYTHON" -m vericcl live --case my-case \
+  --topology topology.json --sketch sketch.json \
+  --atom atom.json --runtime runtime.json \
+  --requests 40 --session-timeout-s 900 \
+  --override-input --set sketch.live.enabled=true
+```
+
+请求、版本更新和关闭记录保存在运行目录的 `live/` 中。下面沿用上述 GPU 配置，执行 40 次 AllReduce：
 
 ```bash
 "$VERICCL_PYTHON" -m vericcl live "${GPU_ARGS[@]}" --run-id live \
@@ -239,7 +316,13 @@ GPU_ARGS=(--project-root "$VERICCL_ROOT" --case gpu-tutorial
 
 **可选：nccl-tests 对照**
 
-以下构建 nccl-tests，并运行两 GPU 的 AllReduce Ring 作为对照。`--release-receipts` 用于记录各进程结束后的 GPU 释放情况：
+通过 `mpirun` 启动 nccl-tests，`-np` 指定进程数，`--host` 指定主机，`-b` 和 `-e` 指定消息大小范围。命令格式如下，尖括号中的内容替换为实际值：
+
+```text
+mpirun -np <进程数> --host <主机列表> <nccl-tests目录>/all_reduce_perf -b <最小消息> -e <最大消息> -g 1
+```
+
+性能结果打印在终端。下面构建 nccl-tests，并运行两 GPU 的 AllReduce Ring 作为对照；`--release-receipts` 用于记录各进程结束后的 GPU 释放情况：
 
 ```bash
 "$VERICCL_PYTHON" examples/nccl-tests-build/input/build.py --run-id tutorial-tests \
@@ -269,10 +352,23 @@ VeriCCL 生成的 XML 通过前面的 `solve` 流程执行。跨节点运行 ncc
 | `run.log`、`events.jsonl`、`jobs/` | 流程日志、命令输出、进程与释放记录 |
 | `checkpoints/`、`live/` | 恢复状态及在线请求记录 |
 
-`resume` 从保存的检查点继续执行，运行时间按原任务累计计算。将路径改为需要恢复的运行目录：
+**恢复任务：`resume`**
+
+`resume` 通过 `--run` 指定原运行目录，从保存的检查点继续执行：
+
+```bash
+"$VERICCL_PYTHON" -m vericcl resume --run /path/to/run
+```
+
+后续结果继续写入原目录，运行时间按原任务累计计算。例如，恢复一次中断的任务：
 
 ```bash
 "$VERICCL_PYTHON" -m vericcl resume --run "$VERICCL_ROOT/examples/my-case/output/interrupted-run"
+```
+
+每个指令都可通过 `--help` 查看完整参数。例如，查看 `solve` 的用法：
+
+```bash
 "$VERICCL_PYTHON" -m vericcl solve --help
 ```
 
