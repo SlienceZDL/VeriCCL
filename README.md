@@ -100,7 +100,7 @@ M 表示每个 rank 的输入字节数，S 表示每个 slice 的字节数。M �
 | `--case` | 案例名称 | 由用户填写 |
 | `--run-id` | 本次运行的编号 | 按启动时间生成 |
 
-结果保存到 `<项目目录>/examples/<case>/output/<run_id>/`。下面的通用命令使用文件名表示输入，使用时将其换成实际路径。
+结果保存到 `<项目目录>/examples/<case>/output/<run_id>/`。下文通过 `--project-root "$VERICCL_ROOT"` 使用安装时设置的项目目录；输入文件可位于其他目录。通用命令中的文件名替换为实际输入路径。
 
 **生成输入示例**
 
@@ -130,7 +130,7 @@ export VERICCL_RUN="$VERICCL_ROOT/examples/tutorial/output/first"
 `solve` 根据配置合成调度，并执行已开启的测量与修复。通过四个参数指定输入文件：
 
 ```bash
-"$VERICCL_PYTHON" -m vericcl solve --case my-case \
+"$VERICCL_PYTHON" -m vericcl solve --project-root "$VERICCL_ROOT" --case my-case \
   --topology topology.json --sketch sketch.json \
   --atom atom.json --runtime runtime.json
 ```
@@ -148,13 +148,14 @@ AllGather 的输入目录为 `examples/tutorial/input/allgather-hierarchy-outofp
 
 **查看结果：`inspect`**
 
-`inspect` 通过 `--run` 读取已有结果目录，将任务状态、当前最佳调度和检查点信息以 JSON 打印到终端：
+`inspect` 通过 `--run` 读取已有结果目录，将任务状态、当前最佳调度和检查点信息以 JSON 打印到终端。先把 `VERICCL_RUN` 设为实际结果目录，后续查看和复验都使用这个变量：
 
 ```bash
-"$VERICCL_PYTHON" -m vericcl inspect --run /path/to/run
+export VERICCL_RUN=/path/to/run
+"$VERICCL_PYTHON" -m vericcl inspect --run "$VERICCL_RUN"
 ```
 
-例如，查看刚生成的调度并打印 XML 路径：
+例如，查看刚生成的调度并打印 XML 路径。若查看其他任务，将 `VERICCL_RUN` 改为该任务的结果目录：
 
 <!-- vericcl-v5-command: quickstart-inspect -->
 ```bash
@@ -178,7 +179,7 @@ PY
 `verify` 使用原配置检查已有 XML。`--sidecar` 指定随 XML 生成的调度说明文件，`--model` 指定本次评估使用的代价模型：
 
 ```bash
-"$VERICCL_PYTHON" -m vericcl verify --case my-case \
+"$VERICCL_PYTHON" -m vericcl verify --project-root "$VERICCL_ROOT" --case my-case \
   --topology topology.json --sketch sketch.json \
   --atom atom.json --runtime runtime.json \
   --xml schedule.xml --sidecar sidecar.json --model model.json
@@ -266,7 +267,7 @@ GPU_ARGS=(--project-root "$VERICCL_ROOT" --case gpu-tutorial
 `calibrate` 独立测量链路、共享带宽、本地计算和访存开销。通过 `sketch.calibration.enabled` 开启测量：
 
 ```bash
-"$VERICCL_PYTHON" -m vericcl calibrate --case my-case \
+"$VERICCL_PYTHON" -m vericcl calibrate --project-root "$VERICCL_ROOT" --case my-case \
   --topology topology.json --sketch sketch.json \
   --atom atom.json --runtime runtime.json \
   --override-input --set sketch.calibration.enabled=true
@@ -295,7 +296,7 @@ GPU_ARGS=(--project-root "$VERICCL_ROOT" --case gpu-tutorial
 `live` 连续处理集合通信请求，并在两次请求之间更新调度。`--requests` 设置请求次数，`--session-timeout-s` 设置常驻阶段的时限，单位为秒：
 
 ```bash
-"$VERICCL_PYTHON" -m vericcl live --case my-case \
+"$VERICCL_PYTHON" -m vericcl live --project-root "$VERICCL_ROOT" --case my-case \
   --topology topology.json --sketch sketch.json \
   --atom atom.json --runtime runtime.json \
   --requests 40 --session-timeout-s 900 \
