@@ -18,8 +18,6 @@ from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 
 DATATYPE_BYTES = {"float16": 2, "float32": 4, "float64": 8, "bfloat16": 2,
                   "int8": 1, "uint8": 1, "int32": 4, "uint32": 4, "int64": 8, "uint64": 8}
-LIVE_TIMEOUTS = ("request_prepare_timeout_s", "execution_attempt_timeout_s", "background_tuning_task_timeout_s",
-                 "version_prepare_timeout_s", "control_phase_timeout_s", "recovery_timeout_s", "close_cleanup_timeout_s")
 BUDGET_SECONDS = ("max_initial_synthesis_s", "max_online_validation_per_round_s", "max_online_validation_total_s",
                   "max_offline_validation_per_round_s", "max_offline_validation_total_s", "max_repair_per_round_s",
                   "max_repair_total_s", "max_run_wall_s", "cleanup_reserve_s")
@@ -134,13 +132,6 @@ SKETCH = obj({
     "history": section({"schedule_reuse": flag(), "calibration_reuse": flag(),
         "relative_bandwidth_tolerance": scalar("number", minimum=0), "max_schedule_candidates": scalar("integer", minimum=1),
         "calibration_max_age_s": positive(), "schedule_index": scalar("string"), "calibration_index": scalar("string")}),
-    "live": section({"enabled": flag(), **{key: positive() for key in LIVE_TIMEOUTS},
-        "window_requests": scalar("integer", minimum=1, default=8), "consecutive_windows": scalar("integer", minimum=1, default=2),
-        "relative_change_threshold": scalar("number", exclusive_minimum=0, maximum=0.99, default=0.1),
-        "baseline_max_cv": scalar("number", minimum=0, maximum=0.05, default=0.05),
-        "min_residence_requests": integer(default=32), "max_retries": scalar("integer", minimum=0, maximum=2**32-1, default=2),
-        "external_telemetry_path": scalar("string"), "external_max_age_s": positive(default=60),
-        "fault_injection": section({"request_id": integer(default=0), "attempts": scalar("integer", minimum=0, maximum=2**32-1, default=0)})}),
 }, required=("collective", "hyperparameters"))
 
 MANUAL_STATE = obj({"rank": integer(), "offset": integer(), "contributors": array(integer(), min_items=1)},
@@ -177,11 +168,30 @@ RUNTIME = obj({
         "recv_tbs_per_channel": scalar("integer", minimum=1, maximum=32, default=32),
         "dependency_id": integer(maximum=127, default=127), "buffer_offset": integer(maximum=32767, default=32767)}),
     "tb_layout": scalar("string", enum=("separate", "fused"), default="separate"),
-    "control": section({"bind_address": scalar("string"), "port": scalar("integer", minimum=1, maximum=65535),
-                        "unix_socket": scalar("string")}),
+    "control": section({"bind_address": scalar("string"), "port": scalar("integer", minimum=1, maximum=65535)}),
 }, required=("rank_map", "environment", "scratch_bytes_per_rank"))
 
 SCHEMAS = {"topology": TOPOLOGY, "sketch": SKETCH, "atom": ATOM, "runtime": RUNTIME}
+
+
+LIVE_MIGRATION_ERROR = ("sketch.live has been removed; use solve or verify --tune for offline tuning, "
+                        "calibrate for calibration, and trace_and_measure for fixed-schedule execution")
+
+
+def migrate_disabled_live(documents) -> bool:
+    """Remove inactive legacy settings; callers retain checkpoint identity separately."""
+    sketch = documents.get("sketch")
+    if not isinstance(sketch, dict) or "live" not in sketch:
+        return False
+    live = sketch["live"]
+    if live is not None and (not isinstance(live, dict) or
+                            (live.get("enabled") is not None and live.get("enabled") is not False)):
+        raise InputValidationError(LIVE_MIGRATION_ERROR)
+    del sketch["live"]
+    runtime = documents.get("runtime")
+    if isinstance(runtime, dict) and isinstance(runtime.get("control"), dict):
+        runtime["control"].pop("unix_socket", None)
+    return True
 
 
 def public_schemas() -> dict[str, dict]:
@@ -263,6 +273,8 @@ def _apply_overrides(documents, overrides, enabled, sources):
     for path, value in (overrides or {}).items():
         if not isinstance(path, str) or not path:
             raise InputValidationError("CLI override paths must be strings")
+        if path == "sketch.live" or path.startswith("sketch.live."):
+            raise InputValidationError(LIVE_MIGRATION_ERROR)
         if path == "sketch.collective.operator":
             value = normalize_operator(value)
         parts = path.split(".")
@@ -343,7 +355,7 @@ def _validate_enabled(config, purpose):
         _required(solver, key, "sketch.solver")
     for key in ("cleanup_reserve_s", "max_offline_validation_per_round_s", "max_offline_validation_total_s"):
         _required(budgets, key, "sketch.budgets")
-    if purpose in {"solve", "live"}:
+    if purpose == "solve":
         for key in ("max_initial_synthesis_s", "max_tuning_rounds"):
             _required(budgets, key, "sketch.budgets")
         if budgets["max_tuning_rounds"]:
@@ -370,24 +382,19 @@ def _validate_enabled(config, purpose):
     if history["calibration_reuse"]:
         for key in ("calibration_max_age_s", "calibration_index"):
             _required(history, key, "sketch.history")
-    if sketch["live"]["enabled"] or purpose == "live":
-        injection = sketch['live']['fault_injection']
-        if bool(injection['request_id']) != bool(injection['attempts']):
-            raise InputValidationError('live fault injection requires both a request_id and a positive attempts count')
-        for key in LIVE_TIMEOUTS:
-            _required(sketch["live"], key, "sketch.live")
-        for key in ("bind_address", "port", "unix_socket"):
-            _required(config["runtime"]["control"], key, "runtime.control")
 
 
 def resolve_request(files, overrides=None, *, override_input=False, purpose="solve"):
     from vericcl.input.loader import _load_json_object
-    if purpose not in {"solve", "verify", "calibrate", "live"}:
+    if purpose == "live":
+        raise InputValidationError(LIVE_MIGRATION_ERROR)
+    if purpose not in {"solve", "verify", "calibrate"}:
         raise InputValidationError("invalid request purpose")
     if not isinstance(files, dict) or set(files) != set(SCHEMAS):
         raise InputValidationError("request files must explicitly contain topology, sketch, atom and runtime")
     documents = {name: _load_json_object(Path(path), name) for name, path in files.items()}
     origins = migrate(documents)
+    migrate_disabled_live(documents)
     sources = {}
     _apply_overrides(documents, overrides, override_input, sources)
     config = {name: _normalize(spec, documents[name], name, sources, str(Path(files[name]).resolve()), origins)

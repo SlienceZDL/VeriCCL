@@ -15,13 +15,15 @@ import uuid
 from vericcl.execution.budget import BudgetExhausted
 from vericcl.execution.context import StorageFailure
 from vericcl.execution.processes import reconcile_owned_process
-from vericcl.input.schema import LIVE_TIMEOUTS
-from vericcl.live.manifest import export_manifest
+from vericcl.execution.manifest import export_manifest
 from vericcl.verification.online.acceptance import LaunchSample
 from vericcl.verification.online.clock_sync import parse_clock_sync_output
 from vericcl.verification.online.remote import NativeProbeDriver, _host, _immutable, owned_home_path, collected_cleanup_receipts
 from vericcl.verification.online.trace_once import RawTraceCapture
 
+
+NATIVE_TIMEOUTS = ("request_prepare_timeout_s", "execution_attempt_timeout_s",
+                   "version_prepare_timeout_s", "control_phase_timeout_s", "close_cleanup_timeout_s")
 
 def combine_schedule_results(records, *, rank_count, version, contract, warmup, timed):
     if len(records) != rank_count or {r.get('rank') for r in records} != set(range(rank_count)):
@@ -52,8 +54,7 @@ class NativeScheduleDriver:
         runtime = inputs.request_config['runtime']
         first_host = runtime['rank_map'][0]['host']
         configured = runtime['control']
-        # Ephemeral local ports are permitted for one-shot measurement only.
-        # Persistent live groups always use the explicitly configured endpoint.
+        # Local measurements may use an ephemeral control port.
         addresses = socket.getaddrinfo(_host(first_host), None, socket.AF_INET, socket.SOCK_STREAM)
         address = addresses[0][4][0]
         if not self.transport._is_local(first_host) and not configured.get('port'):
@@ -68,16 +69,11 @@ class NativeScheduleDriver:
                 port = descriptor.getsockname()[1]
         return address, bind, port
 
-    def _launch(self, bundle, inputs, *, launch_id, warmup, timed, lease, trace_plan=None, self_test_api=False,
-                live=None, on_prepared=None, cancel_check=None):
+    def _launch(self, bundle, inputs, *, launch_id, warmup, timed, lease, trace_plan=None, self_test_api=False):
         if lease is None:
             raise ValueError('native schedule execution requires a parent time lease')
         lease.check()
         runtime = inputs.request_config['runtime']
-        if live is not None:
-            if not self.transport._is_local(runtime['rank_map'][0]['host']):
-                raise ValueError('the persistent controller must run on the explicitly mapped rank-0 host')
-            owned_home_path(Path(runtime['control']['unix_socket']))
         paths = runtime['paths']
         binary, mpi_bin = paths.get('vericcl_native'), paths.get('mpi_bin')
         if not binary or not mpi_bin:
@@ -86,7 +82,7 @@ class NativeScheduleDriver:
         if any((m['host'], m['device']) in self.transport.quarantined for m in mapping):
             raise ValueError('an earlier native job retains an overlapping GPU')
         settings = inputs.request_config['sketch']['trace_and_measure']
-        timeout = min(live['timeout_s'] if live else settings.get('job_timeout_s', lease.remaining_seconds()), lease.remaining_seconds())
+        timeout = min(settings.get('job_timeout_s', lease.remaining_seconds()), lease.remaining_seconds())
         if timeout <= 3:
             raise BudgetExhausted('insufficient time for native startup, execution and cleanup')
         deadline = time.monotonic() + timeout
@@ -94,34 +90,21 @@ class NativeScheduleDriver:
         unique = uuid.uuid4().hex
         root = owned_home_path(self.context.artifact('jobs/schedule-' + unique))
         root.mkdir(parents=True)
-        live_trace = live is not None and settings['enabled']
-        if live_trace:
-            from vericcl.verification.online.trace_format import RAW_HEADER_STRUCT, RAW_RECORD_STRUCT
-            capacities = {rank: (settings['trace_capacity_bytes'] - RAW_HEADER_STRUCT.size) // RAW_RECORD_STRUCT.size for rank in range(inputs.rank_count)}
-            prefix = root / 'versions' / bundle.xml_sha256 / 'trace-tmp'
-        else:
-            capacities = None if trace_plan is None else trace_plan.capacity_by_rank
-            prefix = None if trace_plan is None else root / 'native/trace'
+        capacities = None if trace_plan is None else trace_plan.capacity_by_rank
+        prefix = None if trace_plan is None else root / 'native/trace'
         manifest = export_manifest(bundle, inputs, root / 'schedule.xml', trace_records=capacities,
-            trace_prefix=prefix, light_telemetry=live is not None, live_trace=live_trace)
+                                   trace_prefix=prefix)
         address, bind, port = self._control(inputs)
         phase_seconds = max(.1, min(10., (timeout - reserve) / 2))
         native = dict(schema_version=1, group_id=self.context.task_id, session_id=unique, rank_map=mapping,
             coordinator_address=address, bind_address=bind, port=port, output_directory=str(root / 'native'),
-            manifest_path=str(root / 'manifest.json'), timeouts={key: phase_seconds for key in LIVE_TIMEOUTS},
+            manifest_path=str(root / 'manifest.json'), timeouts={key: phase_seconds for key in NATIVE_TIMEOUTS},
             device_memory_budget_bytes=runtime.get('device_memory_budget_bytes', 0),
-            recovery=dict(max_retries=0, fault_inject_request=0, fault_inject_attempts=0),
             warmup=warmup, timed=timed, capture_trace=trace_plan is not None, self_test_api=self_test_api)
         # Communicator setup includes all peer connections and XML admission.
         # Its allowance scales within the existing complete job deadline;
         # short control/cleanup waits retain their separate bounded defaults.
         native['timeouts']['version_prepare_timeout_s'] = max(phase_seconds, (timeout - reserve) / 2)
-        if live is not None:
-            native.update(mode='live', unix_socket=runtime['control']['unix_socket'], timeouts=dict(live['timeouts']))
-            configuration = inputs.request_config['sketch']['live']
-            native['recovery'] = dict(max_retries=configuration['max_retries'],
-                fault_inject_request=configuration['fault_injection']['request_id'],
-                fault_inject_attempts=configuration['fault_injection']['attempts'])
         environment = dict(runtime['environment']) | dict(PYTHONPATH=str(self.project_root),
             TMPDIR=str(root / 'tmp'), VERICCL_TRACE_ENABLE='0', NCCL_PROTO='Simple')
         payload = dict(kind='schedule', root=str(root), project_root=str(self.project_root), binary=binary,
@@ -159,11 +142,9 @@ class NativeScheduleDriver:
             command = [str(Path(mpi_bin) / 'mpirun'), '--mca', 'orte_abort_on_non_zero_status', '0',
                        '--rankfile', str(rankfile), '--bind-to', 'none', '-np', str(len(mapping)),
                        self.transport.python, '-m', 'vericcl.verification.online.remote', 'rank', '--root', str(root)]
-            if on_prepared is not None:
-                on_prepared(payload)
             launched = True
             process = self.transport._call(helper_context, command, deadline - time.monotonic() - reserve,
-                                           'schedule-mpi', environment=environment, cancel_check=cancel_check)
+                                           'schedule-mpi', environment=environment)
             self.context.write_json(relative + '/launcher-result.json', process.as_json())
             if process.status != 'completed' or not process.cleanup_complete:
                 failure = 'native schedule MPI launch failed or has unresolved cleanup'

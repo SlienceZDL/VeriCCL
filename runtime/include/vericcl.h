@@ -21,16 +21,16 @@ typedef struct VericclConfig {
   const char *group_id, *session_id, *coordinator_address, *bind_address;
   const char *evidence_directory;
   double request_prepare_timeout_s, execution_attempt_timeout_s;
-  double background_tuning_task_timeout_s, version_prepare_timeout_s;
-  double control_phase_timeout_s, recovery_timeout_s, close_cleanup_timeout_s;
-  /* Includes retained versions, counters, scratch and recovery backup. Zero
+  double background_tuning_task_timeout_s; /* Reserved: must be zero. */
+  double version_prepare_timeout_s, control_phase_timeout_s;
+  double recovery_timeout_s; /* Reserved: must be zero. */
+  double close_cleanup_timeout_s;
+  /* Includes communication, scratch and detailed trace storage. Zero
    * selects the currently free-device-memory bound; caller buffers also count. */
   uint64_t device_memory_budget_bytes;
-  uint32_t max_retries;
-  /* Explicit development fault injection; both zero disables it. A selected
-   * logical request fails after GPU completion for the first N attempts. */
-  uint32_t fault_inject_attempts;
-  uint64_t fault_inject_request;
+  uint32_t max_retries; /* Reserved: must be zero. */
+  uint32_t fault_inject_attempts; /* Reserved: must be zero. */
+  uint64_t fault_inject_request; /* Reserved: must be zero. */
 } VericclConfig;
 typedef struct VericclBuffer {
   uint32_t struct_size, abi_version;
@@ -43,7 +43,7 @@ typedef struct VericclResult {
   uint32_t gpu_completed, output_valid, buffers_reusable, resources_released;
   uint64_t request_id, attempt, logical_successes;
   double device_time_us, preparation_time_us, control_time_us, wall_time_us;
-  double backup_time_us, recovery_time_us;
+  double backup_time_us, recovery_time_us; /* Reserved: always zero. */
   char version_id[65], message[512];
 } VericclResult;
 typedef struct VericclStatus {
@@ -59,9 +59,11 @@ typedef struct VericclStatus {
  * Each finite deadline includes the operation's child phases. */
 VericclCode vericcl_init(const VericclConfig*, VericclContext**);
 /* Accepts a manifest exported by VeriCCL after complete static checking.
- * It verifies XML identity and prepares an independent communicator. */
+ * It verifies XML identity and prepares one communicator. A context binds to
+ * its first manifest for its lifetime; a different manifest requires a new
+ * context. Repeating the identical preparation is idempotent while ready. */
 VericclCode vericcl_prepare(VericclContext*, const char* workload_json, VericclWorkload**);
-/* Retire a prepared version that is not the committed version. */
+/* Release an unused prepared workload. The context keeps its fixed identity. */
 VericclCode vericcl_release(VericclWorkload*, VericclResult*);
 /* The stream is a cudaStream_t cast to void*. Input/output remain owned by
  * the caller. On UNRESOLVED, keep both buffers and stream alive until status
@@ -76,12 +78,8 @@ VericclCode vericcl_status(VericclContext*, VericclStatus*);
 VericclCode vericcl_close(VericclContext*, VericclResult*);
 /* Frees only an already-closed identity handle and nulls the caller pointer. */
 VericclCode vericcl_destroy(VericclContext**);
-/* Trace control and light telemetry use the same managed worker. Output
- * JSON is copied only on success; required_size includes the terminating NUL. */
+/* Detailed trace control uses the same managed worker. */
 VericclCode vericcl_trace_control(VericclWorkload*, int action);
-/* Collective idle-boundary toggle; disabled for formal performance samples. */
-VericclCode vericcl_light_control(VericclWorkload*, int enabled);
-VericclCode vericcl_telemetry(VericclWorkload*, char* json, size_t capacity, size_t* required_size);
 const char* vericcl_error_string(VericclCode);
 #ifdef __cplusplus
 }

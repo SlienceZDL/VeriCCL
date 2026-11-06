@@ -1,4 +1,4 @@
-"""Durable per-GPU ownership shared by calibration, measurement and live runs."""
+"""Durable per-GPU ownership shared by calibration and schedule execution."""
 from contextlib import contextmanager
 import fcntl
 import json

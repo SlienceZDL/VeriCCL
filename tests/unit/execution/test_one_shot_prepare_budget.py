@@ -12,7 +12,7 @@ def test_communicator_prepare_uses_job_budget_without_extending_cleanup(tmp_path
     from vericcl.execution.budget import StandaloneLease
     from vericcl.execution.context import RunContext
     from vericcl.input.schema import _freeze
-    from vericcl.live import native
+    from vericcl.execution import native
     from vericcl.workflow_state import plain
     from vericcl.xml.lower import lower_and_check
 

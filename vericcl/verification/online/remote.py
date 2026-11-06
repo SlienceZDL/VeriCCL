@@ -177,11 +177,6 @@ def _prepare(root, encoded, host):
     _immutable(root / ('schedule.xml' if schedule else 'probe.xml'), payload['xml'].encode())
     if schedule:
         _immutable(root / 'manifest.json', json.dumps(payload['manifest'], sort_keys=True).encode())
-        if payload['native_config'].get('mode') == 'live' and payload['manifest']['trace_prefix']:
-            prefix = owned_home_path(Path(payload['manifest']['trace_prefix']))
-            if not prefix.is_relative_to(root / 'versions'):
-                raise ValueError('live trace temporary path leaves the session versions directory')
-            prefix.parent.mkdir(parents=True, exist_ok=True)
         _immutable(root / 'native-config.json', json.dumps(payload['native_config'], sort_keys=True).encode())
     (root / 'native').mkdir(exist_ok=True)
     (root / 'tmp').mkdir(exist_ok=True)
@@ -192,7 +187,7 @@ def _prepare(root, encoded, host):
     devices = [inventory.get('gpus', {}).get(str(m['device']), {}).get('uuid') for m in local_mapping]
     if not devices or any(not device for device in devices):
         raise ValueError('native launch requires actual GPU UUIDs for persistent ownership')
-    from vericcl.live.ownership import GPUOwnershipRegistry
+    from vericcl.execution.ownership import GPUOwnershipRegistry
     registry_root = owned_home_path(Path(payload['project_root']) / 'examples/_shared/output/native-ownership')
     GPUOwnershipRegistry(registry_root).acquire(devices, str(root), {'task_id': payload['task_id'],
         'host': host, 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(), 'root': str(root)})
@@ -425,7 +420,7 @@ def _collect(root, host, *, cursor=None, inventory_digest=None):
     if _collection_inventory(root, host, prepared, payload, receipts_only=receipt_page)[3] != digest:
         raise ValueError('collection inventory snapshot changed during page collection')
     if (legacy or cursor == 0) and prepared.get('ownership_registry'):
-        from vericcl.live.ownership import GPUOwnershipRegistry
+        from vericcl.execution.ownership import GPUOwnershipRegistry
         acknowledgements = collected_cleanup_receipts([{'files': files}])
         complete = set(acknowledgements) == set(prepared['expected_ranks'])
         never_started = (root / 'NOT_STARTED').is_file() and not (root / 'ranks').exists()
@@ -442,32 +437,6 @@ def _collect(root, host, *, cursor=None, inventory_digest=None):
                 'scope': 'receipts' if receipt_page else 'complete',
                 'total_bytes': sum(value[0] for value in metadata.values()), 'receipt_files': len(receipts),
                 'artifact_files': len(artifacts), 'page_limit_bytes': maximum_bytes}}
-
-
-def _live_capture_inventory(root, host, capture_id):
-    root = owned_home_path(root)
-    if not isinstance(capture_id, str) or not re.fullmatch(r'command-[1-9][0-9]*', capture_id):
-        raise ValueError('invalid live capture identity')
-    prepared = json.loads((root / ('prepared-' + _host(host) + '.json')).read_text())
-    files, total = {}, 0
-    for rank in prepared['expected_ranks']:
-        prefix = 'native/captures/' + capture_id + '/'
-        record_path = checked_job_path(root, prefix + 'rank-%d.json' % rank)
-        record = json.loads(record_path.read_text())
-        names = [prefix + 'rank-%d.json' % rank]
-        if record['trace_enabled']:
-            names += [prefix + 'trace.rank-%d.bin' % rank, prefix + 'clock.rank-%d.log' % rank]
-        for name in names:
-            path = checked_job_path(root, name)
-            if not path.is_file():
-                raise ValueError('live capture is missing a required file')
-            size = path.stat().st_size; total += size
-            if total > 64 * 1024 * 1024:
-                raise ValueError('live capture exceeds the 64 MiB per-host collection limit; original evidence retained')
-            files[name] = {'bytes': size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
-    # Read-only inventory; it neither releases nor finishes the live GPU owner.
-    return {'host': host, 'files': files, 'runtime_identity':
-            {key: prepared[key] for key in ('binary_sha256', 'inventory')}}
 
 
 class NativeProbeDriver:
@@ -810,36 +779,17 @@ class NativeProbeDriver:
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('live-capture-inventory', 'stage-version', 'cancel-before-launch', 'stage', 'prepare-file', 'prepare', 'rank', 'cleanup', 'collect'))
+    parser.add_argument('action', choices=('cancel-before-launch', 'stage', 'prepare-file', 'prepare', 'rank', 'cleanup', 'collect'))
     parser.add_argument('--root', required=True)
     parser.add_argument('--host')
     parser.add_argument('--payload')
-    parser.add_argument('--payload-file')
-    parser.add_argument('--capture-id')
     parser.add_argument('--cursor', type=int)
     parser.add_argument('--inventory-digest')
     parser.add_argument('--timeout', type=float, default=2)
     args = parser.parse_args(argv)
     if args.action == 'rank':
         return _rank(args.root)
-    if args.action == 'live-capture-inventory':
-        result = _live_capture_inventory(args.root, _host(args.host), args.capture_id)
-    elif args.action == 'stage-version':
-        root = owned_home_path(args.root)
-        if (root / 'STOP').exists():
-            raise ValueError('session stopped before version distribution')
-        update = json.loads(checked_job_path(root, args.payload_file).read_text())
-        version = update['manifest']['version_id']
-        if not re.fullmatch('[0-9a-f]{64}', version) or hashlib.sha256(update['xml'].encode()).hexdigest() != version:
-            raise ValueError('version identity mismatch')
-        destination = root / 'versions' / version
-        if update['manifest']['xml_path'] != str(destination / 'schedule.xml'):
-            raise ValueError('version XML path leaves the owned immutable version')
-        _immutable(destination / 'schedule.xml', update['xml'].encode())
-        _immutable(destination / 'manifest.json', json.dumps(update['manifest'], sort_keys=True).encode())
-        result = {'status': 'version_staged', 'version_id': version,
-                  'manifest_sha256': hashlib.sha256((destination / 'manifest.json').read_bytes()).hexdigest()}
-    elif args.action == 'cancel-before-launch':
+    if args.action == 'cancel-before-launch':
         root = owned_home_path(args.root)
         _immutable(root / 'STOP', b'stop\n')
         if (root / 'ranks').exists():

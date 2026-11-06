@@ -1,13 +1,11 @@
 #include "vericcl.h"
 #include "vericcl_plan.h"
-#include "vericcl_probe.h"
 #include "vericcl_trace_control.h"
 #include "control_transport.h"
-#include "version_store.h"
+#include "schedule_store.h"
 #include "gpu_operations.h"
 #include "internal_api.h"
 #include "buffer_guard.h"
-#include "recovery.h"
 #include "operation_wait.h"
 #include "../probes/timing.cuh"
 #include <condition_variable>
@@ -24,11 +22,8 @@ struct Version {
   VericclNcclPlanOptions options{};
   ncclComm_t comm=nullptr;
   cudaEvent_t start=nullptr,done=nullptr;
-  VericclProbeCounter* counters=nullptr;
   bool ready=false, comm_initialized=false, event_recorded=false, gpu_complete=true, release_failed=false;
-  bool light_active=false;
   uint64_t reservation=0;
-  Json telemetry=Json::array();
 };
 struct Job : OperationWait {
   VericclCode code=VERICCL_FAILED;VericclResult result{};
@@ -40,11 +35,12 @@ struct State {
   std::mutex mutex;
   bool busy=false,uncertain=false,closed=false,buffers_retained=false,request_active=false;
   uint64_t next_request=1,request_id=0,attempt=0,successes=0,reserved=0,version_count=0;
-  std::string committed,message,contract;
+  std::string committed,message;
+  SingleScheduleIdentity schedule_identity;
   std::shared_ptr<Job> job;
   std::unique_ptr<ControlTransport> transport;
-  std::map<std::string,std::shared_ptr<Version>> versions;
-  std::vector<std::unique_ptr<VericclWorkload>> handles;
+  std::shared_ptr<Version> version;
+  std::unique_ptr<VericclWorkload> handle;
   std::unique_ptr<BufferGuard> guard;
   unsigned long long* clock_timer=nullptr;
   unsigned long long clock_value=0;
@@ -120,7 +116,7 @@ static uint64_t reservation(const WorkSpec& p){
   // and LL/LL128 overhead. The actual free-memory delta is recorded as well.
   uint64_t communication=multiply(2*(32+multiply(p.channels,std::max(1,p.ranks-1))),bytes+5*1024*1024);
   return communication+128*1024*1024+p.scratch_bytes+multiply(p.trace_records,80)+
-      multiply(p.threadblocks*256,sizeof(VericclProbeCounter))+p.message_bytes+p.buffers.output_bytes+p.message_bytes;
+      p.message_bytes+p.buffers.output_bytes;
 }
 static std::string hex_id(const ncclUniqueId& id){std::ostringstream out;out<<std::hex<<std::setfill('0');for(auto c:id.internal)out<<std::setw(2)<<int(uint8_t(c));return out.str();}
 static ncclUniqueId parse_id(const std::string& text){ncclUniqueId id{};if(text.size()!=2*sizeof(id))throw std::invalid_argument("invalid communicator identity");for(size_t i=0;i<sizeof(id);i++){auto part=text.substr(2*i,2);size_t end=0;int v=std::stoi(part,&end,16);if(end!=2)throw std::invalid_argument("invalid communicator identity");id.internal[i]=char(v);}return id;}
@@ -135,17 +131,14 @@ extern "C" VericclCode vericcl_init(const VericclConfig* config,VericclContext**
   try {
     if(config->rank_count<1 || config->rank_count>4096 || config->rank<0 || config->rank>=config->rank_count || config->device<0 || config->reserved)
       throw std::invalid_argument("invalid rank/device configuration");
-    if(bool(config->fault_inject_request)!=bool(config->fault_inject_attempts))
-      throw std::invalid_argument("fault injection requires both a request and an attempt count");
-    for(auto v:{config->request_prepare_timeout_s,config->execution_attempt_timeout_s,config->background_tuning_task_timeout_s,config->version_prepare_timeout_s,config->control_phase_timeout_s,config->recovery_timeout_s,config->close_cleanup_timeout_s})finite_positive(v,"timeout");
+    validate_execution_config(*config);
     auto copy=[](const char* v){if(!v || !*v || strlen(v)>4096)throw std::invalid_argument("invalid configuration string");return std::string(v);};
     auto s=std::make_shared<State>();s->config=*config;s->group=copy(config->group_id);s->session=copy(config->session_id);s->address=copy(config->coordinator_address);s->bind=copy(config->bind_address);s->directory=copy(config->evidence_directory);
     struct stat st{};if(s->directory[0]!='/' || lstat(s->directory.c_str(),&st) || !S_ISDIR(st.st_mode) || st.st_uid!=getuid())throw std::invalid_argument("evidence directory must be an existing owned absolute directory");
     auto handle=new VericclContext{s};*out=handle;std::shared_ptr<Job> job;
     return submit(s,after(config->control_phase_timeout_s),[](State& s,Job&,Deadline deadline){
       s.transport=std::make_unique<ControlTransport>(s.config.rank,s.config.rank_count,s.group,s.session,s.address,s.bind,s.config.coordinator_port,deadline);
-      Json config={{"group",s.group},{"ranks",s.config.rank_count},{"request_prepare",s.config.request_prepare_timeout_s},{"execution",s.config.execution_attempt_timeout_s},{"version_prepare",s.config.version_prepare_timeout_s},{"control",s.config.control_phase_timeout_s},{"background",s.config.background_tuning_task_timeout_s},{"recovery",s.config.recovery_timeout_s},{"close",s.config.close_cleanup_timeout_s}};
-      config["max_retries"]=s.config.max_retries;config["fault_inject_request"]=s.config.fault_inject_request;config["fault_inject_attempts"]=s.config.fault_inject_attempts;
+      Json config={{"group",s.group},{"ranks",s.config.rank_count},{"request_prepare",s.config.request_prepare_timeout_s},{"execution",s.config.execution_attempt_timeout_s},{"version_prepare",s.config.version_prepare_timeout_s},{"control",s.config.control_phase_timeout_s},{"close",s.config.close_cleanup_timeout_s}};
       auto members=exchange(s,"INIT",{{"config",config}},deadline);unanimous(members,{"config"});
     },job);
   }catch(...){return VERICCL_INVALID;}
@@ -155,29 +148,24 @@ static VericclCode prepare_until(VericclContext* context,const char* text,Vericc
   auto s=context->state;std::string manifest(text);std::shared_ptr<Job> job;
   auto code=submit(s,deadline,[manifest](State& s,Job& job,Deadline deadline){
     WorkSpec spec;std::string error;
-    try{spec=WorkSpec::parse(manifest,s.config.rank,s.config.rank_count);}catch(const std::exception& e){error=e.what();}
+    try{spec=WorkSpec::parse(manifest,s.config.rank,s.config.rank_count);s.schedule_identity.admit(spec);}catch(const std::exception& e){error=e.what();}
     Json payload={{"error",error.empty()?Json(nullptr):Json(error)},{"version",spec.version},{"contract",spec.contract}};
-    if(!s.contract.empty() && spec.contract!=s.contract)payload["error"]="a version update cannot change the group's external collective contract";
     auto members=exchange(s,"PREPARE_VALIDATE",payload,deadline);unanimous(members,{"version","contract"});
-    s.contract=spec.contract;
-    auto found=s.versions.find(spec.version);
-    if(found!=s.versions.end()) {
-      if(!found->second->ready || found->second->spec.contract!=spec.contract ||
-          found->second->spec.trace_records!=spec.trace_records || found->second->spec.trace_prefix!=spec.trace_prefix ||
-          found->second->spec.light_telemetry!=spec.light_telemetry)throw std::invalid_argument("version reuse conflicts with retained preparation");
-      job.version=found->second;return;
+    if(s.version) {
+      if(!s.version->ready)throw std::invalid_argument("the context's schedule is no longer ready; create a new context");
+      job.version=s.version;return;
     }
     auto version=std::make_shared<Version>();version->spec=spec;
     size_t free_before=0,total=0;error.clear();
     try {
       VC_CUDA(cudaSetDevice(s.config.device));VC_CUDA(cudaMemGetInfo(&free_before,&total));
       version->reservation=reservation(spec);
-      if(version->reservation>free_before || (s.config.device_memory_budget_bytes && s.reserved+version->reservation>s.config.device_memory_budget_bytes))throw std::invalid_argument("new and retained versions exceed device memory reservation");
+      if(version->reservation>free_before || (s.config.device_memory_budget_bytes && s.reserved+version->reservation>s.config.device_memory_budget_bytes))throw std::invalid_argument("schedule exceeds device memory reservation");
       version->owned_xml=immutable_xml_copy(spec,s.directory);
     }catch(const std::exception& e){error=e.what();}
     unanimous(exchange(s,"PREPARE_ADMISSION",{{"error",error.empty()?Json(nullptr):Json(error)}},deadline),{});
-    s.versions.emplace(spec.version,version);s.reserved+=version->reservation;
-    {std::lock_guard<std::mutex> lock(s.mutex);s.version_count=s.versions.size();}
+    s.version=version;s.reserved=version->reservation;
+    {std::lock_guard<std::mutex> lock(s.mutex);s.version_count=1;}
     ncclUniqueId id{};if(s.config.rank==0)VC_NCCL(ncclGetUniqueId(&id));
     auto identities=exchange(s,"PREPARE_ID",{{"uid",s.config.rank==0?hex_id(id):""}},deadline);id=parse_id(identities[0].at("uid"));
     version->options={sizeof(VericclNcclPlanOptions),VERICCL_NCCL_PLAN_ABI,version->owned_xml.c_str(),spec.trace_records,spec.trace_prefix.c_str()};
@@ -190,11 +178,6 @@ static VericclCode prepare_until(VericclContext* context,const char* text,Vericc
       VC_NCCL(vericclNcclPlanAdmission(version->comm,spec.runtime_bytes,type_of(spec.datatype),op_of(spec.reduction),&resident));
       VC_CUDA(cudaEventCreate(&version->start));VC_CUDA(cudaEventCreate(&version->done));
       if(spec.trace_records)VC_NCCL(vericclTracePause(version->comm));
-      if(spec.threadblocks && spec.light_telemetry) {
-        auto bytes=multiply(spec.threadblocks*256,sizeof(VericclProbeCounter));VC_CUDA(cudaMalloc(&version->counters,bytes));VC_CUDA(cudaMemset(version->counters,0,bytes));
-        VC_NCCL(vericclProbeAttach(version->comm,version->counters,spec.threadblocks*256));
-        version->light_active=true;
-      }
     }catch(const std::exception& e){error=e.what();}
     auto ready=exchange(s,"READY",{{"error",error.empty()?Json(nullptr):Json(error)},{"version",spec.version},{"contract",spec.contract}},deadline);
     try{unanimous(ready,{"version","contract"});}catch(...){std::lock_guard<std::mutex> lock(s.mutex);s.uncertain=true;throw;}
@@ -203,9 +186,8 @@ static VericclCode prepare_until(VericclContext* context,const char* text,Vericc
   },job);
   if(code==VERICCL_OK && job && job->version) {
     std::lock_guard<std::mutex> lock(s->mutex);
-    for(const auto& retained:s->handles)if(retained->version==job->version){*out=retained.get();return code;}
-    auto handle=std::make_unique<VericclWorkload>();handle->state=s;handle->version=job->version;*out=handle.get();
-    s->handles.push_back(std::move(handle));
+    if(!s->handle){s->handle=std::make_unique<VericclWorkload>();s->handle->state=s;s->handle->version=job->version;}
+    *out=s->handle.get();
   }
   return code;
 }
@@ -221,10 +203,10 @@ static VericclCode release_until(VericclWorkload* workload,VericclResult* result
     Json check={{"version",v->spec.version},{"error",nullptr}};
     if(s.committed==v->spec.version || !v->ready || !v->gpu_complete || v->release_failed)check["error"]="version is committed, unready or still referenced by unresolved GPU work";
     unanimous(exchange(s,"RELEASE_VERSION",check,deadline),{"version"});VC_CUDA(cudaSetDevice(s.config.device));
-    try{if(v->comm){VC_NCCL(ncclCommDestroy(v->comm));v->comm=nullptr;}if(v->counters){VC_CUDA(cudaFree(v->counters));v->counters=nullptr;}if(v->start){VC_CUDA(cudaEventDestroy(v->start));v->start=nullptr;}if(v->done){VC_CUDA(cudaEventDestroy(v->done));v->done=nullptr;}}
+    try{if(v->comm){VC_NCCL(ncclCommDestroy(v->comm));v->comm=nullptr;}if(v->start){VC_CUDA(cudaEventDestroy(v->start));v->start=nullptr;}if(v->done){VC_CUDA(cudaEventDestroy(v->done));v->done=nullptr;}}
     catch(...){v->release_failed=true;std::lock_guard<std::mutex> lock(s.mutex);s.uncertain=true;throw;}
-    v->ready=false;s.versions.erase(v->spec.version);s.reserved-=v->reservation;
-    {std::lock_guard<std::mutex> lock(s.mutex);s.version_count=s.versions.size();}
+    v->ready=false;s.reserved=0;
+    {std::lock_guard<std::mutex> lock(s.mutex);s.version_count=0;}
     job.result.resources_released=1;job.result.buffers_reusable=1;
   },job);
   if(job){std::lock_guard<std::mutex> lock(job->mutex);if(job->done)*result=job->result;}result->code=code;return code;
@@ -248,19 +230,19 @@ static VericclCode close_until(VericclContext* context,VericclResult* result,Dea
     VC_CUDA(cudaSetDevice(s.config.device));
     bool uncertain;{std::lock_guard<std::mutex> lock(s.mutex);uncertain=s.uncertain;}
     if(s.clock_timer){wait_stream_stopped(s.clock_stream,deadline);VC_CUDA(cudaFree(s.clock_timer));s.clock_timer=nullptr;}
-    for(auto& item:s.versions){auto& v=*item.second;
+    if(s.version){auto& v=*s.version;
       if(v.release_failed)throw std::runtime_error("previous native release failed; ownership remains unresolved");
       if(v.comm && !v.comm_initialized)throw std::runtime_error("partial communicator initialization has unresolved ownership");
       if(!v.gpu_complete || (uncertain && v.comm)){
         if(!v.gpu_complete && !s.guard)throw std::runtime_error("GPU completion unresolved without an owned stream");
-        stop_version_for_replay(s,v,s.guard?s.guard->stream():nullptr,deadline);
+        stop_schedule(v,s.guard?s.guard->stream():nullptr,deadline);
       }
-      try{if(v.comm){VC_NCCL(ncclCommDestroy(v.comm));v.comm=nullptr;}if(v.counters){VC_CUDA(cudaFree(v.counters));v.counters=nullptr;}if(v.start){VC_CUDA(cudaEventDestroy(v.start));v.start=nullptr;}if(v.done){VC_CUDA(cudaEventDestroy(v.done));v.done=nullptr;}}
+      try{if(v.comm){VC_NCCL(ncclCommDestroy(v.comm));v.comm=nullptr;}if(v.start){VC_CUDA(cudaEventDestroy(v.start));v.start=nullptr;}if(v.done){VC_CUDA(cudaEventDestroy(v.done));v.done=nullptr;}}
       catch(...){v.release_failed=true;throw;}
       if(Clock::now()>=deadline)throw std::runtime_error("close deadline exhausted");
     }
     if(s.guard){s.guard->release(deadline);s.guard.reset();}
-    {std::lock_guard<std::mutex> lock(s.mutex);s.closed=true;s.buffers_retained=false;s.request_active=false;s.reserved=0;}
+    {std::lock_guard<std::mutex> lock(s.mutex);s.closed=true;s.buffers_retained=false;s.request_active=false;s.reserved=0;s.version_count=0;}
     job.result.resources_released=1;job.result.buffers_reusable=1;
   },job,true);
   if(job){std::lock_guard<std::mutex> lock(job->mutex);if(job->done){*result=job->result;return code;}}
@@ -275,7 +257,6 @@ static VericclCode trace_control_until(VericclWorkload* workload,int action,Dead
   return submit(s,deadline,[v,action](State& s,Job&,Deadline deadline){
     if(!v->spec.trace_records || !v->gpu_complete)throw std::invalid_argument("trace control requires an idle trace-enabled version");VC_CUDA(cudaSetDevice(s.config.device));
     unanimous(exchange(s,"TRACE_CONTROL",{{"action",action},{"version",v->spec.version}},deadline),{"action","version"});
-    if(v->light_active){VC_NCCL(vericclProbeAttach(v->comm,nullptr,0));v->light_active=false;}
     if(action==0)VC_NCCL(vericclTracePause(v->comm));else if(action==1)VC_NCCL(vericclTraceReset(v->comm,v->spec.expected_steps));else VC_NCCL(vericclTraceFinish(v->comm));
   },job);
 }
@@ -283,61 +264,16 @@ extern "C" VericclCode vericcl_trace_control(VericclWorkload* workload,int actio
   if(!workload)return VERICCL_INVALID;auto s=workload->state.lock();if(!s)return VERICCL_CLOSED;
   return trace_control_until(workload,action,after(s->config.control_phase_timeout_s));
 }
-static VericclCode light_control_until(VericclWorkload* workload,int enabled,Deadline deadline) {
-  if(!workload || (enabled!=0 && enabled!=1))return VERICCL_INVALID;auto s=workload->state.lock();if(!s)return VERICCL_CLOSED;auto v=workload->version;std::shared_ptr<Job> job;
-  return submit(s,deadline,[v,enabled](State& s,Job&,Deadline deadline){
-    if(!v->gpu_complete || !v->ready || (enabled && v->spec.threadblocks && !v->counters))throw std::invalid_argument("light counters require an idle prepared allocation");
-    VC_CUDA(cudaSetDevice(s.config.device));
-    unanimous(exchange(s,"LIGHT_CONTROL",{{"enabled",enabled},{"version",v->spec.version}},deadline),{"enabled","version"});
-    if(v->light_active){VC_NCCL(vericclProbeAttach(v->comm,nullptr,0));v->light_active=false;}
-    if(v->spec.trace_records)VC_NCCL(vericclTracePause(v->comm));
-    if(enabled && v->counters){VC_NCCL(vericclProbeAttach(v->comm,v->counters,v->spec.threadblocks*256));v->light_active=true;}
-  },job);
-}
-extern "C" VericclCode vericcl_light_control(VericclWorkload* workload,int enabled) {
-  if(!workload)return VERICCL_INVALID;auto s=workload->state.lock();if(!s)return VERICCL_CLOSED;
-  return light_control_until(workload,enabled,after(s->config.control_phase_timeout_s));
-}
 extern "C" VericclCode vericcl_destroy(VericclContext** context) {
   if(!context || !*context)return VERICCL_INVALID;auto s=(*context)->state;
   {std::lock_guard<std::mutex> lock(s->mutex);if(!s->closed || s->busy)return VERICCL_UNRESOLVED;}
   delete *context;*context=nullptr;return VERICCL_OK;
 }
-extern "C" VericclCode vericcl_telemetry(VericclWorkload* workload,char* output,size_t capacity,size_t* needed) {
-  if(!workload || !needed)return VERICCL_INVALID;auto s=workload->state.lock();if(!s)return VERICCL_CLOSED;
-  std::lock_guard<std::mutex> lock(s->mutex);if(s->busy)return VERICCL_BUSY;auto text=workload->version->telemetry.dump();*needed=text.size()+1;
-  if(!output || capacity<*needed)return VERICCL_INVALID;memcpy(output,text.c_str(),*needed);return VERICCL_OK;
-}
 extern "C" const char* vericcl_error_string(VericclCode code){switch(code){case VERICCL_OK:return "completed";case VERICCL_INVALID:return "invalid contract";case VERICCL_BUSY:return "another operation is active";case VERICCL_TIMEOUT:return "deadline expired";case VERICCL_UNRESOLVED:return "ownership or group outcome is unresolved";case VERICCL_CLOSED:return "context closed";default:return "native operation failed";}}
 namespace vericcl {
-VericclCode driver_release(VericclWorkload* workload,VericclResult* result,double seconds) {
-  if(!workload || !std::isfinite(seconds) || seconds<=0)return VERICCL_INVALID;
-  auto s=workload->state.lock();if(!s)return VERICCL_CLOSED;
-  return release_until(workload,result,after(std::min(seconds,s->config.close_cleanup_timeout_s)));
-}
-VericclCode driver_trace_control(VericclWorkload* workload,int action,double seconds) {
-  if(!workload || !std::isfinite(seconds) || seconds<=0)return VERICCL_INVALID;
-  auto s=workload->state.lock();if(!s)return VERICCL_CLOSED;
-  return trace_control_until(workload,action,after(std::min(seconds,s->config.control_phase_timeout_s)));
-}
-VericclCode driver_light_control(VericclWorkload* workload,int enabled,double seconds) {
-  if(!workload || !std::isfinite(seconds) || seconds<=0)return VERICCL_INVALID;
-  auto s=workload->state.lock();if(!s)return VERICCL_CLOSED;
-  return light_control_until(workload,enabled,after(std::min(seconds,s->config.control_phase_timeout_s)));
-}
 VericclCode driver_close(VericclContext* context,VericclResult* result,double seconds) {
   if(!context || !std::isfinite(seconds) || seconds<=0)return VERICCL_INVALID;
   return close_until(context,result,after(std::min(seconds,context->state->config.close_cleanup_timeout_s)));
-}
-VericclCode driver_prepare(VericclContext* context,const char* text,VericclWorkload** out,double seconds) {
-  if(!context || !std::isfinite(seconds) || seconds<=0)return VERICCL_INVALID;
-  return prepare_until(context,text,out,after(std::min(seconds,context->state->config.version_prepare_timeout_s)));
-}
-VericclCode driver_execute(VericclWorkload* workload,const VericclBuffer* input,const VericclBuffer* output,void* stream,VericclResult* result,double seconds) {
-  if(!workload || !std::isfinite(seconds) || seconds<=0)return VERICCL_INVALID;
-  auto state=workload->state.lock();if(!state)return VERICCL_CLOSED;
-  double maximum=state->config.request_prepare_timeout_s+state->config.execution_attempt_timeout_s+state->config.recovery_timeout_s;
-  return execute_until(workload,input,output,stream,result,after(std::min(seconds,maximum)));
 }
 VericclCode driver_exchange(VericclContext* context,const std::string& phase,const Json& local,Json* all,double timeout) {
   if(!context || !all || !std::isfinite(timeout) || timeout<=0)return VERICCL_INVALID;std::shared_ptr<Job> job;auto code=submit(context->state,after(std::min(timeout,context->state->config.control_phase_timeout_s)),[phase,local](State& s,Job& job,Deadline deadline){job.json=exchange(s,phase,local,deadline);},job);

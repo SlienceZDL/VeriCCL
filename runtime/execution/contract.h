@@ -1,5 +1,6 @@
-#ifndef VERICCL_LIVE_CONTRACT_H
-#define VERICCL_LIVE_CONTRACT_H
+#ifndef VERICCL_EXECUTION_CONTRACT_H
+#define VERICCL_EXECUTION_CONTRACT_H
+#include "vericcl.h"
 #include <nlohmann/json.hpp>
 #include <array>
 #include <chrono>
@@ -20,6 +21,14 @@ using Clock = std::chrono::steady_clock;
 using Deadline = Clock::time_point;
 inline void finite_positive(double value, const char* name) {
   if (!std::isfinite(value) || value <= 0) throw std::invalid_argument(std::string(name) + " must be finite and positive");
+}
+inline void validate_execution_config(const VericclConfig& config) {
+  if(config.reserved || config.background_tuning_task_timeout_s!=0 || config.recovery_timeout_s!=0 ||
+      config.max_retries || config.fault_inject_attempts || config.fault_inject_request)
+    throw std::invalid_argument("removed runtime-update and recovery fields are reserved and must be zero");
+  for(auto seconds:{config.request_prepare_timeout_s,config.execution_attempt_timeout_s,
+      config.version_prepare_timeout_s,config.control_phase_timeout_s,config.close_cleanup_timeout_s})
+    finite_positive(seconds,"timeout");
 }
 inline Deadline child_deadline(Deadline parent, double seconds) {
   finite_positive(seconds, "deadline");

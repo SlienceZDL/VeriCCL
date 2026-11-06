@@ -1,4 +1,4 @@
-#include "version_store.h"
+#include "schedule_store.h"
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -6,7 +6,7 @@
 namespace vericcl {
 WorkSpec WorkSpec::parse(const std::string& text,int rank,int ranks) {
   WorkSpec s;s.manifest=strict_json(text,128*1024*1024);auto& j=s.manifest;
-  const std::set<std::string> keys={"schema_version","version_id","xml_sha256","xml_path","contract_digest","collective","datatype","reduction_op","root","inplace","rank_count","input_size_bytes","slice_bytes","runtime_bytes","channels","ranks","trace_prefix","tolerances","light_telemetry"};
+  const std::set<std::string> keys={"schema_version","version_id","xml_sha256","xml_path","contract_digest","collective","datatype","reduction_op","root","inplace","rank_count","input_size_bytes","slice_bytes","runtime_bytes","channels","ranks","trace_prefix","tolerances"};
   exact_keys(j,keys,keys);
   if(j.at("schema_version")!=1 || j.at("rank_count")!=ranks || ranks<1 || rank<0 || rank>=ranks)
     throw std::invalid_argument("manifest ABI or rank membership mismatch");
@@ -16,7 +16,6 @@ WorkSpec WorkSpec::parse(const std::string& text,int rank,int ranks) {
   s.root=j.at("root").is_null()?-1:int(integer(j.at("root"),"root",ranks-1));
   if(!j.at("inplace").is_boolean())throw std::invalid_argument("inplace must be boolean");s.inplace=j.at("inplace");
   s.trace_prefix=j.at("trace_prefix").get<std::string>();
-  if(!j.at("light_telemetry").is_boolean())throw std::invalid_argument("light_telemetry must be boolean");s.light_telemetry=j.at("light_telemetry");
   if(s.version.size()!=64 || s.version!=j.at("xml_sha256") || s.xml.empty() || s.xml[0]!='/')
     throw std::invalid_argument("manifest XML identity or path invalid");
   if(sha256(read_file(s.xml))!=s.version)throw std::invalid_argument("XML content hash mismatch");

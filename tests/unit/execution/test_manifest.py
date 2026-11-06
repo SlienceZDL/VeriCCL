@@ -8,7 +8,7 @@ import pytest
 def test_manifest_is_bound_to_checked_xml_and_actual_geometry(tmp_path, operator):
     from tests.integration.test_lowering_v5 import candidate_fixture
     from vericcl.xml.lower import lower_and_check
-    from vericcl.live.manifest import export_manifest
+    from vericcl.execution.manifest import export_manifest
     candidate, lowering = candidate_fixture(tmp_path, operator)
     bundle = lower_and_check(candidate, lowering)
     manifest = export_manifest(bundle, lowering.inputs, tmp_path / 'schedule.xml')
@@ -24,7 +24,7 @@ def test_manifest_is_bound_to_checked_xml_and_actual_geometry(tmp_path, operator
 def test_trace_capacity_must_cover_full_invocation_and_never_change_xml(tmp_path):
     from tests.integration.test_lowering_v5 import candidate_fixture
     from vericcl.xml.lower import lower_and_check
-    from vericcl.live.manifest import export_manifest
+    from vericcl.execution.manifest import export_manifest
     candidate, lowering = candidate_fixture(tmp_path, 'broadcast')
     bundle = lower_and_check(candidate, lowering)
     base = export_manifest(bundle, lowering.inputs, tmp_path / 'schedule.xml')
@@ -39,7 +39,7 @@ def test_inplace_dependency_nops_use_compacted_native_counter_positions(tmp_path
     from tests.integration.test_lowering_v5 import candidate_fixture
     from vericcl.xml.lower import lower_and_check
     from vericcl.xml.trace_sidecar import build_v5_trace_sidecar
-    from vericcl.live.manifest import export_manifest
+    from vericcl.execution.manifest import export_manifest
     from vericcl.xml.v5_lower import evaluate_program
     from vericcl.xml.v5_model import NativeStep
     from vericcl.xml.v5_program import emit_native_xml

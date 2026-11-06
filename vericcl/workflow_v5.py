@@ -252,7 +252,7 @@ class PrimaryWorkflow:
     def _native(self):
         if self.services.native_driver is None:
             try:
-                from vericcl.live.native import NativeScheduleDriver
+                from vericcl.execution.native import NativeScheduleDriver
             except ImportError as error:
                 raise SemanticError('native full-schedule execution driver is unavailable') from error
             self.services.native_driver = NativeScheduleDriver(self.context, self.original)

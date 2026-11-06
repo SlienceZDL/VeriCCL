@@ -10,7 +10,7 @@ def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
 
 
-def export_manifest(bundle, inputs, xml_path, *, trace_records=None, trace_prefix=None, light_telemetry=True, live_trace=False):
+def export_manifest(bundle, inputs, xml_path, *, trace_records=None, trace_prefix=None):
     if not bundle.can_execute or bundle.program is None or not bundle.xml_text:
         raise ValueError('native execution requires a fully qualified candidate')
     digest = hashlib.sha256(bundle.xml_text.encode()).hexdigest()
@@ -26,7 +26,7 @@ def export_manifest(bundle, inputs, xml_path, *, trace_records=None, trace_prefi
     ranks = []
     for rank in range(inputs.rank_count):
         blocks = [block for block in program.blocks if block.rank == rank]
-        # MSCCL folds dependency-only NOPs into the next transfer. Counter and
+        # MSCCL folds dependency-only NOPs into the next transfer. Detailed
         # trace positions refer to that compacted runtime transfer array.
         native_steps = [dict(tb_id=block.tb_id, step_index=index, kind=step.kind,
                             channel=block.channel, send_peer=block.send_peer, recv_peer=block.recv_peer,
@@ -49,6 +49,6 @@ def export_manifest(bundle, inputs, xml_path, *, trace_records=None, trace_prefi
     return dict(schema_version=1, version_id=digest, xml_sha256=digest,
                 xml_path=str(Path(xml_path).resolve()), contract_digest=_digest(contract), **contract,
                 slice_bytes=slice_bytes, runtime_bytes=program.chunks_per_loop * slice_bytes,
-                channels=program.channels, ranks=ranks, light_telemetry=bool(light_telemetry and (trace_records is None or live_trace)),
+                channels=program.channels, ranks=ranks,
                 trace_prefix='' if trace_prefix is None else str(Path(trace_prefix).resolve()),
                 tolerances=dict(inputs.request_config['sketch']['tolerances']))

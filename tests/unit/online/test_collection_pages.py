@@ -127,7 +127,7 @@ def test_persisted_bulk_data_is_not_retained_in_receipt_memory(tmp_path, monkeyp
 
 
 def test_registry_uses_the_receipt_bytes_actually_returned(tmp_path, monkeypatch):
-    from vericcl.live.ownership import GPUOwnershipRegistry
+    from vericcl.execution.ownership import GPUOwnershipRegistry
     root = fixture(tmp_path / 'launch', monkeypatch)
     registry = GPUOwnershipRegistry(tmp_path / 'ownership')
     registry.acquire(['GPU-test'], str(root), {})

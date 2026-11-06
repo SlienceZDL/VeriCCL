@@ -5,12 +5,14 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import uuid
 
-from vericcl.execution.context import DIRECTORIES, RunContext
+from vericcl.execution.context import RunContext, finalize_run
 from vericcl.execution.events import emit_event
 from vericcl.execution.processes import ProcessLease, run_owned_process
 from vericcl.execution.security import Redactor
+from vericcl.execution.status import RunResult
 
 
 def main(argv=None):
@@ -29,12 +31,14 @@ def main(argv=None):
     if not nvcc.is_file() or not mpi.is_file() or not (runtime / 'lib/libnccl.so').is_file():
         p.error('explicit CUDA, MPI or prepared runtime is unavailable')
     output.mkdir(parents=True)
-    context = RunContext(output, task_id=uuid.uuid4().hex, run_id=output.name, redactor=Redactor())
-    for name in DIRECTORIES:
-        (output / name).mkdir()
+    context = RunContext(output, task_id=uuid.uuid4().hex, run_id=output.name, redactor=Redactor(), version=2)
+    context.initialize_directories()
     for name in ('bin', 'lib', 'include'):
         (output / 'build' / name).mkdir(parents=True)
-    context.write_json('run.json', {'kind': 'native_api_build', 'root': str(root)})
+    context.write_json('run.json', {'kind': 'native_api_build', 'root': str(output), 'source_root': str(root),
+        'task_id': context.task_id, 'run_id': context.run_id,
+        'invocation': {'command': 'build_native', 'argv': [sys.executable, str(Path(__file__).resolve()),
+                        *(sys.argv[1:] if argv is None else argv)], 'cwd': str(Path.cwd())}})
     emit_event(context, 'run_started')
     flags = {}
     for category in ('compile', 'link'):
@@ -49,8 +53,8 @@ def main(argv=None):
     common = [str(nvcc), '-std=c++17', '-O2', '-DOMPI_SKIP_MPICXX=1', '-Xcompiler=-pthread', '-Xcompiler=-fPIC',
               f'-gencode=arch=compute_{a.arch},code=sm_{a.arch}',
               '-I' + str(runtime / 'include'), '-I' + str(root / 'runtime/include'),
-              '-I' + str(root / 'runtime/live'), '-I' + str(root / 'third_party/nlohmann/include')]
-    sources = [str(root / 'runtime/live' / name) for name in ('api.cc', 'version_store.cc', 'control_transport.cc', 'local_control.cc', 'buffer_guard.cc', 'gpu_operations.cu')]
+              '-I' + str(root / 'runtime/execution'), '-I' + str(root / 'third_party/nlohmann/include')]
+    sources = [str(root / 'runtime/execution' / name) for name in ('api.cc', 'schedule_store.cc', 'control_transport.cc', 'buffer_guard.cc', 'gpu_operations.cu')]
     lib = output / 'build/lib/libvericcl.so'
     library_command = [*common, '-shared', '-Xlinker=--no-undefined', *sources, '-L' + str(runtime / 'lib'), '-lnccl',
                        '-Xlinker=-rpath=' + str(runtime / 'lib'), '-o', str(lib)]
@@ -59,7 +63,7 @@ def main(argv=None):
     reports = {'library': library.as_json()}
     binary = output / 'build/bin/vericcl-native'
     if library.status == 'completed' and library.cleanup_complete:
-        driver_command = [*common, *shlex.split(flags['compile']['stdout']), str(root / 'runtime/live/driver.cc'),
+        driver_command = [*common, *shlex.split(flags['compile']['stdout']), str(root / 'runtime/execution/driver.cc'),
                           '-L' + str(output / 'build/lib'), '-lvericcl', '-L' + str(runtime / 'lib'), '-lnccl',
                           '-Xlinker=-rpath=' + str(output / 'build/lib'), '-Xlinker=-rpath=' + str(runtime / 'lib'),
                           *link, '-o', str(binary)]
@@ -72,8 +76,10 @@ def main(argv=None):
                   sha256={str(path.relative_to(output)): hashlib.sha256(path.read_bytes()).hexdigest()
                           for path in (lib, binary) if path.is_file()})
     context.write_json('result.json', report)
+    finalized = finalize_run(context, RunResult(compiled, 'completed' if compiled else 'failed',
+        stop_reason='native_api_build', failure_category=None if compiled else 'backend'))
     print(json.dumps(report))
-    return 0 if compiled else 1
+    return finalized.exit_code
 
 
 if __name__ == '__main__':

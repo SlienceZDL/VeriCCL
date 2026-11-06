@@ -16,7 +16,7 @@ def test_native_records_determine_success_after_launcher_returns_zero(tmp_path, 
     from vericcl.execution.budget import StandaloneLease
     from vericcl.execution.context import RunContext
     from vericcl.input.schema import _freeze
-    from vericcl.live import native
+    from vericcl.execution import native
     from vericcl.workflow_state import plain
     from vericcl.xml.lower import lower_and_check
 

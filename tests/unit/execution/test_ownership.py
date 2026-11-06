@@ -2,7 +2,7 @@ import pytest
 
 
 def test_gpu_lease_survives_owner_exit_and_requires_explicit_release_receipts(tmp_path):
-    from vericcl.live.ownership import GPUOwnershipRegistry
+    from vericcl.execution.ownership import GPUOwnershipRegistry
     registry = GPUOwnershipRegistry(tmp_path)
     registry.acquire(['GPU-one'], 'run-one', {'pid': 123, 'boot_id': 'boot'})
     with pytest.raises(RuntimeError, match='retained'):
@@ -15,7 +15,7 @@ def test_gpu_lease_survives_owner_exit_and_requires_explicit_release_receipts(tm
 
 
 def test_multi_device_acquisition_is_atomic_and_cannot_release_another_owner(tmp_path):
-    from vericcl.live.ownership import GPUOwnershipRegistry
+    from vericcl.execution.ownership import GPUOwnershipRegistry
     registry = GPUOwnershipRegistry(tmp_path)
     registry.acquire(['GPU-two'], 'first', {})
     with pytest.raises(RuntimeError):
@@ -26,7 +26,7 @@ def test_multi_device_acquisition_is_atomic_and_cannot_release_another_owner(tmp
 
 
 def test_quarantine_is_shared_between_registry_instances(tmp_path):
-    from vericcl.live.ownership import GPUOwnershipRegistry
+    from vericcl.execution.ownership import GPUOwnershipRegistry
     a = GPUOwnershipRegistry(tmp_path)
     a.acquire(['GPU-one'], 'old', {})
     a.finish(['GPU-one'], 'old', process_clean=False, gpu_released=False)
