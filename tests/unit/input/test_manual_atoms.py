@@ -99,3 +99,33 @@ def test_manual_plan_solver_demands_retain_alternative_route(tmp_path):
     problem = build_solver_problem(plan.nodes[0], inputs, topology)
     demand = next(item for item in problem.demands if set(item.member_slice_ids) == {0} and item.required_leaf_rank == 1)
     assert demand.candidate_paths == ((0, 2, 1),)
+
+
+@pytest.mark.parametrize('threshold', [None, 1, 999999])
+def test_auto_manual_plan_always_uses_hierarchy_solver(tmp_path, threshold):
+    docs = documents()
+    docs['atom']['synthesis_method'] = 'auto'
+    if threshold is not None:
+        docs['atom']['M_switch'] = threshold
+    inputs = load_request(write_request(tmp_path, docs))
+    assert inputs.selected_synthesis_method == 'hierarchy'
+
+
+def test_explicit_constructive_method_reports_manual_plan_conflict(tmp_path):
+    docs = documents()
+    docs['atom']['synthesis_method'] = 'constructive_trees'
+    with pytest.raises(InputValidationError, match='manual.*hierarchy'):
+        load_request(write_request(tmp_path, docs))
+    docs['atom']['manual']['enabled'] = False
+    assert load_request(write_request(tmp_path, docs)).selected_synthesis_method == 'constructive_trees'
+
+
+
+def test_manual_plan_keeps_subproblem_reuse_separate_from_whole_schedule_history(tmp_path):
+    docs = documents()
+    docs['sketch']['history'] = {'schedule_reuse': True, 'schedule_index': 'history.json',
+                                 'relative_bandwidth_tolerance': .1, 'max_schedule_candidates': 1}
+    with pytest.raises(InputValidationError, match='manual.*schedule_reuse'):
+        load_request(write_request(tmp_path, docs))
+    docs['atom']['manual']['enabled'] = False
+    assert load_request(write_request(tmp_path, docs)).request_config['sketch']['history']['schedule_reuse']

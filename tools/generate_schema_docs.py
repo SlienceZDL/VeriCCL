@@ -53,13 +53,13 @@ HELP = {
     'candidate_batch_size': '每批进入局部 SCIP 的候选数；不表示总搜索上限。', 'analysis_batch_size': '每批分析建议数；耗尽后继续扩展。',
     'runtime_compatibility': '可关闭的完整静态运行时兼容检查；基础启动安全检查始终保留。',
     'history': '跨任务调度与绝对校准缓存，两个开关互相独立，默认关闭。',
-    'schedule_reuse': '检索同构且相对带宽接近的历史调度，再适配并重新验证。',
+    'schedule_reuse': '自动模式下检索同构且相对带宽接近的历史调度，再适配并重新验证；手工计划使用 false。',
     'calibration_reuse': '仅复用精确设备/运行时/类型/模式身份下仍有效的测量组件。',
     'relative_bandwidth_tolerance': '映射后的各带宽缩放比例最大值/最小值减一的允许上限。',
     'max_schedule_candidates': '快速历史检索最多检查的候选数。', 'calibration_max_age_s': '校准缓存的最大年龄。',
     'schedule_index': '历史调度索引路径；相对路径从案例目录解析。', 'calibration_index': '校准索引路径；相对路径从案例目录解析。',
-    'synthesis_method': 'auto 按 M_switch 选择；小消息 hierarchy，大消息 constructive_trees。',
-    'M_switch': 'auto 模式必须显式给出的消息大小分界，单位字节。', 'stage_num': '逻辑阶段数硬约束；省略时自动确定。',
+    'synthesis_method': '自动计划中 auto 按 M_switch 选择：小消息 hierarchy，大消息 constructive_trees；手工计划取 hierarchy，auto 同样解析为 hierarchy。',
+    'M_switch': '自动计划使用 auto 时显式给出的消息大小分界，单位字节。', 'stage_num': '逻辑阶段数硬约束；省略时自动确定。',
     'forbidden_transfers': '[原 slice_id,src,dst,stage]，只禁止该阶段的这条直连边，仍可合法绕路。',
     'strategies': '可选初始求解策略，默认不启用。', 'symmetry': '启用对称约简。', 'shortest_paths': '启用候选路径缩减策略。',
     'batching': '显式启用分层求解的批处理开关；批量生成树方法按自身规则管理 batch。',
@@ -137,7 +137,7 @@ solve 必须给初始合成预算和最大轮数；轮数大于 0 时还须给�
 
 JSON Schema 描述标准结构；跨字段算术、启用条件、重复键和明确的旧写法迁移由 load_request 检查。算子名称忽略大小写；兼容别名为 all_gather、all_reduce、all_to_all、reducescatter。旧 hyperparameters 中明确列出的 solver 参数可迁移；atom 顶层的 symmetry、shortest_paths、batching、objective_mode 可迁移。旧 total_solve_timeout_s 仅迁移为初始合成预算。force_resolve、force_recalibrate 及旧算法布尔开关已删除。
 
-手工节点的 `atoms` 只指定 slice、源 rank、目标 rank 集合，阶段号取节点的 `stage_id`；展开后的每条约束只限制一个有向边。手工模式关闭时，节点与变量组不参与自动合成。
+手工节点的 `atoms` 只指定 slice、源 rank、目标 rank 集合，阶段号取节点的 `stage_id`；展开后的每条约束只限制一个有向边。手工模式使用 hierarchy 求解各阶段，并保留分层子问题复用；整体调度历史复用仅用于自动计划。手工模式关闭时，节点与变量组不参与自动合成。
 
 下面的 object/array 行描述所属配置段，后续行描述其成员。array 中的 [] 表示每一个元素。更多运行方式见 [README](../README.md)，证据范围见 [适用边界](supported-configuration.md)。
 '''

@@ -188,7 +188,7 @@ PY
 
 **可选：手工阶段与 Atom 变量组**
 
-手工计划在 `atom.manual.enabled=true` 时使用。每个节点定义一个阶段中的通信组、输入状态、输出状态和前序节点；`atoms` 为该节点补充有向边禁用约束。自动合成默认使用 `manual.enabled=false`。
+手工计划在 `atom.manual.enabled=true` 时使用。每个节点定义一个阶段中的通信组、输入状态、输出状态和前序节点；`atoms` 为该节点补充有向边禁用约束。自动合成默认使用 `manual.enabled=false`。手工计划使用 `hierarchy`；选择 `auto` 时也进入这个求解入口。手工模式保留分层子问题复用，`sketch.history.schedule_reuse` 保持 `false`，由当前计划确定各阶段。
 
 下面按当前算子和规模生成一个可编辑的手工计划，保存到新输入目录。阶段输入、输出和依赖由现有数据语义生成，随后可按需编辑 `atom.json`。
 
@@ -293,11 +293,15 @@ python -m vericcl inspect --run <运行结果目录>
 import json, os
 from pathlib import Path
 run = Path(os.environ['VERICCL_RUN'])
-a = json.loads((run / 'run.json').read_text())['best']
-print('T_pred（微秒）：', a['t_pred_us'])
-print('XML：', run / 'schedule.xml')
-print('调度说明：', run / 'schedule.json')
-print('模型：', run / 'model.json')
+metadata = json.loads((run / 'run.json').read_text())
+a = metadata['best']
+if a is None:
+    print('本次结果：', metadata['result']['stop_reason'])
+else:
+    print('T_pred（微秒）：', a['t_pred_us'])
+    print('XML：', run / 'schedule.xml')
+    print('调度说明：', run / 'schedule.json')
+    print('模型：', run / 'model.json')
 PY
 ```
 
@@ -542,7 +546,7 @@ python -m vericcl resume --run <运行结果目录>
 "$VERICCL_PYTHON" -m vericcl resume --run "$VERICCL_RUN"
 ```
 
-结果继续写入原目录，时间按原任务累计计算。每个指令可通过 `--help` 查看完整参数，例如：
+结果继续写入原目录，时间按原任务累计计算。求解已结束而结果整理中断时，`resume` 会补齐导出文件与归档。每个指令可通过 `--help` 查看完整参数，例如：
 
 ```bash
 "$VERICCL_PYTHON" -m vericcl solve --help

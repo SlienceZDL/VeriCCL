@@ -429,7 +429,13 @@ def resolve_request(files, overrides=None, *, override_input=False, purpose="sol
         for key in ("absolute", "relative"):
             _required(sketch["tolerances"], key, "sketch.tolerances")
     selected = atom["synthesis_method"]
-    if selected == "auto":
+    if atom["manual"]["enabled"]:
+        if selected == "constructive_trees":
+            raise InputValidationError("manual stage plans require synthesis_method=hierarchy or auto")
+        if sketch["history"]["schedule_reuse"]:
+            raise InputValidationError("manual stage plans require history.schedule_reuse=false; subproblem reuse remains active")
+        selected = "hierarchy"
+    elif selected == "auto":
         threshold = _required(atom, "M_switch", "atom")
         selected = "hierarchy" if size < threshold else "constructive_trees"
     if selected == "constructive_trees" and atom["strategies"]["shortest_paths"]:

@@ -41,7 +41,7 @@ def test_campaign_stops_after_unresolved_primary_or_followup(tmp_path, monkeypat
     assert len(calls) == failing_call
     assert result.status == 'cleanup_unconfirmed'
     assert len(result.observations) + len(result.confirmations) == failing_call
-    state = json.loads((context.run_context.root / 'reports/calibration-resource-state.json').read_text())
+    state = json.loads(context.run_context.artifact('reports/calibration-resource-state.json').read_text())
     assert not state['safe_to_continue']
     assert state['active_jobs'] == (['unreconciled-launcher'] if active else [])
 

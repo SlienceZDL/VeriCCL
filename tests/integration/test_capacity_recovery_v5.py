@@ -144,6 +144,6 @@ def test_capacity_recovery_does_not_mark_expired_empty_stream_complete(tmp_path,
     with pytest.raises(BudgetExhausted):
         workflow.recover_capacity_baseline()
     assert not workflow.expanded
-    latest = json.loads((workflow.context.root / 'checkpoints/latest.json').read_text())
+    latest = json.loads(workflow.context.artifact('checkpoints/latest.json').read_text())
     state = json.loads((workflow.context.root / latest['state']).read_text())
     assert state['search']['expanded'] == []

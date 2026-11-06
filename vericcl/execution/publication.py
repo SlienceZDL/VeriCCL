@@ -37,6 +37,17 @@ def _archive(context):
         temporary.unlink(missing_ok=True)
 
 
+def publication_complete(context):
+    metadata = _read(context, 'run.json') or {}
+    if metadata.get('publication', {}).get('complete') is not True:
+        return False
+    artifacts = metadata.get('artifacts', {})
+    required = {'report', 'log', 'details'}
+    return required <= artifacts.keys() and all(
+        context.artifact(path).is_file()
+        for name, path in artifacts.items() if name != 'process')
+
+
 def publish_results(context, result, summary_text):
     """Export final artifacts from their authoritative process references."""
     artifacts = {'process': 'process/', 'report': 'report.md', 'log': 'run.log', 'details': 'details.zip'}

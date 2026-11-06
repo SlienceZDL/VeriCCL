@@ -1,6 +1,6 @@
 """CLI orchestration; application work starts after snapshots and input validation."""
 from datetime import datetime, timezone
-from dataclasses import replace
+from dataclasses import fields, replace
 import json
 from pathlib import Path
 import sys
@@ -98,6 +98,17 @@ def resume_run(args):
         summary = context.artifact('run-summary.json')
         if summary.is_file():
             result = json.loads(summary.read_text())
+            if context.layout_version >= 2:
+                from vericcl.execution.publication import publication_complete
+                if not publication_complete(context):
+                    context.resumed = True
+                    outcome = RunResult(**{field.name: result[field.name] for field in fields(RunResult)
+                                           if field.name in result})
+                    finalized = finalize_run(context, outcome)
+                    if not finalized.complete:
+                        print('VeriCCL：结果整理待恢复，退出码=%d，目录=%s，原因=%s' %
+                              (finalized.exit_code, context.root, '; '.join(finalized.errors)))
+                        return finalized.exit_code
             print('VeriCCL：该任务已结束；保留原结果。结束原因=%s，目录=%s' % (result['stop_reason'], context.root))
             return int(result['exit_code'])
     inputs = checkpoint_inputs(context, state)

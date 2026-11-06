@@ -166,3 +166,45 @@ def test_resume_reuses_prebaseline_candidates_without_restarting_synthesis(tmp_p
     assert result.contract_met and budgets.consumed['initial'] == initial_usage
     next_attempt = StatisticalLedger(resumed.artifact('statistics/attempts.jsonl'), task_id=resumed.task_id).reserve('fixture-C', 'fixture-D', seed=1)
     assert first.attempt_index == 1 and next_attempt.attempt_index == 2
+
+
+@pytest.mark.parametrize('interruption', ['archive', 'publication_marker', 'missing_exports'])
+def test_finished_resume_completes_publication_without_repeating_work(tmp_path, monkeypatch, interruption):
+    from zipfile import ZipFile
+    from tests.integration.test_primary_lifecycle_v5 import request
+    from vericcl.cli.main import main
+    from vericcl.execution import publication
+    from vericcl.execution.context import finalize_run
+    from vericcl.workflow_v5 import run_primary
+    inputs, context = request(tmp_path)
+    result = run_primary(inputs, context)
+    with monkeypatch.context() as injected:
+        if interruption == 'archive':
+            def fail_archive(_):
+                raise OSError('injected interrupted archive')
+            injected.setattr(publication, '_archive', fail_archive)
+        elif interruption == 'publication_marker':
+            original_update = context.update_metadata
+            def fail_marker(section, value, **kwargs):
+                if section == 'publication' and value.get('complete'):
+                    raise OSError('injected interrupted publication marker')
+                return original_update(section, value, **kwargs)
+            injected.setattr(context, 'update_metadata', fail_marker)
+        finalized = finalize_run(context, result)
+    assert finalized.exit_code == (0 if interruption == 'missing_exports' else 7)
+    if interruption == 'missing_exports':
+        for filename in ('schedule.xml', 'model.json', 'details.zip'):
+            (context.root / filename).unlink()
+    before = json.loads(context.artifact('checkpoints/latest.json').read_text())
+    def unexpected(*args, **kwargs):
+        raise AssertionError('finished resume must not restart synthesis or tuning')
+    monkeypatch.setattr('vericcl.cli.lifecycle.run_primary', unexpected)
+    assert main(['resume', '--run', str(context.root)]) == 0
+    metadata = json.loads((context.root / 'run.json').read_text())
+    assert metadata['publication']['complete'] is True
+    assert metadata['result']['stop_reason'] == result.stop_reason
+    for name in ('schedule.xml', 'schedule.json', 'model.json', 'report.md', 'checkpoint.json'):
+        assert (context.root / name).is_file()
+    with ZipFile(context.root / 'details.zip') as archive:
+        assert 'process/run-summary.json' in archive.namelist()
+    assert json.loads(context.artifact('checkpoints/latest.json').read_text()) == before

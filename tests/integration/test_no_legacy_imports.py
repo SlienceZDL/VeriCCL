@@ -45,7 +45,7 @@ def test_public_workflow_has_no_legacy_package_dependency(tmp_path, monkeypatch)
         common += ['--' + name, str(path)]
     assert main(['solve', *common, '--run-id', 'solve']) == 0
     solve_root = tmp_path / 'examples/no-legacy/output/solve'
-    accepted = json.loads((solve_root / 'best/accepted.json').read_text())['candidate']
+    accepted = json.loads((solve_root / 'run.json').read_text())['best']['candidate']
     assert main(['verify', *common, '--run-id', 'verify', '--xml', str(solve_root / accepted['xml']),
                  '--sidecar', str(solve_root / accepted['sidecar'])]) == 0
     assert not any(
