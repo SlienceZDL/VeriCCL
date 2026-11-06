@@ -20,7 +20,13 @@ static VericclCode execute_until(VericclWorkload* workload,const VericclBuffer* 
     auto stream=static_cast<cudaStream_t>(raw_stream);std::string error;
     try {
       if(!v.ready || !v.comm || !v.gpu_complete || s.request_active || s.guard)throw std::invalid_argument("workload is not ready or an unfinished request is retained");
-      validate_buffers(v.spec.buffers,in.data,in.bytes,out.data,out.bytes);VC_CUDA(cudaSetDevice(s.config.device));
+      validate_buffers(v.spec.buffers,in.data,in.bytes,out.data,out.bytes);
+      // Retain the caller's exact stream before CUDA validation or producer
+      // synchronization can outlive the public wait. close() must inspect
+      // this stream even if no collective has been enqueued yet.
+      s.guard=std::make_unique<BufferGuard>(raw_stream);
+      {std::lock_guard<std::mutex> lock(s.mutex);s.buffers_retained=true;}
+      VC_CUDA(cudaSetDevice(s.config.device));
       for(auto pointer:{std::make_pair(in.data,v.spec.buffers.input_bytes),std::make_pair(out.data,v.spec.buffers.output_bytes)})if(pointer.second){
         cudaPointerAttributes attributes{};VC_CUDA(cudaPointerGetAttributes(&attributes,pointer.first));
         if(attributes.type!=cudaMemoryTypeDevice || attributes.device!=s.config.device)throw std::invalid_argument("buffer is not device memory on this rank's GPU");
@@ -31,7 +37,6 @@ static VericclCode execute_until(VericclWorkload* workload,const VericclBuffer* 
     Json identity={{"request",request},{"attempt",0},{"version",v.spec.version},{"contract",v.spec.contract}};
     auto ready=identity;ready["error"]=error.empty()?Json(nullptr):Json(error);
     unanimous(exchange(s,"REQUEST_PREPARE",ready,prep),{"request","attempt","version","contract"});
-    s.guard=std::make_unique<BufferGuard>(raw_stream);
     {std::lock_guard<std::mutex> lock(s.mutex);s.request_id=request;s.attempt=0;s.request_active=true;s.buffers_retained=true;}
     job.result.preparation_time_us=elapsed_us(begin);
     auto control_start=Clock::now();

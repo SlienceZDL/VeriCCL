@@ -21,10 +21,13 @@ def main():
         '-I' + str(root / 'third_party/nlohmann/include')]
     lease = ProcessLease.after(args.timeout_s, cleanup_reserve_s=3)
     tests = {'contract': [], 'static_schedule': ['schedule_store.cc'], 'operation_wait': [],
-             'control_transport': ['control_transport.cc']}
+             'control_transport': ['control_transport.cc'],
+             'execute_ownership': ['schedule_store.cc', 'control_transport.cc', 'buffer_guard.cc']}
     success = True
     for name, sources in tests.items():
         command = common + [str(root / 'tests/native' / ('test_' + name + '.cc'))]
+        if name == 'execute_ownership':
+            command += ['-I' + str(root / 'tests/native/cpu_device_stubs')]
         command += [str(root / 'runtime/execution' / path) for path in sources]
         command += ['-o', str(cache / name)]
         built = run_owned_process(context, command, lease, cwd=root, job_id='build-' + name)
@@ -35,6 +38,8 @@ def main():
                 descriptor.bind(('127.0.0.1', 0)); arguments = [str(descriptor.getsockname()[1])]
         elif name == 'static_schedule':
             arguments = [str(cache / 'schedule-fixture.xml')]
+        elif name == 'execute_ownership':
+            arguments = [str(cache / 'execute-ownership')]
         else:
             arguments = []
         result = run_owned_process(context, [str(cache / name), *arguments], lease, cwd=root, job_id='test-' + name)
