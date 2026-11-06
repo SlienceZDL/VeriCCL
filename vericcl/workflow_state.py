@@ -52,7 +52,7 @@ def build_budgets(inputs, *, purpose='solve'):
 
 
 def persist_candidate(context, bundle, inputs, *, origin, ordinal=None):
-    name = 'candidates/' + (ordinal or uuid.uuid4().hex)
+    name = context.relative_artifact('candidates/' + (ordinal or uuid.uuid4().hex))
     record = {'record': name + '/candidate.json', 'origin': origin, 'xml_sha256': bundle.xml_sha256, 'can_execute': bundle.can_execute,
         'checks': {key: plain(value) for key, value in bundle.checks.items()},
         'prediction': None if bundle.prediction is None else plain(bundle.prediction),
@@ -66,7 +66,7 @@ def persist_candidate(context, bundle, inputs, *, origin, ordinal=None):
 
 
 def save_checkpoint(context, inputs, budgets, model, bundle, *, phase, search=None, bundle_record=None, extra=None):
-    prefix = 'checkpoints/' + uuid.uuid4().hex
+    prefix = context.relative_artifact('checkpoints/' + uuid.uuid4().hex)
     files, checksums = {}, {}
     for name, document in inputs.request_config.items():
         if name in {'topology', 'sketch', 'atom', 'runtime'}:
@@ -83,7 +83,7 @@ def save_checkpoint(context, inputs, budgets, model, bundle, *, phase, search=No
                 checksums[bundle_record[name]] = hashlib.sha256(context.artifact(bundle_record[name]).read_bytes()).hexdigest()
     initial_version = (extra or {}).get('initial_model_version')
     if initial_version:
-        initial_relative = 'models/' + initial_version + '.json'
+        initial_relative = context.relative_artifact('models/' + initial_version + '.json')
         checksums[initial_relative] = hashlib.sha256(context.artifact(initial_relative).read_bytes()).hexdigest()
     trace_reference = (extra or {}).get('best_trace')
     if trace_reference is not None:

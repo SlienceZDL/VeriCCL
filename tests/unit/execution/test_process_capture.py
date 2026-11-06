@@ -65,7 +65,7 @@ def test_capped_output_is_drained_and_truncation_is_reported(tmp_path):
     assert result.status == "completed"
     assert result.stdout_path.stat().st_size <= 100
     assert result.stdout_bytes == 100000 and result.stdout_truncated
-    events = [json.loads(line) for line in (context.root / "events.jsonl").read_text().splitlines()]
+    events = [json.loads(line) for line in (context.artifact("events.jsonl")).read_text().splitlines()]
     assert any(e["kind"] == "output_truncated" for e in events)
 
 

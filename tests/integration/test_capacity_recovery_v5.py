@@ -52,16 +52,16 @@ def test_public_verify_tune_recovers_capacity_before_first_adoption(tmp_path, me
     result = run_primary(PrimaryRequest(inputs, purpose='verify', xml_text=invalid.xml_text,
         sidecar=invalid.sidecar, tune=True), run)
     assert result.contract_met, result
-    accepted = json.loads((run.root / 'best/accepted.json').read_text())
+    accepted = json.loads((run.artifact('best/accepted.json')).read_text())
     record = accepted['candidate']
     assert record['effective_config']['sketch']['hyperparameters']['slice_size_bytes'] > 1024
     assert record['effective_config']['sketch']['hyperparameters']['total_size_bytes'] == 4096
-    latest = json.loads((run.root / 'checkpoints/latest.json').read_text())
+    latest = json.loads((run.artifact('checkpoints/latest.json')).read_text())
     checkpoint = json.loads((run.root / latest['state']).read_text())
     assert checkpoint['budgets']['started_rounds'] == 1
     assert checkpoint['budgets']['consumed']['repair'] > 0
     assert checkpoint['budgets']['elapsed_wall_s'] < 30
-    events = read_events(run.root / 'events.jsonl').events
+    events = read_events(run.artifact('events.jsonl')).events
     assert any(event['kind'] == 'capacity_recovery_finished' and event['data']['recovered'] for event in events)
     assert not run.active_jobs
 
@@ -72,9 +72,9 @@ def test_capacity_recovery_respects_zero_tuning_rounds(tmp_path):
     result = run_primary(PrimaryRequest(inputs, purpose='verify', xml_text=invalid.xml_text,
         sidecar=invalid.sidecar, tune=True), run)
     assert not result.contract_met
-    assert not (run.root / 'best/accepted.json').exists()
+    assert not (run.artifact('best/accepted.json')).exists()
     assert not any(event['kind'] == 'capacity_recovery_started'
-                   for event in read_events(run.root / 'events.jsonl').events)
+                   for event in read_events(run.artifact('events.jsonl')).events)
 
 
 def test_capacity_recovery_does_not_accept_an_invalid_xml_identity(tmp_path):
@@ -83,9 +83,9 @@ def test_capacity_recovery_does_not_accept_an_invalid_xml_identity(tmp_path):
     result = run_primary(PrimaryRequest(inputs, purpose='verify', xml_text=invalid.xml_text + '\n',
         sidecar=invalid.sidecar, tune=True), run)
     assert not result.contract_met
-    assert not (run.root / 'best/accepted.json').exists()
+    assert not (run.artifact('best/accepted.json')).exists()
     assert not any(event['kind'] == 'capacity_recovery_started'
-                   for event in read_events(run.root / 'events.jsonl').events)
+                   for event in read_events(run.artifact('events.jsonl')).events)
 
 
 def recovery_workflow(tmp_path):

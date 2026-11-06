@@ -26,10 +26,10 @@ def test_native_solver_result_survives_fresh_child_and_parent_remains_reusable(t
     model.setObjective(x)
     run, result = solve_owned(tmp_path, model)
     assert result.numerical_optimal and model.getVal(x) == 3
-    identity = json.loads(next((run.root / 'jobs').glob('scip-*/identity.json')).read_text())
+    identity = json.loads(next((run.artifact('jobs')).glob('scip-*/identity.json')).read_text())
     assert identity['pid'] == identity['pgid'] and identity['pid'] != os.getpid()
     assert not run.active_jobs
-    assert next((run.root / 'tmp').glob('scip-*/model.cip')).is_file()
+    assert next((run.artifact('tmp')).glob('scip-*/model.cip')).is_file()
     model.freeProb()
 
 

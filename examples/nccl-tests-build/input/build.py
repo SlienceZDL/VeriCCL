@@ -85,7 +85,7 @@ def main():
         results.append({'name': name, **result.as_json()})
         if result.status != 'completed' or not result.cleanup_complete:
             raise RuntimeError(name + ' failed; see jobs/' + name)
-        return (context.root / 'jobs' / name / 'stdout.log').read_text()
+        return context.artifact('jobs/' + name + '/stdout.log').read_text()
 
     try:
         source_repository = str(args.source_repository.resolve()) if args.source_repository else 'https://github.com/NVIDIA/nccl-tests.git'

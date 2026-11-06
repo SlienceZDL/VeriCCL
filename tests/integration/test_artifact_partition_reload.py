@@ -6,6 +6,7 @@ import pytest
 from tests.unit.input.v5_support import request_documents, write_request
 from vericcl.cli.main import main
 from vericcl.execution.budget import StandaloneLease
+from vericcl.execution.layout import artifact_path, read_run_section
 from vericcl.input.loader import load_request
 from vericcl.performance.initial import initial_cost_model
 from vericcl.planner.parameters import initial_parameter_domain, resolve_parameters
@@ -48,14 +49,14 @@ def test_public_verify_loads_selected_slice_without_rewriting_original_identity(
     original, args, _ = artifact(tmp_path, original_slice)
     assert main(args) == 0
     run = tmp_path / 'examples/reloaded/output/r'
-    accepted = json.loads((run / 'best/accepted.json').read_text())['candidate']
+    accepted = json.loads(artifact_path(run, 'best/accepted.json').read_text())['candidate']
     assert accepted['input_sha256'] == original.input_sha256
     assert accepted['effective_config']['sketch']['hyperparameters']['slice_size_bytes'] == 2048
     assert accepted['effective_config']['sketch']['solver']['max_channels'] == 2
-    request = json.loads((run / 'effective-request.json').read_text())
+    request = read_run_section(run, 'effective-request.json')
     assert request['sketch']['hyperparameters']['slice_size_bytes'] == original_slice
     assert all(check['status'] == 'valid' for check in accepted['checks'].values())
-    latest = json.loads((run / 'checkpoints/latest.json').read_text())
+    latest = json.loads(artifact_path(run, 'checkpoints/latest.json').read_text())
     checkpoint = json.loads((run / latest['state']).read_text())
     assert checkpoint['input_sha256'] == original.input_sha256
     restored_sketch = json.loads((run / checkpoint['files']['sketch']).read_text())
@@ -70,10 +71,10 @@ def test_public_verify_rejects_illegal_artifact_partition(tmp_path, slice_bytes)
     path.write_text(json.dumps(sidecar))
     assert main(args) == 6
     run = tmp_path / 'examples/reloaded/output/r'
-    assert not (run / 'best/accepted.json').exists()
-    summary = json.loads((run / 'run-summary.json').read_text())
+    assert not artifact_path(run, 'best/accepted.json').exists()
+    summary = json.loads(artifact_path(run, 'run-summary.json').read_text())
     assert summary['failure_category'] == 'invalid'
-    records = [json.loads(p.read_text()) for p in (run / 'candidates').glob('*/candidate.json')]
+    records = [json.loads(p.read_text()) for p in artifact_path(run, 'candidates').glob('*/candidate.json')]
     assert len(records) == 1 and records[0]['checks']['xml']['status'] == 'invalid'
 
 
@@ -92,10 +93,10 @@ def test_public_verify_keeps_original_identity_when_binding_slice(tmp_path, chan
     path.write_text(json.dumps(data))
     assert main(args) == 6
     run = tmp_path / 'examples/reloaded/output/r'
-    assert not (run / 'best/accepted.json').exists()
-    summary = json.loads((run / 'run-summary.json').read_text())
+    assert not artifact_path(run, 'best/accepted.json').exists()
+    summary = json.loads(artifact_path(run, 'run-summary.json').read_text())
     assert summary['failure_category'] == 'invalid'
-    records = [json.loads(p.read_text()) for p in (run / 'candidates').glob('*/candidate.json')]
+    records = [json.loads(p.read_text()) for p in artifact_path(run, 'candidates').glob('*/candidate.json')]
     assert len(records) == 1 and records[0]['checks']['xml']['status'] == 'invalid'
 
 
@@ -105,7 +106,7 @@ def test_public_verify_does_not_rebind_other_external_contract_fields(tmp_path):
     sidecar['request_contract']['root'] = 1
     path.write_text(json.dumps(sidecar))
     assert main(args) != 0
-    assert not (tmp_path / 'examples/reloaded/output/r/best/accepted.json').exists()
+    assert not (tmp_path / 'examples/reloaded/output/r/process/best/accepted.json').exists()
 
 
 def test_public_verify_rechecks_original_byte_ban_after_binding_larger_slice(tmp_path):
@@ -124,8 +125,8 @@ def test_public_verify_rechecks_original_byte_ban_after_binding_larger_slice(tmp
     path.write_text(json.dumps(sidecar))
     assert main(args) != 0
     run = tmp_path / 'examples/reloaded/output/r'
-    assert not (run / 'best/accepted.json').exists()
-    records = [json.loads(p.read_text()) for p in (run / 'candidates').glob('*/candidate.json')]
+    assert not artifact_path(run, 'best/accepted.json').exists()
+    records = [json.loads(p.read_text()) for p in artifact_path(run, 'candidates').glob('*/candidate.json')]
     assert len(records) == 1
     assert records[0]['checks']['xml']['status'] == 'valid'
     assert records[0]['checks']['semantic']['status'] == 'invalid'

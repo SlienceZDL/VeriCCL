@@ -16,7 +16,8 @@ def test_run_layout_refuses_to_reuse_a_nonempty_run(tmp_path):
     assert context.root == tmp_path / "examples/demo/output/run-1"
     expected = {"input_snapshot", "models", "candidates", "jobs", "live",
                 "statistics", "checkpoints", "reports", "best", "tmp", "rebuildable-cache"}
-    assert expected <= {p.name for p in context.root.iterdir()}
+    assert {p.name for p in context.root.iterdir() if p.is_dir()} == {'process'}
+    assert expected <= {p.name for p in (context.root / 'process').iterdir()}
     with pytest.raises(FileExistsError):
         RunContext.create(tmp_path, "demo", "run-1")
 
@@ -40,7 +41,7 @@ def test_case_and_artifact_symlinks_cannot_escape_the_project(tmp_path):
     with pytest.raises(ValueError, match="boundary"):
         RunContext.create(project, "bad", "r")
     context = RunContext.create(project, "good", "r")
-    (context.root / "models/escape").symlink_to(outside, target_is_directory=True)
+    (context.artifact("models/escape")).symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="boundary"):
         context.write_json("models/escape/model.json", {"alpha_us": 1})
     assert not list(outside.iterdir())
@@ -52,7 +53,7 @@ def test_snapshot_is_immutable_and_not_a_link_to_the_original(tmp_path):
     source.write_bytes(original)
     context = make_context(tmp_path, input_files={"request.json": source})
     source.write_text("changed")
-    assert (context.root / "input_snapshot/request.json").read_bytes() == original
+    assert (context.artifact("input_snapshot/request.json")).read_bytes() == original
     with pytest.raises(FileExistsError):
         context.write_json("input_snapshot/request.json", {"size_bytes": 1})
     with pytest.raises(ValueError, match="immutable"):
@@ -63,7 +64,7 @@ def test_a_user_input_named_manifest_is_preserved(tmp_path):
     source = tmp_path / "manifest.json"
     source.write_text('{"topologies": ["t1"]}')
     context = make_context(tmp_path, input_files={"manifest.json": source})
-    assert (context.root / "input_snapshot/manifest.json").read_bytes() == source.read_bytes()
+    assert (context.artifact("input_snapshot/manifest.json")).read_bytes() == source.read_bytes()
 
 
 def test_secrets_and_unknown_environment_are_not_persisted(tmp_path):
@@ -78,7 +79,7 @@ def test_secrets_and_unknown_environment_are_not_persisted(tmp_path):
     assert "another-private-value" not in text
     assert "hidden" not in text
     assert '"CUDA_VISIBLE_DEVICES": "0"' in text
-    assert read_events(context.root / "events.jsonl").events[-1]["kind"] == "diagnostic"
+    assert read_events(context.artifact("events.jsonl")).events[-1]["kind"] == "diagnostic"
 
 
 def test_secret_in_a_snapshot_is_rejected_before_copying(tmp_path):
@@ -93,13 +94,13 @@ def test_truncated_event_tail_does_not_invent_a_completed_run(tmp_path):
     from vericcl.execution.events import emit_event, read_events
     context = make_context(tmp_path)
     emit_event(context, "candidate_started", {"candidate_id": "c1"}, rank=2)
-    path = context.root / "rank-2.events.jsonl"
+    path = context.artifact("rank-2.events.jsonl")
     with path.open("ab") as stream:
         stream.write(b'{"kind":"finished"')
     scanned = read_events(path)
     assert scanned.truncated_tail
     assert [event["kind"] for event in scanned.events] == ["candidate_started"]
-    assert not (context.root / "run-summary.json").exists()
+    assert not (context.artifact("run-summary.json")).exists()
 
 
 def test_failed_candidate_evidence_survives_finalization_and_cache_cleanup(tmp_path):
@@ -114,13 +115,13 @@ def test_failed_candidate_evidence_survives_finalization_and_cache_cleanup(tmp_p
                           acceptance="accepted", stop_reason="max_rounds",
                           proof_scope=None, optional_failures=("shared_probe",)))
     assert result.exit_code == 0 and result.complete
-    summary = json.loads((context.root / "run-summary.json").read_text())
+    summary = json.loads((context.artifact("run-summary.json")).read_text())
     assert summary["model_coverage"] == "partial"
     assert summary["proof_scope"] is None
     assert summary["optional_failures"] == ["shared_probe"]
-    assert (context.root / "candidates/rejected/checks.json").is_file()
-    assert not (context.root / "tmp/transient.json").exists()
-    assert "max_rounds" in (context.root / "reports/summary.md").read_text()
+    assert (context.artifact("candidates/rejected/checks.json")).is_file()
+    assert not (context.artifact("tmp/transient.json")).exists()
+    assert "max_rounds" in (context.artifact("reports/summary.md")).read_text()
 
 
 def test_required_storage_failure_blocks_new_unrecorded_processes(tmp_path, monkeypatch):
@@ -152,7 +153,7 @@ def test_native_events_use_the_same_rank_and_task_identity(tmp_path):
     from vericcl.execution.events import emit_native_event, read_events
     context = make_context(tmp_path)
     emit_native_event(context, b'{"schema_version":1,"kind":"gpu_completed","data":{"request_id":"r1"}}', rank=0)
-    event = read_events(context.root / "rank-0.events.jsonl").events[0]
+    event = read_events(context.artifact("rank-0.events.jsonl")).events[0]
     assert event["task_id"] == context.task_id and event["rank"] == 0
     with pytest.raises(ValueError):
         emit_native_event(context, b'{"schema_version":1,"kind":"x","task_id":"forged"}', rank=0)
@@ -177,4 +178,4 @@ def test_finalization_reports_disk_failure_without_a_success_exit(tmp_path, monk
     monkeypatch.setattr("vericcl.execution.context.atomic_write_bytes", disk_full)
     result = finalize_run(context, RunResult(True, "completed"))
     assert result.exit_code == 7 and not result.complete
-    assert not (context.root / "run-summary.json").exists()
+    assert not (context.artifact("run-summary.json")).exists()

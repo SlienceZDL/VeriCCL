@@ -8,6 +8,7 @@ from tools.generate_examples import example_cases, write_documents
 from vericcl.cli.main import main as cli
 from vericcl.execution.context import RunContext, finalize_run
 from vericcl.execution.status import RunResult
+from vericcl.execution.layout import artifact_path
 
 
 def main(argv=None):
@@ -42,11 +43,11 @@ def main(argv=None):
                   'expected': 'both commands return 0 and required checks pass', 'gpu_execution': False}
         if solved == 0:
             run = context.root.parent / run_id
-            candidate = json.loads((run / 'best/accepted.json').read_text())['candidate']
+            candidate = json.loads(artifact_path(run, 'best/accepted.json').read_text())['candidate']
             verify = ['verify', *common, '--run-id', run_id + '-check', '--xml', str(run / candidate['xml']),
                       '--sidecar', str(run / candidate['sidecar'])]
             record.update(verify_argv=verify, verify_exit=cli(verify), candidate=candidate,
-                          summary=json.loads((run / 'run-summary.json').read_text()))
+                          summary=json.loads(artifact_path(run, 'run-summary.json').read_text()))
         records.append(record)
         context.write_json('reports/cases.json', records, replace=True)
     success = all(record['solve_exit'] == record['verify_exit'] == 0 for record in records)

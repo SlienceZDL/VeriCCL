@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+from vericcl.execution.layout import artifact_path
 import os
 from pathlib import Path
 import sys
@@ -76,10 +77,10 @@ def main(argv=None):
             common += ['--' + name, example / (name + '.json')]
         run('solve', [environment / 'bin/vericcl', 'solve', *common, '--run-id', 'solve'], seconds=45)
         output = cache / 'project/examples/installed-example/output/solve'
-        record = json.loads((output / 'best/accepted.json').read_text())['candidate']
+        record = json.loads(artifact_path(output, 'best/accepted.json').read_text())['candidate']
         run('verify', [environment / 'bin/vericcl', 'verify', *common, '--run-id', 'verify',
                        '--xml', output / record['xml'], '--sidecar', output / record['sidecar']], seconds=30)
-        context.write_json('reports/installed-solve.json', {'summary': json.loads((output / 'run-summary.json').read_text()),
+        context.write_json('reports/installed-solve.json', {'summary': json.loads(artifact_path(output, 'run-summary.json').read_text()),
             'candidate': record, 'wheel_sha256': hashlib.sha256(wheel.read_bytes()).hexdigest()})
         success = True
     except Exception as failure:

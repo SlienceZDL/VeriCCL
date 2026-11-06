@@ -75,5 +75,5 @@ def test_log_failure_after_timeout_keeps_failure_and_incumbent_evidence(tmp_path
     monkeypatch.setattr(context, 'write_json', fail_summary)
     result = finalize_run(context, RunResult(False, 'incomplete', stop_reason='time_limit', failure_category='offline'))
     assert not result.complete and result.exit_code == 7
-    assert json.loads((context.root / 'best/accepted.json').read_text())['xml_sha256'] == 'already-accepted'
-    assert json.loads((context.root / 'jobs/timed-out/result.json').read_text())['cleanup_complete'] is False
+    assert json.loads((context.artifact('best/accepted.json')).read_text())['xml_sha256'] == 'already-accepted'
+    assert json.loads((context.artifact('jobs/timed-out/result.json')).read_text())['cleanup_complete'] is False

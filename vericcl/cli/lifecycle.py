@@ -77,11 +77,12 @@ def new_run(args):
 
 
 def inspect_run(args):
+    from vericcl.execution.layout import artifact_path
     root = args.run.resolve()
     metadata = json.loads((root / 'run.json').read_text())
     result = {'run': str(root), 'task_id': metadata['task_id']}
     for name, relative in (('summary', 'run-summary.json'), ('best', 'best/accepted.json'), ('checkpoint', 'checkpoints/latest.json')):
-        path = root / relative
+        path = artifact_path(root, relative)
         if path.exists():
             if not path.resolve().is_relative_to(root):
                 raise InputValidationError('inspect artifact escapes run boundary')

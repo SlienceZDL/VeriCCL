@@ -41,6 +41,30 @@ def test_checkpoint_restores_task_event_sequence_budget_and_complete_artifacts(t
         restore_checkpoint(run.root)
 
 
+def test_legacy_layout_checkpoint_retains_identity_and_budget_on_restore(tmp_path):
+    from vericcl.workflow_state import save_checkpoint, restore_checkpoint, build_budgets
+    from vericcl.execution.security import Redactor
+    candidate, lowering = candidate_fixture(tmp_path, 'broadcast')
+    bundle = lower_and_check(candidate, lowering)
+    current = RunContext.create(tmp_path, 'legacy', 'r')
+    for child in (current.root / 'process').iterdir():
+        child.rename(current.root / child.name)
+    (current.root / 'process').rmdir()
+    metadata = json.loads((current.root / 'run.json').read_text())
+    metadata['schema_version'] = 1
+    (current.root / 'run.json').write_text(json.dumps(metadata))
+    legacy = RunContext(current.root, task_id=current.task_id, run_id=current.run_id, redactor=Redactor())
+    legacy.sequence = current.sequence
+    budgets = build_budgets(lowering.inputs)
+    budgets.restore_usage({'initial': 1}, started_rounds=1, elapsed_wall_s=2)
+    save_checkpoint(legacy, lowering.inputs, budgets, lowering.model, bundle, phase='tuning')
+    restored, state, budget = restore_checkpoint(legacy.root)
+    assert restored.layout_version == 1
+    assert not state['bundle']['xml'].startswith('process/')
+    assert budget.started_rounds == 1 and budget.consumed['initial'] == 1
+    assert restored.task_id == legacy.task_id
+
+
 def test_history_matches_relative_bandwidth_and_adapts_integer_partition(tmp_path):
     from vericcl.solver.history_index import save_schedule, find_schedules, adapt_schedule
     from vericcl.planner.parameters import initial_parameter_domain, resolve_parameters

@@ -282,7 +282,7 @@ class PrimaryWorkflow:
                                 trace_status=trace.status, trace_issues=list(trace.issues))
                 self.context.write_json('reports/trace-' + uuid.uuid4().hex + '.json', plain(trace))
                 causal = analyze_trace_causality(new, trace, lease=lease)
-                relative = 'reports/trace-causality-' + (trace.capture_id or uuid.uuid4().hex) + '.json'
+                relative = self.context.relative_artifact('reports/trace-causality-' + (trace.capture_id or uuid.uuid4().hex) + '.json')
                 path = self.context.write_json(relative, causal)
                 evidence['trace_causality'] = {'path': relative, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                     'xml_sha256': new.xml_sha256, 'capture_id': trace.capture_id}
@@ -763,7 +763,7 @@ class PrimaryWorkflow:
             save_schedule(path, self.best, self.best_inputs)
         self.context.write_json('reports/timing.json', self.budgets.snapshot() | {
             't_pred_us': self.best.prediction.t_pred_us, 'model_version': self.model.version,
-            'measurement_ledger': 'statistics/attempts.jsonl' if self.original.request_config['sketch']['trace_and_measure']['enabled'] else None}, replace=True)
+            'measurement_ledger': self.context.relative_artifact('statistics/attempts.jsonl') if self.original.request_config['sketch']['trace_and_measure']['enabled'] else None}, replace=True)
         return RunResult(True, 'completed', checks={key: value.status.value for key, value in self.best.checks.items()
                         if key != 'compatibility' or value.status.value != 'not_run'},
             model_coverage=self.best.prediction.model_coverage, acceptance='accepted', stop_reason=stop,
