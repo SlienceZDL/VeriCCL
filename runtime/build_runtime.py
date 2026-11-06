@@ -9,11 +9,12 @@ import math
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 
 from vericcl.artifacts.distribution import verify_source_manifest
-from vericcl.execution.context import DIRECTORIES, RunContext, finalize_run
+from vericcl.execution.context import RunContext, finalize_run
 from vericcl.execution.events import emit_event
 from vericcl.execution.processes import ProcessLease, run_owned_process
 from vericcl.execution.security import Redactor
@@ -54,19 +55,10 @@ def prepare_runtime(project_root: Path, destination: Path) -> Path:
 
 
 def _compile(source: Path, output: Path, cuda: Path, arch: int,
-             jobs: int, timeout: float) -> dict:
+             jobs: int, timeout: float, context: RunContext) -> dict:
     command = ["make", "-C", str(source), "-j", str(jobs), "src.build",
                "BUILDDIR=" + str(output / "build"), "CUDA_HOME=" + str(cuda),
                "NVCC_GENCODE=-gencode=arch=compute_{0},code=sm_{0}".format(arch)]
-    # main() created this new output directory exclusively before preparation.
-    # Reusing a previous build is rejected by the same immutable evidence files.
-    context = RunContext(output.resolve(), task_id=uuid.uuid4().hex,
-                         run_id=output.name, redactor=Redactor())
-    for name in DIRECTORIES:
-        context.artifact(name).mkdir()
-    context.write_json("run.json", {"task_id": context.task_id, "run_id": context.run_id,
-                                   "kind": "runtime_build", "source_dir": str(source)})
-    emit_event(context, "run_started")
     result = run_owned_process(context, command,
                                ProcessLease.after(timeout, cleanup_reserve_s=min(5.0, timeout / 5)),
                                cwd=source, job_id="compile")
@@ -74,11 +66,6 @@ def _compile(source: Path, output: Path, cuda: Path, arch: int,
     report.update(compiled=result.status == "completed" and result.cleanup_complete,
                   argv=command, source_dir=str(source), build_dir=str(output / "build"),
                   budget_overrun_s=max(0.0, result.elapsed_s - timeout))
-    finalized = finalize_run(context, RunResult(report["compiled"],
-                            "completed" if report["compiled"] else "failed",
-                            stop_reason=result.status,
-                            failure_category=None if report["compiled"] else "backend"))
-    report["evidence_complete"] = finalized.complete
     return report
 
 
@@ -105,21 +92,26 @@ def main(argv: list[str] | None = None) -> int:
         if args.timeout_s is None or not math.isfinite(args.timeout_s) or args.timeout_s <= 0:
             parser.error("a finite positive build timeout is required")
     output.mkdir(parents=True)
+    context = RunContext(output, task_id=uuid.uuid4().hex, run_id=output.name, redactor=Redactor(), version=2)
+    context.initialize_directories()
+    context.write_json('run.json', {'kind': 'runtime_build'})
+    context.write_json('invocation.json', {'command': 'build_runtime', 'argv': [sys.executable, __file__, *(argv or sys.argv[1:])]})
+    emit_event(context, 'run_started')
     try:
-        source = prepare_runtime(root, output / "source")
+        source = prepare_runtime(root, context.artifact('rebuildable-cache/source'))
         if args.prepare_only:
             report = {"status": "prepared", "compiled": False, "source_dir": str(source)}
         else:
             report = _compile(source, output, args.cuda_home.resolve(),
-                              args.arch, args.jobs, args.timeout_s)
-        (output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
-        print(json.dumps(report))
-        return 0 if report["status"] in {"prepared", "completed"} else 1
+                              args.arch, args.jobs, args.timeout_s, context)
     except (OSError, ValueError, RuntimeError) as error:
         report = {"status": "failed", "compiled": False, "error": str(error)}
-        (output / "result.json").write_text(json.dumps(report, indent=2) + "\n")
-        print(json.dumps(report))
-        return 1
+    context.write_json('result.json', report)
+    success = report['status'] == 'prepared' or bool(report.get('compiled'))
+    finalized = finalize_run(context, RunResult(success, 'completed' if success else 'failed',
+        stop_reason=report['status'], failure_category=None if success else 'backend'))
+    print(json.dumps(report | {'evidence_complete': finalized.complete}))
+    return finalized.exit_code
 
 
 if __name__ == "__main__":

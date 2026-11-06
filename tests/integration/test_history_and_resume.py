@@ -65,6 +65,41 @@ def test_legacy_layout_checkpoint_retains_identity_and_budget_on_restore(tmp_pat
     assert restored.task_id == legacy.task_id
 
 
+def test_public_resume_preserves_original_identity_during_disabled_live_migration(tmp_path, monkeypatch):
+    from vericcl.cli.main import main
+    from vericcl.input.json_codec import sha256_json
+    from vericcl.input.schema import _freeze
+    from vericcl.workflow_state import save_checkpoint, build_budgets, plain
+    from vericcl.verification.online.model_publication import model_json
+    from vericcl.workflow_v5 import PrimaryWorkflow
+    seen = []
+    original_init = PrimaryWorkflow.__init__
+    def capture(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        seen.append(self.original.input_sha256)
+    monkeypatch.setattr(PrimaryWorkflow, '__init__', capture)
+    candidate, lowering = candidate_fixture(tmp_path, 'broadcast')
+    config = plain(lowering.inputs.request_config)
+    config['sketch']['live'] = {'enabled': False}
+    config['sketch']['budgets']['max_tuning_rounds'] = 0
+    identity = sha256_json(config)
+    inputs = replace(lowering.inputs, input_sha256=identity, request_config=_freeze(config))
+    bundle = lower_and_check(candidate, replace(lowering, inputs=inputs))
+    assert bundle.can_execute
+    run = RunContext.create(tmp_path, 'migrated', 'r')
+    run.write_json('models/' + lowering.model.version + '.json', model_json(lowering.model))
+    save_checkpoint(run, inputs, build_budgets(inputs), lowering.model, bundle, phase='tuning',
+        extra={'original_config': config, 'purpose': 'solve', 'tune': False,
+               'initial_model_version': lowering.model.version})
+    assert main(['resume', '--run', str(run.root)]) == 0
+    assert seen == [identity]
+    latest = json.loads(run.artifact('checkpoints/latest.json').read_text())
+    state = json.loads(run.artifact(latest['state']).read_text())
+    assert state['input_sha256'] == identity
+    assert 'live' not in state['extra']['original_config']['sketch']
+    assert state['bundle']['input_sha256'] == identity
+
+
 def test_history_matches_relative_bandwidth_and_adapts_integer_partition(tmp_path):
     from vericcl.solver.history_index import save_schedule, find_schedules, adapt_schedule
     from vericcl.planner.parameters import initial_parameter_domain, resolve_parameters

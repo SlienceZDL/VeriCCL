@@ -2,13 +2,15 @@
 
 此表由 `vericcl/input/schema.py` 生成。四份 JSON 都拒绝重复键、未知字段和非有限数；原文件不会被覆盖。省略或 null 表示未指定：有默认值时补入默认，无默认但本次启用功能需要的字段报错。字段在新旧位置重复出现时，即使值相同也报错。
 
-M 必须是 S 的整数倍，S 必须包含完整的数据类型元素；AllToAll/ReduceScatter 的 N=M/S 还须能被 rank 数整除。禁止直接输入 N 或 input_chunkup。不适用算子的 root/reduction_op 使用省略或 null。
+M/S 必须整除，S 必须包含完整的数据类型元素；AllToAll/ReduceScatter 的 N=M/S 还须能被 rank 数整除。禁止直接输入 N 或 input_chunkup。不适用算子的 root/reduction_op 可以省略或 null，不能提供实际值。
 
-命令行 `--set 路径=JSON` 可以补入未指定值。覆盖已有不同值须加 `--override-input`。原文件保存在 `input_snapshot`，最终有效配置和来源分别写入 `effective-request.json`、`value-sources.json`。配置字段不读取 shell 占位符，请在写 JSON 时使用实际绝对路径。
+命令行 `--set 路径=JSON` 可以补入未指定值。覆盖已有不同值须加 `--override-input`。原文件保存在 `process/input_snapshot/`，最终有效配置与来源写入 `run.json` 的 `effective_request`、`value_sources`。配置字段不读取 shell 占位符，请在写 JSON 时使用实际绝对路径。
 
-solve/live 必须给初始合成预算和最大轮数；轮数大于 0 时还须给修复预算。所有处理入口需要单模型/CPU、离线每轮/累计及清理预算。校准启用或使用 calibrate 时，需要在线预算、拟合误差和单任务期限；trace/实测启用时还需要 trace 容量和任务期限。历史复用各自要求索引及对应容差/年龄。live 要求全部七个阶段期限和控制端点。运行时数值检查使用显式绝对/相对容差。
+solve 必须给初始合成预算和最大轮数；轮数大于 0 时还须给修复预算。所有处理入口需要单模型/CPU、离线每轮/累计及清理预算。校准启用或使用 calibrate 时，需要在线预算、拟合误差和单任务期限；trace/实测启用时还需要 trace 容量和任务期限。历史复用各自要求索引及对应容差/年龄。运行时数值检查使用显式绝对/相对容差。
 
 JSON Schema 描述标准结构；跨字段算术、启用条件、重复键和明确的旧写法迁移由 load_request 检查。算子名称忽略大小写；兼容别名为 all_gather、all_reduce、all_to_all、reducescatter。旧 hyperparameters 中明确列出的 solver 参数可迁移；atom 顶层的 symmetry、shortest_paths、batching、objective_mode 可迁移。旧 total_solve_timeout_s 仅迁移为初始合成预算。force_resolve、force_recalibrate 及旧算法布尔开关已删除。
+
+手工节点的 `atoms` 只指定 slice、源 rank、目标 rank 集合，阶段号取节点的 `stage_id`；展开后的每条约束只限制一个有向边。手工模式关闭时，节点与变量组不参与自动合成。
 
 下面的 object/array 行描述所属配置段，后续行描述其成员。array 中的 [] 表示每一个元素。更多运行方式见 [README](../README.md)，证据范围见 [适用边界](supported-configuration.md)。
 
@@ -126,26 +128,6 @@ JSON Schema 描述标准结构；跨字段算术、启用条件、重复键和�
 | `sketch.history.calibration_max_age_s` | number | `未指定` | 按启用条件检查；>0 | 校准缓存的最大年龄。 |
 | `sketch.history.schedule_index` | string | `未指定` | 按启用条件检查；— | 历史调度索引路径；相对路径从案例目录解析。 |
 | `sketch.history.calibration_index` | string | `未指定` | 按启用条件检查；— | 校准索引路径；相对路径从案例目录解析。 |
-| `sketch.live` | object | `{}` | 可省略或 null；— | 辅助常驻在线模式，主离线闭环不依赖其开启。 |
-| `sketch.live.enabled` | boolean | `false` | 可省略或 null；— | 启用本配置段的功能。 |
-| `sketch.live.request_prepare_timeout_s` | number | `未指定` | 按启用条件检查；>0 | 请求准备和原输入保护期限。 |
-| `sketch.live.execution_attempt_timeout_s` | number | `未指定` | 按启用条件检查；>0 | 每次 GPU 尝试期限。 |
-| `sketch.live.background_tuning_task_timeout_s` | number | `未指定` | 按启用条件检查；>0 | 一次后台调优任务期限。 |
-| `sketch.live.version_prepare_timeout_s` | number | `未指定` | 按启用条件检查；>0 | 新版本准备期限。 |
-| `sketch.live.control_phase_timeout_s` | number | `未指定` | 按启用条件检查；>0 | 一个控制阶段的期限。 |
-| `sketch.live.recovery_timeout_s` | number | `未指定` | 按启用条件检查；>0 | 整个失败恢复过程的固定总期限。 |
-| `sketch.live.close_cleanup_timeout_s` | number | `未指定` | 按启用条件检查；>0 | 关闭、后台结束和资源回收的共同期限。 |
-| `sketch.live.window_requests` | integer | `8` | 可省略或 null；≥1，≤9223372036854775807 | 一个合格遥测窗口的请求数。 |
-| `sketch.live.consecutive_windows` | integer | `2` | 可省略或 null；≥1，≤9223372036854775807 | 触发前要求连续同方向变化的窗口数。 |
-| `sketch.live.relative_change_threshold` | number | `0.1` | 可省略或 null；>0，≤0.99 | 相对基线的变化阈值。 |
-| `sketch.live.baseline_max_cv` | number | `0.05` | 可省略或 null；≥0，≤0.05 | 建立基线所需稳定性上限。 |
-| `sketch.live.min_residence_requests` | integer | `32` | 可省略或 null；≥0，≤9223372036854775807 | 采用版本后，普通更新前至少保留的成功请求数。 |
-| `sketch.live.max_retries` | integer | `2` | 可省略或 null；≥0，≤4294967295 | 失败后允许的额外完整请求重试次数；默认 2。 |
-| `sketch.live.external_telemetry_path` | string | `未指定` | 按启用条件检查；— | 调用者维护的带内遥测 JSONL 文件路径。 |
-| `sketch.live.external_max_age_s` | number | `60` | 可省略或 null；>0 | 接受外部遥测的最大年龄。 |
-| `sketch.live.fault_injection` | object | `{}` | 可省略或 null；— | 仅显式启用的开发故障注入。 |
-| `sketch.live.fault_injection.request_id` | integer | `0` | 可省略或 null；≥0，≤9223372036854775807 | 需要注入失败的逻辑请求号；0 关闭。 |
-| `sketch.live.fault_injection.attempts` | integer | `0` | 可省略或 null；≥0，≤4294967295 | 该请求前多少次尝试在实际完成后被标记失败。 |
 
 ## atom.json
 
@@ -170,7 +152,11 @@ JSON Schema 描述标准结构；跨字段算术、启用条件、重复键和�
 | `atom.manual.nodes[].operator` | string | `未指定` | 必填；broadcast / reduce / scatter / gather / allgather / allreduce / alltoall / reduce_scatter | 集合通信算子；手工内部节点还可使用 Scatter/Gather。 |
 | `atom.manual.nodes[].group` | array | `未指定` | 必填；— | 该手工节点允许使用的 rank 集合。 |
 | `atom.manual.nodes[].root` | integer | `未指定` | 按启用条件检查；≥0，≤9223372036854775807 | Broadcast/Reduce 的外部根，默认 0；手工节点表示该节点的根。 |
-| `atom.manual.nodes[].relay_ranks` | array | `[]` | 可省略或 null；— | 允许中转的组内 rank。 |
+| `atom.manual.nodes[].relay_ranks` | array | `[]` | 可省略或 null；— | 组内允许中转的 rank；不能引入组外 rank。 |
+| `atom.manual.nodes[].atoms` | array | `[]` | 可省略或 null；— | 阶段内的有向边禁用变量组，按各集合的全部组合展开。 |
+| `atom.manual.nodes[].atoms[].slice_ids` | array | `未指定` | 必填；— | 受约束的原始 slice 编号集合。 |
+| `atom.manual.nodes[].atoms[].src_ranks` | array | `未指定` | 必填；— | 禁用边的发送 rank 集合。 |
+| `atom.manual.nodes[].atoms[].dst_ranks` | array | `未指定` | 必填；— | 禁用边的接收 rank 集合。 |
 | `atom.manual.nodes[].depends_on` | array | `[]` | 可省略或 null；— | 该手工节点依赖的节点 ID。 |
 | `atom.manual.nodes[].input_states` | array | `未指定` | 按启用条件检查；— | 手工节点的输入状态合同。 |
 | `atom.manual.nodes[].input_states[].rank` | integer | `未指定` | 必填；≥0，≤9223372036854775807 | 逻辑 rank 编号，从 0 开始。 |
@@ -224,11 +210,11 @@ JSON Schema 描述标准结构；跨字段算术、启用条件、重复键和�
 | `runtime.paths.msccl_root` | string | `未指定` | 按启用条件检查；— | 编译后的 MSCCL 根目录，含 include/lib。 |
 | `runtime.paths.nccl_tests_root` | string | `未指定` | 按启用条件检查；— | 可选 nccl-tests 根目录。 |
 | `runtime.paths.vericcl_driver` | string | `未指定` | 按启用条件检查；— | 独立原语测量程序 vericcl-probe 的绝对路径。 |
-| `runtime.paths.vericcl_native` | string | `未指定` | 按启用条件检查；— | 完整调度及常驻程序 vericcl-native 的绝对路径。 |
+| `runtime.paths.vericcl_native` | string | `未指定` | 按启用条件检查；— | 完整调度执行程序 vericcl-native 的绝对路径。 |
 | `runtime.device_memory_budget_bytes` | integer | `0` | 可省略或 null；≥0，≤9223372036854775807 | 设备总预算；0 使用启动时可用显存界，仍检查实际分配。 |
 | `runtime.protocol` | string | `"Simple"` | 可省略或 null；Simple | 当前固定使用 Simple。 |
 | `runtime.scratch_bytes_per_rank` | integer | `未指定` | 必填；≥0，≤9223372036854775807 | 每 rank 允许的 scratch 字节数。 |
-| `runtime.limits` | object | `{}` | 可省略或 null；— | 运行时结构上限，取值至多为编译支持值。 |
+| `runtime.limits` | object | `{}` | 可省略或 null；— | 运行时结构上限，可设置更小值，不能超过编译支持值。 |
 | `runtime.limits.steps_per_tb` | integer | `256` | 可省略或 null；≥1，≤256 | 每 TB 最大指令数。 |
 | `runtime.limits.tbs_per_rank` | integer | `216` | 可省略或 null；≥1，≤216 | 每 rank 最大 TB 数；还须满足实际设备驻留能力。 |
 | `runtime.limits.send_tbs_per_channel` | integer | `32` | 可省略或 null；≥1，≤32 | 每 channel 发送 TB 上限。 |
@@ -236,7 +222,6 @@ JSON Schema 描述标准结构；跨字段算术、启用条件、重复键和�
 | `runtime.limits.dependency_id` | integer | `127` | 可省略或 null；≥0，≤127 | 依赖编号上限。 |
 | `runtime.limits.buffer_offset` | integer | `32767` | 可省略或 null；≥0，≤32767 | 缓冲区 slice 偏移上限。 |
 | `runtime.tb_layout` | string | `"separate"` | 可省略或 null；separate / fused | 默认按发送/接收分开编排；fused 须显式选择。 |
-| `runtime.control` | object | `{}` | 可省略或 null；— | 常驻控制面配置。 |
+| `runtime.control` | object | `{}` | 可省略或 null；— | 单次执行的 rank 同步配置。 |
 | `runtime.control.bind_address` | string | `未指定` | 按启用条件检查；— | rank 0 的可达监听地址。 |
 | `runtime.control.port` | integer | `未指定` | 按启用条件检查；≥1，≤65535 | 控制 TCP 端口。 |
-| `runtime.control.unix_socket` | string | `未指定` | 按启用条件检查；— | 控制器所在节点的 Unix socket 绝对路径。 |

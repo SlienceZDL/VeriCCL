@@ -43,10 +43,9 @@ def main(argv=None):
         run('install', [python, '-m', 'pip', 'install', '--no-deps', wheel])
         kit = environment / 'share/vericcl'
         required = ['README.md', 'requirements-lock/python312.txt', 'tools/generate_examples.py',
-                    'docs/input-schema.md', 'docs/input-schemas/sketch.json', 'tests/native/test_control_recovery.cc',
-                    'tools/native_live_smoke.py',
+                    'docs/input-schema.md', 'docs/input-schemas/sketch.json', 'tests/native/test_static_schedule.cc',
                     'examples/nccl-tests-build/input/build.py',
-                    'runtime/build_runtime.py', 'runtime/build_native.py', 'runtime/live/buffer_guard.cc',
+                    'runtime/build_runtime.py', 'runtime/build_native.py', 'runtime/execution/buffer_guard.cc',
                     'runtime/include/vericcl.h', 'runtime/msccl-trace/patches/0009-vericcl-live-trace-cycle.patch',
                     'third_party/msccl/src/init.cc', 'third_party/nlohmann/include/nlohmann/json.hpp',
                     'examples/quickstart/input/allreduce-hierarchy-outofplace/sketch.json']

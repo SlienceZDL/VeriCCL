@@ -57,7 +57,7 @@ def tutorial_project(tmp_path, *, layout, operator="allgather", method="hierarch
         VERICCL_INPUT=str(tmp_path / "examples/documented-case/input/base"),
         VERICCL_LAYOUT=json.dumps(layout), VERICCL_OPERATOR=operator, VERICCL_METHOD=method,
         VERICCL_M="1024", VERICCL_S="1024", VERICCL_CHANNELS="7", VERICCL_CPU_BUDGET="2",
-        VERICCL_WALL_S="120", VERICCL_SCRATCH_BYTES="16777216", VERICCL_NCCL_BUFFSIZE="16777216")
+        VERICCL_WALL_S="120", VERICCL_TUNING_ROUNDS="0", VERICCL_SCRATCH_BYTES="16777216", VERICCL_NCCL_BUFFSIZE="16777216")
 
 
 def run_documented(script, tmp_path, environment, timeout=120):
@@ -83,18 +83,19 @@ def test_cpu_tutorial_commands_execute_in_a_clean_project(tmp_path, operator, me
     runs = list(root.iterdir())
     assert len(runs) == 2
     for run in runs:
-        summary = json.loads((run / "run-summary.json").read_text())
+        metadata = json.loads((run / "run.json").read_text())
+        summary = metadata["result"]
         assert summary["contract_met"] is True
-        accepted = json.loads((run / "best/accepted.json").read_text())
+        accepted = metadata["best"]
         config = accepted["candidate"]["effective_config"]
         assert config["topology"]["ranks"] == 2
         assert config["sketch"]["collective"]["operator"] == operator
         assert config["atom"]["synthesis_method"] == method
         assert config["sketch"]["solver"]["max_channels"] in (1, 2)
-        effective = json.loads((run / "effective-request.json").read_text())
+        effective = metadata["effective_request"]
         assert effective["sketch"]["solver"]["max_channels"] == 2
     source = next(path for path in runs if path.name.startswith("solve-"))
-    original = json.loads((source / "input_snapshot/sketch.json").read_text())
+    original = json.loads((source / "process/input_snapshot/sketch.json").read_text())
     assert original["solver"]["max_channels"] == 7
 
 
@@ -143,7 +144,6 @@ def test_general_templates_preserve_scale_and_build_matching_gpu_commands(tmp_pa
     # Check every optional entry's required fields without starting any GPU job.
     load_request(files, {"sketch.calibration.enabled": True}, override_input=True, purpose="calibrate")
     load_request(files, {"sketch.trace_and_measure.enabled": True}, override_input=True)
-    load_request(files, {"sketch.live.enabled": True}, override_input=True, purpose="live")
     # A fake MPI executable captures the exact documented launch arguments.
     # It never invokes MPI, SSH, a GPU runtime, or the benchmark binary.
     mpi = Path(environment["MPI_HOME"]) / "bin/mpirun"
@@ -153,8 +153,8 @@ def test_general_templates_preserve_scale_and_build_matching_gpu_commands(tmp_pa
                    "Path(" + repr(str(capture)) + ").write_text(json.dumps(sys.argv[1:]))\n")
     mpi.chmod(0o755)
     source = tmp_path / "examples/documented-case/output/source"
-    (source / "best").mkdir(parents=True)
-    (source / "best/accepted.json").write_text(json.dumps({"candidate": {"effective_config": config}}))
+    source.mkdir(parents=True)
+    (source / "run.json").write_text(json.dumps({"best": {"candidate": {"effective_config": config}}}))
     environment.update(VERICCL_RUN=str(source), VERICCL_NCCL_TESTS=str(tmp_path / "test-binaries"))
     run_documented(script["nccl-tests"], tmp_path, environment)
     argv = json.loads(capture.read_text())
@@ -181,10 +181,27 @@ def test_general_templates_preserve_scale_and_build_matching_gpu_commands(tmp_pa
             assert context[context.index("-o") + 1] == "sum"
 
 
-@pytest.mark.parametrize("name", ["solve", "verify", "calibrate", "inspect", "resume", "live"])
+@pytest.mark.parametrize("name", ["solve", "verify", "calibrate", "inspect", "resume"])
 def test_every_public_command_has_help_and_documentation(name):
     text = (ROOT / "README.md").read_text()
     assert "`" + name + "`" in text
     result = subprocess.run([sys.executable, "-m", "vericcl", name, "--help"], cwd=ROOT,
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0 and "usage:" in result.stdout
+
+
+@pytest.mark.parametrize("operator", ["allgather", "allreduce"])
+@pytest.mark.parametrize("layout", LAYOUTS, ids=["1x4", "2x4", "2x8", "4x4", "unequal-devices"])
+def test_manual_template_matches_operator_and_scale(tmp_path, operator, layout):
+    from vericcl.input.loader import load_request
+    from vericcl.planner.manual import plan_manual
+    from vericcl.topology import load_topology
+    environment = tutorial_project(tmp_path, layout=layout, operator=operator)
+    script = commands()
+    run_documented(script["input-generate"] + "\n" + script["manual-generate"], tmp_path, environment)
+    directory = tmp_path / "examples/documented-case/input/manual"
+    inputs = load_request({key: directory / (key + ".json") for key in ("topology", "sketch", "atom", "runtime")})
+    plan = plan_manual(inputs, load_topology(inputs))
+    assert plan.rank_count == sum(len(devices) for devices in layout.values())
+    assert plan.collective.kind.value == operator
+    assert inputs.atom_constraints.forbidden_transfers == ()

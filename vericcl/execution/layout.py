@@ -23,7 +23,7 @@ def artifact_path(root, relative, *, version=None):
         raise ValueError('artifact path violates run boundary')
     version = layout_version(root) if version is None else version
     if version >= 2 and (path.parts[0] in PROCESS_DIRECTORIES
-            or path.name == 'run-summary.json'
+            or path.name in {'run-summary.json', 'mpi-flags.json', 'result.json'}
             or path.name.endswith('events.jsonl')
             or (path.name.startswith('rank-') and path.name.endswith('.run.log'))):
         if path.parts[0] != 'process':

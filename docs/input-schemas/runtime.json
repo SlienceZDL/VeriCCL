@@ -397,13 +397,6 @@
           ],
           "minimum": 1,
           "maximum": 65535
-        },
-        "unix_socket": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1
         }
       },
       "required": [],

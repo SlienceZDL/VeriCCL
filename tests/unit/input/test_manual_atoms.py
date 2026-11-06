@@ -79,3 +79,23 @@ def test_reduction_payload_and_repartition_inherit_manual_ban(tmp_path):
     constraints = bind_constraints(inputs)
     assert not constraints.allows([DataRange(0, 512, 2048), DataRange(1, 512, 2048)], 0, 1, 0)
     assert constraints.allows([DataRange(0, 2048, 4096), DataRange(1, 2048, 4096)], 0, 1, 0)
+
+
+def test_manual_plan_solver_demands_retain_alternative_route(tmp_path):
+    from vericcl.planner.manual import plan_manual
+    from vericcl.solver.demands import build_solver_problem
+    from vericcl.topology import load_topology
+    docs = request_documents('allgather', 3)
+    docs['sketch']['hyperparameters']['total_size_bytes'] = 1024
+    docs['atom']['manual'] = {'enabled': True, 'nodes': [{
+        'id': 'exchange', 'stage_id': 0, 'operator': 'allgather', 'group': [0, 1, 2],
+        'input_states': [{'rank': r, 'offset': 0, 'contributors': [r]} for r in range(3)],
+        'output_states': [{'rank': r, 'offset': s, 'contributors': [s]} for r in range(3) for s in range(3)],
+        'atoms': [{'slice_ids': [0], 'src_ranks': [0], 'dst_ranks': [1]}],
+    }]}
+    inputs = load_request(write_request(tmp_path, docs))
+    topology = load_topology(inputs)
+    plan = plan_manual(inputs, topology)
+    problem = build_solver_problem(plan.nodes[0], inputs, topology)
+    demand = next(item for item in problem.demands if set(item.member_slice_ids) == {0} and item.required_leaf_rank == 1)
+    assert demand.candidate_paths == ((0, 2, 1),)

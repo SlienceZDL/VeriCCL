@@ -58,17 +58,6 @@ HELP = {
     'relative_bandwidth_tolerance': '映射后的各带宽缩放比例最大值/最小值减一的允许上限。',
     'max_schedule_candidates': '快速历史检索最多检查的候选数。', 'calibration_max_age_s': '校准缓存的最大年龄。',
     'schedule_index': '历史调度索引路径；相对路径从案例目录解析。', 'calibration_index': '校准索引路径；相对路径从案例目录解析。',
-    'live': '辅助常驻在线模式，主离线闭环不依赖其开启。',
-    'request_prepare_timeout_s': '请求准备和原输入保护期限。', 'execution_attempt_timeout_s': '每次 GPU 尝试期限。',
-    'background_tuning_task_timeout_s': '一次后台调优任务期限。', 'version_prepare_timeout_s': '新版本准备期限。',
-    'control_phase_timeout_s': '一个控制阶段的期限。', 'recovery_timeout_s': '整个失败恢复过程的固定总期限。',
-    'close_cleanup_timeout_s': '关闭、后台结束和资源回收的共同期限。',
-    'window_requests': '一个合格遥测窗口的请求数。', 'consecutive_windows': '触发前要求连续同方向变化的窗口数。',
-    'relative_change_threshold': '相对基线的变化阈值。', 'baseline_max_cv': '建立基线所需稳定性上限。',
-    'min_residence_requests': '采用版本后，普通更新前至少保留的成功请求数。',
-    'max_retries': '失败后允许的额外完整请求重试次数；默认 2。', 'external_telemetry_path': '调用者维护的带内遥测 JSONL 文件路径。',
-    'external_max_age_s': '接受外部遥测的最大年龄。', 'fault_injection': '仅显式启用的开发故障注入。',
-    'request_id': '需要注入失败的逻辑请求号；0 关闭。', 'attempts': '该请求前多少次尝试在实际完成后被标记失败。',
     'synthesis_method': 'auto 按 M_switch 选择；小消息 hierarchy，大消息 constructive_trees。',
     'M_switch': 'auto 模式必须显式给出的消息大小分界，单位字节。', 'stage_num': '逻辑阶段数硬约束；省略时自动确定。',
     'forbidden_transfers': '[原 slice_id,src,dst,stage]，只禁止该阶段的这条直连边，仍可合法绕路。',
@@ -78,20 +67,22 @@ HELP = {
     'manual': '显式手工计划，仅在 enabled=true 时使用。', 'stage_id': '逻辑阶段编号，从 0 开始。',
     'group': '该手工节点允许使用的 rank 集合。', 'relay_ranks': '组内允许中转的 rank；不能引入组外 rank。',
     'depends_on': '该手工节点依赖的节点 ID。', 'input_states': '手工节点的输入状态合同。', 'output_states': '手工节点的输出状态合同。',
+    'atoms': '阶段内的有向边禁用变量组，按各集合的全部组合展开。',
+    'slice_ids': '受约束的原始 slice 编号集合。', 'src_ranks': '禁用边的发送 rank 集合。',
+    'dst_ranks': '禁用边的接收 rank 集合。',
     'offset': '逻辑数据位置编号。', 'contributors': '该状态包含的原始 slice_id 集合。',
     'rank_map': '每个 rank 的实际主机和设备位置，必须完整且无重复设备。', 'host': 'SSH/MPI 均可访问的主机名或地址。',
     'device': '该 host 进程可见的 CUDA 设备编号。', 'environment': '运行时环境变量白名单，值均为字符串。',
     'paths': '显式工具链和可执行文件路径。', 'cuda_home': '已有 CUDA 安装根目录。', 'mpi_bin': '含 mpirun、mpicxx 的目录。',
     'msccl_root': '编译后的 MSCCL 根目录，含 include/lib。', 'nccl_tests_root': '可选 nccl-tests 根目录。',
-    'vericcl_driver': '独立原语测量程序 vericcl-probe 的绝对路径。', 'vericcl_native': '完整调度及常驻程序 vericcl-native 的绝对路径。',
+    'vericcl_driver': '独立原语测量程序 vericcl-probe 的绝对路径。', 'vericcl_native': '完整调度执行程序 vericcl-native 的绝对路径。',
     'device_memory_budget_bytes': '设备总预算；0 使用启动时可用显存界，仍检查实际分配。',
     'protocol': '当前固定使用 Simple。', 'scratch_bytes_per_rank': '每 rank 允许的 scratch 字节数。',
     'limits': '运行时结构上限，可设置更小值，不能超过编译支持值。', 'steps_per_tb': '每 TB 最大指令数。',
     'tbs_per_rank': '每 rank 最大 TB 数；还须满足实际设备驻留能力。',
     'send_tbs_per_channel': '每 channel 发送 TB 上限。', 'recv_tbs_per_channel': '每 channel 接收 TB 上限。',
     'dependency_id': '依赖编号上限。', 'buffer_offset': '缓冲区 slice 偏移上限。', 'tb_layout': '默认按发送/接收分开编排；fused 须显式选择。',
-    'control': '常驻控制面配置。', 'bind_address': 'rank 0 的可达监听地址。', 'port': '控制 TCP 端口。',
-    'unix_socket': '控制器所在节点的 Unix socket 绝对路径。',
+    'control': '单次执行的 rank 同步配置。', 'bind_address': 'rank 0 的可达监听地址。', 'port': '控制 TCP 端口。',
 }
 ENV = {
     'PATH': '子进程工具搜索路径。', 'LD_LIBRARY_PATH': '动态库搜索路径，优先目标运行时与 MPI。', 'PYTHONPATH': 'Python 模块搜索路径。',
@@ -140,11 +131,13 @@ def main(argv=None):
 
 M/S 必须整除，S 必须包含完整的数据类型元素；AllToAll/ReduceScatter 的 N=M/S 还须能被 rank 数整除。禁止直接输入 N 或 input_chunkup。不适用算子的 root/reduction_op 可以省略或 null，不能提供实际值。
 
-命令行 `--set 路径=JSON` 可以补入未指定值。覆盖已有不同值须加 `--override-input`。原文件保存在 `input_snapshot`，最终有效配置和来源分别写入 `effective-request.json`、`value-sources.json`。配置字段不读取 shell 占位符，请在写 JSON 时使用实际绝对路径。
+命令行 `--set 路径=JSON` 可以补入未指定值。覆盖已有不同值须加 `--override-input`。原文件保存在 `process/input_snapshot/`，最终有效配置与来源写入 `run.json` 的 `effective_request`、`value_sources`。配置字段不读取 shell 占位符，请在写 JSON 时使用实际绝对路径。
 
-solve/live 必须给初始合成预算和最大轮数；轮数大于 0 时还须给修复预算。所有处理入口需要单模型/CPU、离线每轮/累计及清理预算。校准启用或使用 calibrate 时，需要在线预算、拟合误差和单任务期限；trace/实测启用时还需要 trace 容量和任务期限。历史复用各自要求索引及对应容差/年龄。live 要求全部七个阶段期限和控制端点。运行时数值检查使用显式绝对/相对容差。
+solve 必须给初始合成预算和最大轮数；轮数大于 0 时还须给修复预算。所有处理入口需要单模型/CPU、离线每轮/累计及清理预算。校准启用或使用 calibrate 时，需要在线预算、拟合误差和单任务期限；trace/实测启用时还需要 trace 容量和任务期限。历史复用各自要求索引及对应容差/年龄。运行时数值检查使用显式绝对/相对容差。
 
 JSON Schema 描述标准结构；跨字段算术、启用条件、重复键和明确的旧写法迁移由 load_request 检查。算子名称忽略大小写；兼容别名为 all_gather、all_reduce、all_to_all、reducescatter。旧 hyperparameters 中明确列出的 solver 参数可迁移；atom 顶层的 symmetry、shortest_paths、batching、objective_mode 可迁移。旧 total_solve_timeout_s 仅迁移为初始合成预算。force_resolve、force_recalibrate 及旧算法布尔开关已删除。
+
+手工节点的 `atoms` 只指定 slice、源 rank、目标 rank 集合，阶段号取节点的 `stage_id`；展开后的每条约束只限制一个有向边。手工模式关闭时，节点与变量组不参与自动合成。
 
 下面的 object/array 行描述所属配置段，后续行描述其成员。array 中的 [] 表示每一个元素。更多运行方式见 [README](../README.md)，证据范围见 [适用边界](supported-configuration.md)。
 '''

@@ -1,5 +1,6 @@
 """CLI orchestration; application work starts after snapshots and input validation."""
 from datetime import datetime, timezone
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -105,7 +106,7 @@ def resume_run(args):
     if original_config:
         prefix = 'tmp/resume-original-' + uuid.uuid4().hex
         files = {name: context.write_json(prefix + '/' + name + '.json', value) for name, value in original_config.items()}
-        inputs = load_request(files, purpose=purpose)
+        inputs = replace(load_request(files, purpose=purpose), input_sha256=state['input_sha256'])
     context.resumed = True
     return _execute(PrimaryRequest(inputs, purpose=purpose, tune=state.get('extra', {}).get('tune', False)),
                     context, restored=state, budgets=budgets)

@@ -23,7 +23,7 @@ flowchart TD
 
 | 环节 | 主要代码 | 输入与输出 |
 |---|---|---|
-| 公开命令 | `vericcl/cli/main.py`、`cli/lifecycle.py`、`cli/live.py` | 四文件、路径和显式覆盖 → 运行上下文与退出码 |
+| 公开命令 | `vericcl/cli/main.py`、`cli/lifecycle.py` | 四文件、路径和显式覆盖 → 运行上下文与退出码 |
 | 输入与迁移 | `vericcl/input/schema.py`、`migration.py` | 原 JSON → 生效配置、默认来源、严格外部合同 |
 | 拓扑与原始数据 | `vericcl/topology/`、`semantics/ranges.py`、`semantics/versions.py` | rank/link/resource 与原始字节范围 → 合法传输和状态版本 |
 | 参数域 | `vericcl/planner/parameters.py`、`xml/capacity.py` | M、类型、算子、运行时上限 → S/C 候选与必要下界 |
@@ -34,9 +34,9 @@ flowchart TD
 | 校准 | `vericcl/verification/online/probe_jobs.py`、`remote.py`、`campaign.py`、`component_fitting.py` | 独立原语任务 → 原始样本、合格组件和模型差异 |
 | 瓶颈与证明 | `vericcl/verification/bottlenecks.py`、`flow_index.py`、`proof_check.py`、`global_bound.py` | 当前完整事件图 → 因果范围、策略批次、未完成义务或可复查证明 |
 | 局部修复 | `vericcl/tuning/strategies.py`、`event_columns.py`、`resynthesis.py` | 明确域和建议 → 联合局部解或完整重合成候选 |
+| 运行记录 | `vericcl/execution/context.py`、`layout.py`、`publication.py` | 统一 run.json、顶层结果、process 历史与归档 |
 | 主闭环 | `vericcl/workflow_v5.py`、`workflow_state.py` | 全部阶段结果 → incumbent、检查点、预算和停止原因 |
-| 运行时 | `runtime/live/`、`runtime/probes/`、`runtime/msccl-trace/` | 已检查 manifest/XML → 实际 GPU 执行、计数器、trace 和释放回执 |
-| 在线调优 | `vericcl/live/controller.py`、`adaptive.py`、`tuning.py`、`external.py` | 请求遥测与明确故障 → 一个后台任务、准备版本及一致切换 |
+| 运行时 | `runtime/execution/`、`runtime/probes/`、`runtime/msccl-trace/` | 已检查 manifest/XML → 实际 GPU 执行、计数器、trace 和释放回执 |
 
 ## 数据与存储如何保持正确
 
@@ -68,18 +68,16 @@ S 分支影响整个分区，因此先检查合法性和预期收益，再重新
 
 子进程以 PID、进程组、启动时间和 boot id 标识。日志写入失败会停止新工作，已有 incumbent 与失败记录保留。进程退出、stdout 收集完成和 GPU 释放分别记录。历史未解决 GPU 所有权不会因一次新命令而自动清空。
 
-## 在线版本与恢复
+## 执行与资源释放
 
-常驻组使用固定 rank 成员和 CPU 控制协调者。新版本按 XML 内容不可变保存，先独立准备 communicator 和资源，再经全员 READY、COMMIT、START，在请求边界开始使用。控制消息携带组、请求、尝试和版本身份；同一消息重试只重发已确认决定。一个后台调优任务接收合并后的事件，明确故障优先。
+原生执行为一个固定调度装载 XML，先核对各 rank 的任务与数据语义，再完成 communicator 和缓冲区准备。同一运行上下文保持这个调度，预热、采样和 trace 都使用它。修复后的调度作为下一次独立验证的输入。
 
-失败恢复先发非释放的中止信号，确认 GPU 工作已停止，再中止 communicator。全组确认 STOPPED 后，恢复被保护的原输入，重建合法版本并重放完整请求。额外重试默认两次，整个恢复过程使用同一个期限。超时本身不指认某条链路失效；缺少固定成员、合法路径或可靠结束确认时返回未解决状态，保留 buffer 和相关资源。
+CPU 控制通道负责各 rank 的准备、启动和完成确认。GPU 事件记录完整调用时间；详细 trace 记录 XML 内各原语的执行。独立校准探针测量链路与计算开销，结果用于后续离线模型评估。
 
-外部带内遥测由调用者提供。配置 `live.external_telemetry_path` 为本用户拥有的普通文件绝对路径，按行追加，保持文件身份和追加写入方式，使用普通文件。每条记录不超过 64 KiB，时间带时区，默认有效期 60 秒，event_id 不可复用为不同内容。group_id 取当前 `run.json` 的 task_id。
+运行结束后分别确认 GPU 工作完成、缓冲区释放和子进程退出。完整回执保存在 process/jobs/，资源状态保存在 process/live/。恢复任务从已保存的检查点继续计算，沿用原任务身份、预算和统计编号。
 
-```json
-{"schema_version":1,"event_id":"health-0001","group_id":"当前任务的task_id","source":"external_health","observed_at":"当前带时区时间","kind":"link_failed","links":[[0,1]],"metrics":{}}
-```
+## 手工约束和输出
 
-这是格式示意，使用时填入真实身份与时间。source 可为 external_inband、external_health 或明确标记的 fault_injection。`cost_update` 的 metrics 键形如 `link:0:1` 或 `rrc:0:1`，值必须同时给出 `alpha_us`、`beta_us_per_byte`、`min_bytes`、`max_bytes`，且链路属于 links。软件单一大小服务比值只调整旧模型形状并标记估计，不当成独立 α、β 拟合。
+手工阶段使用 atom.manual.nodes。每个节点的 atoms 给出 slice_ids、src_ranks、dst_ranks 三个变量集合，stage_id 从节点继承。进入求解器前取三个集合的全部组合，与已有 forbidden_transfers 合并成有向边禁用约束。约束绑定原始数据范围，替代路径仍经过其他语义、组边界和资源检查。manual.enabled=false 时这些变量组不参与自动合成。
 
-C API 是原生执行接口，Python 控制器负责自动分析和背景求解。只嵌入 C API 的应用应由自己或外部控制器提供已验证版本。详细 trace 记录 XML 内的原语事件；CUDA 事件总时间覆盖完整 native 调用，包括浮点 avg 的末尾缩放。
+运行目录的 run.json 汇总命令、原输入索引、生效配置、来源、数据量和结果。最终 XML、调度说明与对应模型以 schedule.xml、schedule.json、model.json 导出；每轮候选、模型版本和检查点保存在 process/。details.zip 是结束时的过程归档，process/ 保留用于检查和恢复。

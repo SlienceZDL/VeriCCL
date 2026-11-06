@@ -1,6 +1,6 @@
 # VeriCCL
 
-VeriCCL 用于合成 AllGather 和 AllReduce 集合通信调度。它根据用户提供的拓扑与通信配置生成初始调度。随后可通过在线测量修正开销估计，再分析瓶颈并局部修复调度。
+VeriCCL 用于合成 AllGather 和 AllReduce 集合通信调度。它根据用户提供的拓扑与通信配置生成初始调度。随后可通过在线测量修正代价模型，自动进行多轮“验证—局部修复”，逐轮比较并保存更优调度。
 
 VeriCCL 提供 `hierarchy` 分层合成和 `constructive_trees` 批量生成树两种方法，使用 SCIP 求解调度。更多实现细节见 [架构说明](docs/architecture.md)。
 
@@ -53,7 +53,7 @@ export LD_LIBRARY_PATH="$MPI_HOME/lib:$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 
 **构建 GPU 运行环境**
 
-以下命令依次构建 MSCCL、测量探针和调度执行程序。构建结果保存在各输出目录的 `result.json` 中。
+以下命令依次构建 MSCCL、测量探针和调度执行程序。编译产物保存在各输出目录的 `build/`，构建记录位于 `process/result.json`。
 
 ```bash
 export VERICCL_BUILD="$VERICCL_ROOT/examples/runtime-build/output/tutorial-runtime"
@@ -111,6 +111,7 @@ export VERICCL_S=262144
 export VERICCL_CHANNELS=7
 export VERICCL_CPU_BUDGET=8
 export VERICCL_WALL_S=10800
+export VERICCL_TUNING_ROUNDS=3
 export VERICCL_SCRATCH_BYTES=1073741824
 export VERICCL_NCCL_BUFFSIZE=67108864
 ```
@@ -168,7 +169,7 @@ d['sketch']['solver'].update(per_model_timeout_s=300,
 d['sketch']['budgets'].update(max_run_wall_s=float(os.environ['VERICCL_WALL_S']),
     max_initial_synthesis_s=3600, max_offline_validation_per_round_s=600,
     max_offline_validation_total_s=1800, max_repair_per_round_s=600,
-    max_repair_total_s=1800, max_tuning_rounds=0, cleanup_reserve_s=30)
+    max_repair_total_s=1800, max_tuning_rounds=int(os.environ['VERICCL_TUNING_ROUNDS']), cleanup_reserve_s=30)
 d['runtime'].update(rank_map=mapping, scratch_bytes_per_rank=int(os.environ['VERICCL_SCRATCH_BYTES']))
 d['runtime']['environment']['NCCL_BUFFSIZE'] = os.environ['VERICCL_NCCL_BUFFSIZE']
 files = write_documents(Path(os.environ['VERICCL_INPUT']), d)
@@ -185,6 +186,61 @@ PY
 
 `max_run_wall_s` 限制一次任务的总用时，各阶段还受各自时限约束；`max_tuning_rounds=0` 表示生成并检查初始调度后结束。增大规模时，可调整求解时间、CPU 配额和 slice 大小。完整字段与运行时容量见 [输入参考](docs/input-schema.md) 和 [支持配置](docs/supported-configuration.md)。
 
+**可选：手工阶段与 Atom 变量组**
+
+手工计划在 `atom.manual.enabled=true` 时使用。每个节点定义一个阶段中的通信组、输入状态、输出状态和前序节点；`atoms` 为该节点补充有向边禁用约束。自动合成默认使用 `manual.enabled=false`。
+
+下面按当前算子和规模生成一个可编辑的手工计划，保存到新输入目录。阶段输入、输出和依赖由现有数据语义生成，随后可按需编辑 `atom.json`。
+
+<!-- vericcl-v5-command: manual-generate -->
+```bash
+export VERICCL_MANUAL_INPUT="$VERICCL_ROOT/examples/$VERICCL_CASE/input/manual"
+"$VERICCL_PYTHON" - <<'PY'
+import json, os
+from pathlib import Path
+from tools.generate_examples import write_documents
+from vericcl.input.loader import load_request
+from vericcl.topology import load_topology
+from vericcl.planner.direct import build_direct_plan
+from vericcl.planner.manual import plan_manual
+source = Path(os.environ['VERICCL_INPUT'])
+files = {k: source / (k + '.json') for k in ('topology', 'sketch', 'atom', 'runtime')}
+d = {k: json.loads(p.read_text()) for k, p in files.items()}
+request = load_request(files)
+plan = build_direct_plan(request, load_topology(request))
+def states(interface):
+    return [{'rank': slot.rank, 'offset': slot.offset, 'contributors': sorted(value)}
+            for slot, value in interface.values.items()]
+nodes = []
+for node in plan.nodes:
+    nodes.append({'id': node.node_id, 'stage_id': node.stage_id,
+        'operator': node.local_collective.kind.value, 'root': node.local_collective.root,
+        'group': list(node.communication_group), 'relay_ranks': list(node.communication_group),
+        'depends_on': sorted({e.producer_id for e in plan.edges if e.consumer_id == node.node_id}),
+        'input_states': states(node.logical_input), 'output_states': states(node.logical_output), 'atoms': []})
+d['atom'].update(synthesis_method='hierarchy', stage_num=len({n.stage_id for n in plan.nodes}),
+                 manual={'enabled': True, 'nodes': nodes})
+paths = write_documents(Path(os.environ['VERICCL_MANUAL_INPUT']), d)
+manual = load_request(paths)
+plan_manual(manual, load_topology(manual))
+print('手工输入目录：', os.environ['VERICCL_MANUAL_INPUT'])
+PY
+```
+
+在所需节点的 `atoms` 中填写变量组，例如：
+
+```json
+"atoms": [
+  {"slice_ids": [0, 1], "src_ranks": [0], "dst_ranks": [1, 2]}
+]
+```
+
+这个组展开为四条约束：两个 slice 分别禁止从 rank 0 直传到 rank 1、2，阶段号取所在节点的 `stage_id`。各列表中的值自由组合；源、目标 rank 均属于该节点的 `group`，且每个组合的源和目标不同。只禁用指定有向边，其他合法中转路径继续可用。
+
+原始 `slice_id=来源 rank×N+rank 内编号`，编号从 0 开始。Atom 变量只填写上述三个集合，阶段号从节点继承，时间、传输数据量和路径由求解器确定。多个节点、多个变量组和已有 `forbidden_transfers` 合并生效，重复约束自动去重。`input_states`、`output_states` 中的 `offset` 表示逻辑位置，`contributors` 列出该状态包含的原始 slice。
+
+编辑完成后，将 `VERICCL_INPUT` 设为 `VERICCL_MANUAL_INPUT`，再执行下面的输入参数设置和 `solve` 命令。完整字段见 [输入参考](docs/input-schema.md)。
+
 ## 运行合成器
 
 **指定输入与结果目录**
@@ -198,7 +254,7 @@ VERICCL_ARGS=(--project-root "$VERICCL_ROOT" --case "$VERICCL_CASE"
   --atom "$VERICCL_INPUT/atom.json" --runtime "$VERICCL_INPUT/runtime.json")
 ```
 
-`solve`、`verify`、`calibrate` 和 `live` 的结果保存在 `examples/<case>/output/<run_id>/`。省略 `--run-id` 时按启动时间生成编号；指定时，每次运行使用新编号。
+`solve`、`verify` 和 `calibrate` 的结果保存在 `examples/<case>/output/<run_id>/`。省略 `--run-id` 时按启动时间生成编号；指定时，每次运行使用新编号。
 
 **合成调度：`solve`**
 
@@ -218,7 +274,7 @@ export VERICCL_RUN="$VERICCL_ROOT/examples/$VERICCL_CASE/output/$VERICCL_RUN_ID"
 "$VERICCL_PYTHON" -m vericcl solve "${VERICCL_ARGS[@]}" --run-id "$VERICCL_RUN_ID"
 ```
 
-`best/accepted.json` 记录当前最佳调度及 XML 的位置。模板默认在 CPU 上完成合成和离线验证；GPU 测量按下一节开启。
+最终调度保存在 `schedule.xml`，对应说明和模型为 `schedule.json`、`model.json`。`run.json` 记录生效配置、当前最佳调度和结束原因。模板默认在 CPU 上完成合成、验证和多轮修复；GPU 测量按下一节开启。
 
 **查看结果：`inspect`**
 
@@ -237,11 +293,11 @@ python -m vericcl inspect --run <运行结果目录>
 import json, os
 from pathlib import Path
 run = Path(os.environ['VERICCL_RUN'])
-a = json.loads((run / 'best/accepted.json').read_text())
+a = json.loads((run / 'run.json').read_text())['best']
 print('T_pred（微秒）：', a['t_pred_us'])
-print('XML：', run / a['candidate']['xml'])
-print('sidecar：', run / a['candidate']['sidecar'])
-print('模型：', run / 'models' / (a['model_version'] + '.json'))
+print('XML：', run / 'schedule.xml')
+print('调度说明：', run / 'schedule.json')
+print('模型：', run / 'model.json')
 PY
 ```
 
@@ -268,20 +324,17 @@ import json, os
 from pathlib import Path
 from tools.generate_examples import write_documents
 run = Path(os.environ['VERICCL_RUN'])
-config = json.loads((run / 'effective-request.json').read_text())
+config = json.loads((run / 'run.json').read_text())['effective_request']
 write_documents(Path(os.environ['VERICCL_VERIFY_INPUT']), config)
 PY
-export VERICCL_XML="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(open(os.environ["VERICCL_RUN"]+"/best/accepted.json"))["candidate"]["xml"])')"
-export VERICCL_SIDECAR="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(open(os.environ["VERICCL_RUN"]+"/best/accepted.json"))["candidate"]["sidecar"])')"
-export VERICCL_MODEL="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(open(os.environ["VERICCL_RUN"]+"/best/accepted.json"))["model_version"])')"
 "$VERICCL_PYTHON" -m vericcl verify --project-root "$VERICCL_ROOT" --case "$VERICCL_CASE" --run-id "$VERICCL_VERIFY_ID" \
   --topology "$VERICCL_VERIFY_INPUT/topology.json" --sketch "$VERICCL_VERIFY_INPUT/sketch.json" \
   --atom "$VERICCL_VERIFY_INPUT/atom.json" --runtime "$VERICCL_VERIFY_INPUT/runtime.json" \
-  --xml "$VERICCL_RUN/$VERICCL_XML" --sidecar "$VERICCL_RUN/$VERICCL_SIDECAR" \
-  --model "$VERICCL_RUN/models/$VERICCL_MODEL.json"
+  --xml "$VERICCL_RUN/schedule.xml" --sidecar "$VERICCL_RUN/schedule.json" \
+  --model "$VERICCL_RUN/model.json"
 ```
 
-验证会沿用配置中的测量开关。检查结果见新目录的 `run-summary.json` 和 `reports/`。
+验证会沿用配置中的测量开关。检查结果见新目录的 `run.json` 和 `report.md`，逐项记录保存在 `process/`。
 
 **设置调优轮数**
 
@@ -293,7 +346,14 @@ export VERICCL_MODEL="$("$VERICCL_PYTHON" -c 'import json,os; print(json.load(op
   --set sketch.budgets.max_repair_per_round_s=600 --set sketch.budgets.max_repair_total_s=1800
 ```
 
-程序按时间、轮数和搜索结果结束调优，保存当前最佳调度。输入已设置这些预算时，`verify` 增加 `--tune` 可继续修复已有调度。
+每轮先验证当前调度并分析瓶颈，再将建议转成约束，局部求解并验证候选。获得更优调度后自动进入下一轮；有限候选用尽时继续扩大搜索。达到时间或轮数上限，或在明确的合法修复空间中取得无改进证明时结束。
+
+已有调度使用相同的 `verify` 命令并增加 `--tune`，即可进入这个多轮循环：
+
+```text
+python -m vericcl verify <四份输入与输出参数> \
+  --xml <XML路径> --sidecar <调度说明路径> --model <模型路径> --tune
+```
 
 ## GPU 测量与执行
 
@@ -315,20 +375,17 @@ export VERICCL_GPU_INPUT="$VERICCL_ROOT/examples/$VERICCL_CASE/input/gpu"
 import json, os
 from pathlib import Path
 from tools.generate_examples import write_documents
-from vericcl.input.schema import LIVE_TIMEOUTS
 source = Path(os.environ['VERICCL_INPUT'])
 d = {key: json.loads((source / (key + '.json')).read_text()) for key in ('topology', 'sketch', 'atom', 'runtime')}
 d['runtime']['paths'] = {'vericcl_driver': os.environ['VERICCL_PROBE'],
     'vericcl_native': os.environ['VERICCL_NATIVE'], 'mpi_bin': os.environ['MPI_HOME'] + '/bin'}
 d['runtime']['environment']['LD_LIBRARY_PATH'] = os.environ['LD_LIBRARY_PATH']
 d['runtime']['control'] = {'bind_address': os.environ['VERICCL_CONTROL_ADDRESS'],
-    'port': int(os.environ['VERICCL_CONTROL_PORT']),
-    'unix_socket': str(Path(os.environ['VERICCL_ROOT']) / 'examples' / os.environ['VERICCL_CASE'] / 'control.sock')}
+    'port': int(os.environ['VERICCL_CONTROL_PORT'])}
 d['sketch']['budgets'].update(max_online_validation_per_round_s=1800, max_online_validation_total_s=7200)
 d['sketch']['trace_and_measure'] = {'enabled': False, 'job_timeout_s': 600, 'trace_capacity_bytes': 16777216}
 d['sketch']['calibration'].update(max_relative_fit_error=0.1, job_timeout_s=600,
     payload_sizes=sorted({d['sketch']['hyperparameters']['slice_size_bytes'], d['sketch']['hyperparameters']['total_size_bytes']} - {None}))
-d['sketch']['live'] = {'enabled': False, **{key: 60 for key in LIVE_TIMEOUTS}, 'close_cleanup_timeout_s': 180}
 write_documents(Path(os.environ['VERICCL_GPU_INPUT']), d)
 PY
 GPU_ARGS=(--project-root "$VERICCL_ROOT" --case "$VERICCL_CASE"
@@ -366,7 +423,7 @@ python -m vericcl calibrate --project-root <项目目录> --case <案例名> \
   --override-input --set sketch.calibration.enabled=true
 ```
 
-模型保存在 `models/`，测量任务与日志保存在 `jobs/`。要在合成中完成测量、验证和修复，使用：
+最终模型为 `model.json`；模型版本与差异位于 `process/models/`，测量任务与日志位于 `process/jobs/`。要在合成中完成测量、验证和修复，使用：
 
 ```bash
 "$VERICCL_PYTHON" -m vericcl solve "${GPU_ARGS[@]}" --override-input \
@@ -376,26 +433,6 @@ python -m vericcl calibrate --project-root <项目目录> --case <案例名> \
 
 模型更新后，程序在同一模型下重新评估并比较调度。测量与修复流程见 [架构说明](docs/architecture.md)。
 
-**常驻在线运行：`live`**
-
-`live` 连续处理集合通信请求，并在请求之间更新调度。`--requests` 设置次数，`--session-timeout-s` 设置常驻阶段的时限，单位为秒：
-
-```text
-python -m vericcl live --project-root <项目目录> --case <案例名> \
-  --topology <拓扑文件> --sketch <通信配置> --atom <算法配置> --runtime <运行配置> \
-  --requests <请求次数> --session-timeout-s <秒数> --override-input --set sketch.live.enabled=true
-```
-
-例如，按当前算子和规模执行 40 次请求：
-
-```bash
-"$VERICCL_PYTHON" -m vericcl live "${GPU_ARGS[@]}" --requests 40 --session-timeout-s 900 \
-  --override-input --set sketch.live.enabled=true --set sketch.budgets.max_tuning_rounds=3 \
-  --set sketch.budgets.max_repair_per_round_s=60 --set sketch.budgets.max_repair_total_s=180
-```
-
-请求、版本更新和关闭记录保存在 `live/`。C API 见 [接口头文件](runtime/include/vericcl.h)。
-
 **可选：nccl-tests 对照**
 
 先在各参与节点构建相同版本的 nccl-tests。以下命令生成测试程序，`--release-receipts` 为每个进程记录结束后的 GPU 释放情况：
@@ -404,7 +441,7 @@ python -m vericcl live --project-root <项目目录> --case <案例名> \
 "$VERICCL_PYTHON" "$VERICCL_ROOT/examples/nccl-tests-build/input/build.py" --run-id tutorial-tests \
   --cuda-home "$CUDA_HOME" --mpi-home "$MPI_HOME" \
   --msccl-build "$VERICCL_MSCCL" --arch "$VERICCL_ARCH" --release-receipts
-export VERICCL_NCCL_TESTS="$VERICCL_ROOT/examples/nccl-tests-build/output/tutorial-tests/rebuildable-cache/source/build"
+export VERICCL_NCCL_TESTS="$VERICCL_ROOT/examples/nccl-tests-build/output/tutorial-tests/process/rebuildable-cache/source/build"
 ```
 
 用 `mpirun` 启动测试。`-np` 设置进程数，`--host` 设置主机及进程位置，`-g 1` 表示每个进程使用一张 GPU；AllGather 使用 `all_gather_perf`，AllReduce 使用 `all_reduce_perf`：
@@ -422,7 +459,7 @@ mpirun -np <rank数> --host <主机:进程数,...> <测试程序> \
 import json, os, shlex, subprocess, sys, uuid
 from pathlib import Path
 run = Path(os.environ['VERICCL_RUN'])
-a = json.loads((run / 'best/accepted.json').read_text())
+a = json.loads((run / 'run.json').read_text())['best']
 c = a['candidate']['effective_config']
 mapping = sorted(c['runtime']['rank_map'], key=lambda x: x['rank'])
 collective = c['sketch']['collective']
@@ -462,14 +499,34 @@ nccl-tests 同时报告原位与非原位结果，按 `collective.inplace` 选�
 
 结果统一保存在 `examples/<case>/output/<run_id>/`，输入位于同一案例的 `input/`。
 
-| 文件 | 内容 |
+| 顶层文件或目录 | 内容与生成条件 |
 |---|---|
-| `run-summary.json`、`reports/timing.json` | 成功状态、结束原因、各阶段时间与 T_pred |
-| `best/accepted.json`、`candidates/` | 当前最佳调度、XML、sidecar 和逐项检查 |
-| `models/` | 初始/更新模型、测量和差异 |
-| `effective-request.json`、`input_snapshot/` | 生效配置与原输入 |
-| `run.log`、`events.jsonl`、`jobs/` | 流程日志、命令输出、进程与释放记录 |
-| `checkpoints/`、`live/` | 恢复状态及在线请求记录 |
+| `run.json` | 任务身份、命令、输入快照索引、生效配置、默认与覆盖来源、数据量换算、阶段耗时、结果和文件索引 |
+| `report.md` | 本次结果、检查结论、预计时间、结束原因和问题记录 |
+| `run.log` | 按时间排列的主流程日志 |
+| `schedule.xml`、`schedule.json` | 已接受调度及其语义、缓冲区、TB 和事件映射；获得合格调度后生成 |
+| `model.json` | 与最终调度对应的代价模型；独立校准时为本次发布的模型 |
+| `checkpoint.json` | 最新检查点的状态、已用时间、轮数和过程文件引用 |
+| `trace.json` | 已接受调度的 trace 分析；开启 trace 并取得完整结果后生成 |
+| `process/` | 全部中间过程、历史版本和恢复所需文件 |
+| `details.zip` | 结束时对 `process/` 的归档副本，便于整体保存；`process/` 继续用于恢复 |
+
+`run.json` 的 `invocation`、`input_snapshot`、`effective_request`、`value_sources`、`size_accounting` 分别保存命令、原输入索引、生效配置、取值来源和字节数换算。`best` 指向已接受候选，`result` 记录状态与结束原因，`timing` 记录阶段时间和轮数，`artifacts` 列出本次生成的顶层文件。
+
+| `process/` 内部位置 | 内容 |
+|---|---|
+| `input_snapshot/` | 原始输入文件，以及 verify 读取的 XML、调度说明和模型 |
+| `models/` | 初始模型、校准模型、组件差异、探针输入与样本 |
+| `candidates/<id>/` | 每个候选的 `candidate.json`、XML、调度说明、检查和预测结果 |
+| `jobs/<id>/` | 子进程的请求、身份、标准输出、错误输出、退出与清理记录；远程任务另含逐 rank 回执 |
+| `checkpoints/<id>/`、`checkpoints/latest.json` | 各阶段恢复快照，以及最新检查点位置和校验值 |
+| `statistics/` | 实测比较的采样编号与统计记录 |
+| `live/` | 原生执行的资源占用和释放状态 |
+| `reports/`、`best/` | 分析、证明、时间与 trace 细节，以及最佳候选记录 |
+| `tmp/`、`rebuildable-cache/` | 临时求解输入、构建源码等可重新生成的数据 |
+| `events.jsonl`、`run-summary.json` | 结构化事件流与本次结束记录；逐 rank 日志也保存在此目录 |
+
+`solve` 输出完整循环的结果；`verify` 输出已有调度的检查结果，`--tune` 还记录各轮修复；`calibrate` 输出模型及测量记录。`inspect` 只在终端显示现有结果，`resume` 在原目录继续记录。构建命令另保留 `build/` 存放库和程序，诊断记录仍在 `process/`。文件按实际执行阶段生成，详细模型、候选和任务保留各自的独立编号。
 
 **恢复任务：`resume`**
 
@@ -491,4 +548,4 @@ python -m vericcl resume --run <运行结果目录>
 "$VERICCL_PYTHON" -m vericcl solve --help
 ```
 
-运行详情见 `run.log`。配置或调度检查失败时，先查看 `reports/` 与候选目录中的检查结果；动态库加载错误时，核对 CUDA、MPI 和 MSCCL 路径。trace 接口见 [运行时说明](runtime/msccl-trace/README.md)。
+运行详情见 `run.log`。配置或调度检查失败时，先查看 `report.md`、`process/reports/` 与 `process/candidates/` 中的检查结果；动态库加载错误时，核对 CUDA、MPI 和 MSCCL 路径。trace 接口见 [运行时说明](runtime/msccl-trace/README.md)。

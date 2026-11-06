@@ -172,6 +172,52 @@
                 "minItems": 0,
                 "default": []
               },
+              "atoms": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "slice_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036854775807
+                      },
+                      "minItems": 1
+                    },
+                    "src_ranks": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036854775807
+                      },
+                      "minItems": 1
+                    },
+                    "dst_ranks": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9223372036854775807
+                      },
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "slice_ids",
+                    "src_ranks",
+                    "dst_ranks"
+                  ],
+                  "additionalProperties": false
+                },
+                "minItems": 0,
+                "default": []
+              },
               "depends_on": {
                 "type": [
                   "array",

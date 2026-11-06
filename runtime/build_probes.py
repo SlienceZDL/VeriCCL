@@ -4,12 +4,14 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import uuid
 
-from vericcl.execution.context import DIRECTORIES, RunContext
+from vericcl.execution.context import RunContext, finalize_run
 from vericcl.execution.events import emit_event
 from vericcl.execution.processes import ProcessLease, run_owned_process
 from vericcl.execution.security import Redactor
+from vericcl.execution.status import RunResult
 
 
 def main(argv=None):
@@ -31,11 +33,11 @@ def main(argv=None):
     if not nvcc.is_file() or not mpi.is_file() or not (msccl / 'lib/libnccl.so').is_file():
         parser.error('explicit CUDA, MPI or patched runtime path is unavailable')
     output.mkdir(parents=True)
-    context = RunContext(output, task_id=uuid.uuid4().hex, run_id=output.name, redactor=Redactor())
-    for name in DIRECTORIES:
-        (output / name).mkdir()
+    context = RunContext(output, task_id=uuid.uuid4().hex, run_id=output.name, redactor=Redactor(), version=2)
+    context.initialize_directories()
     (output / 'build/bin').mkdir(parents=True)
-    context.write_json('run.json', {'kind': 'native_probe_build', 'root': str(root)})
+    context.write_json('run.json', {'kind': 'native_probe_build'})
+    context.write_json('invocation.json', {'command': 'build_probes', 'argv': [sys.executable, __file__, *(argv or sys.argv[1:])]})
     emit_event(context, 'run_started')
     # Open MPI's wrapper publishes the actual compiler/link flags. Record the
     # command and result; avoid shell interpolation and vendor-specific guesses.
@@ -66,8 +68,10 @@ def main(argv=None):
     report = result.as_json() | {'binary': str(binary), 'argv': command,
                                  'compiled': result.status == 'completed' and result.cleanup_complete}
     context.write_json('result.json', report)
+    finalized = finalize_run(context, RunResult(report['compiled'], 'completed' if report['compiled'] else 'failed',
+        stop_reason=result.status, failure_category=None if report['compiled'] else 'backend'))
     print(json.dumps(report))
-    return 0 if report['compiled'] else 1
+    return finalized.exit_code
 
 
 if __name__ == '__main__':
