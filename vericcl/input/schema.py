@@ -145,10 +145,13 @@ SKETCH = obj({
 
 MANUAL_STATE = obj({"rank": integer(), "offset": integer(), "contributors": array(integer(), min_items=1)},
                    required=("rank", "offset", "contributors"))
+MANUAL_ATOM = obj({key: array(integer(), min_items=1) for key in ("slice_ids", "src_ranks", "dst_ranks")},
+                  required=("slice_ids", "src_ranks", "dst_ranks"))
 MANUAL_NODE = obj({"id": scalar("string"), "stage_id": integer(),
     "operator": scalar("string", enum=tuple(k.value for k in CollectiveKind)),
     "group": array(integer(), min_items=1), "root": integer(),
     "relay_ranks": array(integer(), default=[]),
+    "atoms": array(MANUAL_ATOM, default=[]),
     "depends_on": array(scalar("string"), default=[]),
     "input_states": array(MANUAL_STATE, min_items=1), "output_states": array(MANUAL_STATE, min_items=1)},
     required=("id", "stage_id", "operator", "group"))
@@ -424,8 +427,10 @@ def resolve_request(files, overrides=None, *, override_input=False, purpose="sol
         selected = "hierarchy" if size < threshold else "constructive_trees"
     if selected == "constructive_trees" and atom["strategies"]["shortest_paths"]:
         raise InputValidationError("shortest_paths is only an initial hierarchy option")
+    from vericcl.input.manual_atoms import expanded_forbidden_transfers
+    forbidden_values = expanded_forbidden_transfers(atom)
     forbidden = []
-    if atom["forbidden_transfers"]:
+    if forbidden_values:
         if reference is None and slice_size is not None:
             reference = slice_size
             sources["sketch.hyperparameters.reference_slice_size_bytes"] = {
@@ -433,7 +438,7 @@ def resolve_request(files, overrides=None, *, override_input=False, purpose="sol
         if reference is None:
             raise InputValidationError("reference_slice_size_bytes is required to bind slice_id constraints")
         hyper["reference_slice_size_bytes"] = reference
-        for slice_id, src, dst, stage in atom["forbidden_transfers"]:
+        for slice_id, src, dst, stage in forbidden_values:
             if (slice_id >= ranks * (size // reference) or max(src, dst) >= ranks or src == dst
                     or (atom["stage_num"] is not None and stage >= atom["stage_num"])):
                 raise InputValidationError("forbidden transfer is outside its reference partition/rank/stage domain")
