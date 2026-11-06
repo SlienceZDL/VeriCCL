@@ -168,7 +168,7 @@ def test_resume_reuses_prebaseline_candidates_without_restarting_synthesis(tmp_p
     assert first.attempt_index == 1 and next_attempt.attempt_index == 2
 
 
-@pytest.mark.parametrize('interruption', ['archive', 'publication_marker', 'missing_exports'])
+@pytest.mark.parametrize('interruption', ['archive', 'publication_marker', 'missing_exports', 'republication'])
 def test_finished_resume_completes_publication_without_repeating_work(tmp_path, monkeypatch, interruption):
     from zipfile import ZipFile
     from tests.integration.test_primary_lifecycle_v5 import request
@@ -178,11 +178,20 @@ def test_finished_resume_completes_publication_without_repeating_work(tmp_path, 
     from vericcl.workflow_v5 import run_primary
     inputs, context = request(tmp_path)
     result = run_primary(inputs, context)
+    if interruption == 'republication':
+        from vericcl.workflow_state import restore_checkpoint
+        assert finalize_run(context, result).complete
+        context, _, _ = restore_checkpoint(context.root)
+        context.resumed = True
     with monkeypatch.context() as injected:
         if interruption == 'archive':
             def fail_archive(_):
                 raise OSError('injected interrupted archive')
             injected.setattr(publication, '_archive', fail_archive)
+        elif interruption == 'republication':
+            def fail_export(*args):
+                raise OSError('injected interrupted replacement export')
+            injected.setattr(publication, '_export', fail_export)
         elif interruption == 'publication_marker':
             original_update = context.update_metadata
             def fail_marker(section, value, **kwargs):
@@ -192,6 +201,8 @@ def test_finished_resume_completes_publication_without_repeating_work(tmp_path, 
             injected.setattr(context, 'update_metadata', fail_marker)
         finalized = finalize_run(context, result)
     assert finalized.exit_code == (0 if interruption == 'missing_exports' else 7)
+    if interruption == 'republication':
+        assert json.loads((context.root / 'run.json').read_text())['publication']['complete'] is False
     if interruption == 'missing_exports':
         for filename in ('schedule.xml', 'model.json', 'details.zip'):
             (context.root / filename).unlink()

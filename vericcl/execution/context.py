@@ -160,6 +160,8 @@ def finalize_run(context: RunContext, result: RunResult) -> FinalizationResult:
     payload = asdict(result)
     payload.update(schema_version=1, task_id=context.task_id, run_id=context.run_id, exit_code=result.exit_code)
     try:
+        if context.layout_version >= 2:
+            context.update_metadata('publication', {'complete': False}, replace=True)
         if getattr(context, 'resumed', False):
             for relative in ('run-summary.json', 'reports/summary.md'):
                 previous = context.artifact(relative)

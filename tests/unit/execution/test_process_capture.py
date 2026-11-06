@@ -119,18 +119,19 @@ def test_process_logs_are_valid_utf8_even_for_malformed_output(tmp_path):
 
 def test_runtime_compiler_uses_owned_process_logs_and_group_cleanup(tmp_path, monkeypatch):
     from runtime.build_runtime import _compile
+    from vericcl.execution.context import RunContext
     tools = tmp_path / "bin"
     tools.mkdir()
     make = tools / "make"
     make.write_text("#!/bin/sh\necho build-started\nsleep 5\n")
     make.chmod(0o755)
     monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
-    output = tmp_path / "build-run"
-    output.mkdir()
-    result = _compile(tmp_path, output, tmp_path, 70, 1, 1)
+    context = RunContext.create(tmp_path, "build-run", "r")
+    output = context.root
+    result = _compile(tmp_path, output, tmp_path, 70, 1, 1, context)
     assert result["status"] == "timeout" and not result["compiled"]
     assert result["cleanup_complete"]
-    assert list((output / "jobs").glob("*/identity.json"))
+    assert list(context.artifact("jobs").glob("*/identity.json"))
     assert "build-started" in Path(result["stdout_path"]).read_text()
 
 

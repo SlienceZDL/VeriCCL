@@ -168,9 +168,12 @@ include tests/integration/test_v5_cross_module.py
 include tests/integration/test_verify_and_tune.py
 include tests/integration/test_workflow_artifacts.py
 include tests/legacy_cli.py
+include tests/native/cpu_device_stubs/cuda_runtime.h
+include tests/native/cpu_device_stubs/nccl.h
 include tests/native/run_cpu_tests.py
 include tests/native/test_contract.cc
 include tests/native/test_control_transport.cc
+include tests/native/test_execute_ownership.cc
 include tests/native/test_operation_wait.cc
 include tests/native/test_static_schedule.cc
 include tests/property/test_ag_rs_duality.py
@@ -216,6 +219,7 @@ include tests/unit/composer/test_timing.py
 include tests/unit/composer/test_timing_scaling.py
 include tests/unit/execution/test_artifacts.py
 include tests/unit/execution/test_budgets.py
+include tests/unit/execution/test_build_failure_finalization.py
 include tests/unit/execution/test_build_layout.py
 include tests/unit/execution/test_cleanup_reconciliation.py
 include tests/unit/execution/test_home_boundary.py
@@ -226,6 +230,7 @@ include tests/unit/execution/test_one_shot_prepare_budget.py
 include tests/unit/execution/test_owned_solver.py
 include tests/unit/execution/test_ownership.py
 include tests/unit/execution/test_process_capture.py
+include tests/unit/execution/test_process_layout.py
 include tests/unit/execution/test_process_reconciliation.py
 include tests/unit/execution/test_static_native_contract.py
 include tests/unit/experiments/test_configured_hosts.py
@@ -241,6 +246,7 @@ include tests/unit/experiments/test_state.py
 include tests/unit/experiments/test_v100.py
 include tests/unit/input/test_json_codec.py
 include tests/unit/input/test_loader.py
+include tests/unit/input/test_manual_atoms.py
 include tests/unit/input/test_models.py
 include tests/unit/input/test_mpi_interface_environment.py
 include tests/unit/input/test_option_domains.py
@@ -558,10 +564,12 @@ include vericcl/execution/__init__.py
 include vericcl/execution/budget.py
 include vericcl/execution/context.py
 include vericcl/execution/events.py
+include vericcl/execution/layout.py
 include vericcl/execution/manifest.py
 include vericcl/execution/native.py
 include vericcl/execution/ownership.py
 include vericcl/execution/processes.py
+include vericcl/execution/publication.py
 include vericcl/execution/security.py
 include vericcl/execution/status.py
 include vericcl/experiments/__init__.py
@@ -578,6 +586,7 @@ include vericcl/experiments/v100.py
 include vericcl/input/__init__.py
 include vericcl/input/json_codec.py
 include vericcl/input/loader.py
+include vericcl/input/manual_atoms.py
 include vericcl/input/migration.py
 include vericcl/input/models.py
 include vericcl/input/schema.py

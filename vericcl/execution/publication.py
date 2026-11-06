@@ -104,6 +104,5 @@ def publish_results(context, result, summary_text):
     context.update_metadata('result', result, replace=True)
     context.update_metadata('best', best, replace=True)
     context.update_metadata('artifacts', artifacts, replace=True)
-    context.update_metadata('publication', {'complete': False}, replace=True)
     _archive(context)
     context.update_metadata('publication', {'complete': True}, replace=True)
