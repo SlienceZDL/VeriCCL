@@ -1,19 +1,19 @@
-# 支持配置与结果含义
+# Supported configurations and result interpretation
 
-| 项目 | 配置与使用条件 |
+| Item | Configuration and conditions |
 |---|---|
-| 环境 | Linux、Python 3.12；GPU 路径使用 NVIDIA CUDA、Open MPI 和仓库固定 MSCCL 源码及补丁 |
-| 算子 | Broadcast、Reduce、AllGather、AllReduce、AllToAll、ReduceScatter；默认 FP32、sum、root=0、非原位 |
-| 类型与归约 | 十种输入类型、五种归约字段按运行时能力校验；原生 avg 采用浮点求和与末尾缩放，缩放预测使用 copy 成本 |
-| 拓扑 | 用户显式提供 rank、有向边及共享资源，运行时配置将 rank 映射到主机与 GPU |
-| 输入规模 | M 为每 rank 输入字节数，S 为最小 slice，M/S 为整数；AllToAll、ReduceScatter 的 slice 数按 rank 数整除 |
-| 远程路径 | 可写路径解析后位于当前执行账户的用户目录中；系统 CUDA/MPI 依赖按配置读取 |
-| 运行时 | 使用固定 Simple 协议；slice、channel、TB、依赖和缓冲区同时满足代码与实际设备上限 |
-| 代价模型 | 已测组件记录有效尺寸与并发模式；其他范围保留估计来源或缺失状态，完整 T_pred 按当前模型重算 |
-| 修复比较 | 同一模型、外部请求与硬约束下比较完整调度时间；域外决策固定，相关时序按依赖传播 |
-| 搜索停止 | 时间、轮数或指定合法空间内的无改进证据决定结束，输出保留当前最佳已接受调度及证明范围 |
-| trace | 预热后记录一次完整调用，跨设备时间附带校准误差；详细原语 trace 和 CUDA 完整调用时间分别保存 |
-| 实测收益 | 按预设的成对采样与稳定性条件比较；报告区分数值正确、资源释放、模型收益和实测收益 |
-| 原生执行 | 每次验证使用固定调度；各 rank 同步准备与启动，完成后记录数值检查和资源释放 |
+| Environment | Linux and Python 3.12; GPU execution uses NVIDIA CUDA, Open MPI, and the repository's pinned MSCCL source and patches |
+| Collectives | Broadcast, Reduce, AllGather, AllReduce, AllToAll, and ReduceScatter; defaults are FP32, sum, root=0, and out-of-place execution |
+| Data types and reductions | Ten input types and five reduction options are checked against runtime capabilities; native avg uses floating-point summation followed by scaling, with scaling predicted from copy costs |
+| Topology | Users explicitly provide ranks, directed edges, and shared resources; runtime configuration maps ranks to hosts and GPUs |
+| Input size | M is the input size in bytes per rank, S is the minimum slice size, and M/S is an integer; AllToAll and ReduceScatter require the slice count to be divisible by the rank count |
+| Remote paths | Resolved writable paths must be under the executing account's home directory; system CUDA/MPI dependencies are read from configured paths |
+| Runtime | The Simple protocol is fixed; slices, channels, TBs, dependencies, and buffers must satisfy both code and device limits |
+| Cost model | Measured components record valid sizes and concurrency modes; other ranges retain estimated sources or missing status, and the full T_pred is recomputed under the current model |
+| Repair comparison | Complete schedule times are compared under the same model, external request, and hard constraints; decisions outside the repair domain stay fixed, and related timing propagates through dependencies |
+| Search termination | Time limits, round limits, or no-improvement evidence over the specified legal space determine termination; output retains the best accepted schedule and proof scope |
+| Trace | One complete invocation is captured after warmup, with calibration errors for cross-device timing; detailed primitive traces and CUDA full-invocation times are saved separately |
+| Measured gains | Comparisons use predefined paired-sampling and stability criteria; reports distinguish numerical correctness, resource release, model gains, and measured gains |
+| Native execution | Each verification run uses a fixed schedule; ranks coordinate preparation and launch, then record numerical checks and resource release on completion |
 
-预测最优性对应记录中的模型、目标函数、硬约束和搜索空间。实际应用根据目标拓扑、消息大小与运行环境选择合成、校准、trace 和实测开关。GPU 所有权记录跨任务保留；释放确认影响后续任务准入。
+Predicted optimality applies to the recorded model, objective function, hard constraints, and search space. Choose synthesis, calibration, tracing, and measurement switches for the target topology, message size, and runtime environment. GPU ownership records persist across runs, and release confirmation affects admission of subsequent jobs.

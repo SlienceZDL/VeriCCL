@@ -1,4 +1,4 @@
-"""在独立虚拟环境安装交付包，并从安装后的源码工具包构建与运行。"""
+"""Install the release package in an isolated virtual environment, then build and run its installed source toolkit."""
 import argparse
 import hashlib
 import json

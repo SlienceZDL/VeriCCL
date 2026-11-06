@@ -45,7 +45,7 @@ def _execute(request, context, **kwargs):
         result = RunResult(False, execution, stop_reason='exception', failure_category=category,
                            optional_failures=(str(error),))
     finalized = finalize_run(context, result)
-    print('VeriCCL：状态=%s，结束原因=%s，模型覆盖=%s，退出码=%d，目录=%s' %
+    print('VeriCCL: status=%s, stop_reason=%s, model_coverage=%s, exit_code=%d, directory=%s' %
           (result.execution, result.stop_reason, result.model_coverage, finalized.exit_code, context.root))
     return finalized.exit_code
 
@@ -106,10 +106,10 @@ def resume_run(args):
                                            if field.name in result})
                     finalized = finalize_run(context, outcome)
                     if not finalized.complete:
-                        print('VeriCCL：结果整理待恢复，退出码=%d，目录=%s，原因=%s' %
+                        print('VeriCCL: result finalization needs recovery, exit_code=%d, directory=%s, reason=%s' %
                               (finalized.exit_code, context.root, '; '.join(finalized.errors)))
                         return finalized.exit_code
-            print('VeriCCL：该任务已结束；保留原结果。结束原因=%s，目录=%s' % (result['stop_reason'], context.root))
+            print('VeriCCL: task already finished; preserving the original result. stop_reason=%s, directory=%s' % (result['stop_reason'], context.root))
             return int(result['exit_code'])
     inputs = checkpoint_inputs(context, state)
     original_config = state.get('extra', {}).get('original_config')

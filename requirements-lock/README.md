@@ -1,1 +1,1 @@
-本目录提供 Python 3.12 的固定依赖清单 `python312.txt`。在独立虚拟环境中安装，随后执行 `pip check` 并检查 SCIP、CUDD 与 GMP 的导入。CUDA、MPI 和原生运行时的配置见根目录 README。
+This directory provides pinned Python 3.12 dependencies in `python312.txt`. Install them in a separate virtual environment, run `pip check`, and verify that SCIP, CUDD, and GMP can be imported. See the root README for CUDA, MPI, and native runtime setup.

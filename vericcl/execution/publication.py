@@ -88,18 +88,18 @@ def publish_results(context, result, summary_text):
     timing = _read(context, 'reports/timing.json') or (checkpoint or {}).get('budgets')
     sections = [summary_text]
     if best is not None and 'schedule' in artifacts:
-        sections.append('采用调度的预计完成时间：' + str(best.get('t_pred_us')) + ' 微秒。\n'
-                        '代价模型：' + best['model_version'] + '。\n')
+        sections.append('Predicted completion time of the accepted schedule: ' + str(best.get('t_pred_us')) + ' microseconds.\n'
+                        'Cost model: ' + best['model_version'] + '.\n')
         checks = best['candidate'].get('checks', {})
         if checks:
-            sections.append('检查结果：\n' + '\n'.join('- ' + name + '：' + str(check.get('status', check))
+            sections.append('Check results:\n' + '\n'.join('- ' + name + ': ' + str(check.get('status', check))
                             for name, check in checks.items()) + '\n')
     if timing is not None:
-        sections.append('阶段时间与轮数详见 run.json 的 timing。\n')
+        sections.append('See timing in run.json for phase durations and round counts.\n')
         context.update_metadata('timing', timing, replace=True)
     if result.get('optional_failures'):
-        sections.append('运行记录：\n' + '\n'.join('- ' + value for value in result['optional_failures']) + '\n')
-    sections.append('完整过程保存在 process/，归档副本为 details.zip。\n')
+        sections.append('Run notes:\n' + '\n'.join('- ' + value for value in result['optional_failures']) + '\n')
+    sections.append('The full process is saved in process/ and archived in details.zip.\n')
     context.write_bytes('report.md', context.redactor.text('\n'.join(sections)).encode('utf-8'), replace=True)
     context.update_metadata('result', result, replace=True)
     context.update_metadata('best', best, replace=True)

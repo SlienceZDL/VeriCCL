@@ -1,4 +1,4 @@
-"""将实际 JUnit 结果关联到需求；关联通过不等于完整证明。"""
+"""Map actual JUnit results to requirements; passing mapped tests is not a complete proof."""
 import argparse
 from collections import Counter
 import hashlib
@@ -44,8 +44,8 @@ def build_report(mapping, junit, *, implementation=None):
             {'actual_tests': summarize_tests(tests, paths), 'implementation_evidence': evidence,
             'implementation_status': 'reported' if all(evidence.values()) else 'missing_evidence',
             'phase3_status': 'not_executed',
-            'interpretation': '关联用例覆盖；具体功能、硬件范围和未执行项须结合实现报告审阅'})
-    return {'schema_version': 1, 'scope': '开发测试关联报告；未执行第三阶段四节点验收',
+            'interpretation': 'Mapped test coverage; review the implementation report for specific features, hardware scope, and unexecuted items'})
+    return {'schema_version': 1, 'scope': 'Development test mapping report; phase-three four-node acceptance has not been run',
         'junit': str(junit), 'junit_sha256': hashlib.sha256(Path(junit).read_bytes()).hexdigest(),
         'counts': dict(Counter(case['status'] for case in tests)), 'tasks': tasks,
         'requirements': requirements, 'tests': tests}

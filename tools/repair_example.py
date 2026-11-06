@@ -1,4 +1,4 @@
-"""复现多 slice 局部修复、历史适配及有收益的 S 重合成；仅使用教学模型。"""
+"""Reproduce local repair across slices, history adaptation, and beneficial resynthesis with a new slice size S using a tutorial model."""
 import argparse
 from dataclasses import replace
 import hashlib

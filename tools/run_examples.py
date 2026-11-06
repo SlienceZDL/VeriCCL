@@ -1,4 +1,4 @@
-"""通过公开 CLI 执行案例，保存每个案例的输入、命令、输出与检查结果。"""
+"""Run cases through the public CLI, saving each case's inputs, commands, outputs, and check results."""
 import argparse
 import json
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""在案例目录构建固定版本的可选 nccl-tests；不启动 GPU 测试。"""
+"""Build the pinned optional nccl-tests version in the case directory without launching GPU tests."""
 import argparse
 import difflib
 import hashlib
@@ -63,8 +63,8 @@ def main():
     parser.add_argument('--msccl-build', type=Path, required=True)
     parser.add_argument('--arch', type=int, required=True)
     parser.add_argument('--jobs', type=int, default=8)
-    parser.add_argument('--source-repository', type=Path, help='可选的本地源码仓库；仍核对固定提交')
-    parser.add_argument('--release-receipts', action='store_true', help='在计时后添加逐 rank 清理回执；保留源码补丁')
+    parser.add_argument('--source-repository', type=Path, help='optional local source repository; the pinned commit is still checked')
+    parser.add_argument('--release-receipts', action='store_true', help='add per-rank cleanup receipts after timing and preserve the source patch')
     args = parser.parse_args()
     if args.arch <= 0 or args.jobs <= 0:
         parser.error('arch and jobs must be positive')

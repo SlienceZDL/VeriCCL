@@ -1,4 +1,4 @@
-"""Execute the current Chinese tutorial and compare published schemas to code."""
+"""Execute the current English tutorial and compare published schemas to code."""
 import json
 import os
 from pathlib import Path
@@ -21,7 +21,7 @@ def commands():
 
 def test_current_tutorial_has_complete_workflow_and_local_links():
     text = (ROOT / "README.md").read_text()
-    assert "## 环境" in text and "## 输入" in text and "## 结果与故障" in text
+    assert "## Environment" in text and "## Inputs" in text and "## Results and troubleshooting" in text
     for path in ("input-schema.md", "architecture.md", "supported-configuration.md"):
         assert (ROOT / "docs" / path).is_file()
         assert "docs/" + path in text

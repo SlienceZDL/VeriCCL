@@ -22,24 +22,24 @@ def _inputs(parser):
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(prog='vericcl', description='VeriCCL 集合通信合成、校准与修复')
+    parser = argparse.ArgumentParser(prog='vericcl', description='VeriCCL collective communication synthesis, calibration, and repair')
     parser.add_argument('--version', action='version', version=__version__)
     commands = parser.add_subparsers(dest='command', required=True)
     from vericcl.cli.lifecycle import new_run, inspect_run, resume_run
-    solve = commands.add_parser('solve', help='按显式配置运行完整主闭环')
+    solve = commands.add_parser('solve', help='run the full synthesis and tuning loop with explicit configuration')
     _inputs(solve); solve.set_defaults(handler=new_run)
-    verify = commands.add_parser('verify', help='检查已有 XML；--tune 显式开启修复')
+    verify = commands.add_parser('verify', help='check existing XML; explicitly enable repair with --tune')
     _inputs(verify)
     verify.add_argument('--xml', required=True, type=Path)
     verify.add_argument('--sidecar', required=True, type=Path)
     verify.add_argument('--model', type=Path)
     verify.add_argument('--tune', action='store_true')
     verify.set_defaults(handler=new_run)
-    calibrate = commands.add_parser('calibrate', help='独立测量并发布代价模型')
+    calibrate = commands.add_parser('calibrate', help='run independent measurements and publish a cost model')
     _inputs(calibrate); calibrate.set_defaults(handler=new_run)
-    inspect = commands.add_parser('inspect', help='只读查看运行摘要和当前结果')
+    inspect = commands.add_parser('inspect', help='view the run summary and current result without modifying them')
     inspect.add_argument('--run', required=True, type=Path); inspect.set_defaults(handler=inspect_run)
-    resume = commands.add_parser('resume', help='保留原任务身份和预算恢复检查点')
+    resume = commands.add_parser('resume', help='resume a checkpoint with the original task identity and budget')
     resume.add_argument('--run', required=True, type=Path); resume.set_defaults(handler=resume_run)
     return parser
 
@@ -48,8 +48,8 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     obsolete = {'--online', '--timeout-s', '--output-dir'} & {item.split('=')[0] for item in argv}
     if obsolete:
-        print('VeriCCL v5：请在 sketch 中显式配置 calibration、trace_and_measure 和 budgets；'
-              '输出使用 --project-root、--case、--run-id。旧选项：' + ', '.join(sorted(obsolete)), file=sys.stderr)
+        print('VeriCCL v5: explicitly configure calibration, trace_and_measure, and budgets in sketch; '
+              'use --project-root, --case, and --run-id for output. Obsolete options: ' + ', '.join(sorted(obsolete)), file=sys.stderr)
         return 2
     try:
         args = build_parser().parse_args(argv)
@@ -59,15 +59,15 @@ def main(argv=None):
         args.invocation_argv = [sys.executable, '-m', 'vericcl', *argv]
         return int(args.handler(args))
     except KeyboardInterrupt:
-        print('VeriCCL：任务已取消。', file=sys.stderr); return 130
+        print('VeriCCL: task canceled.', file=sys.stderr); return 130
     except SolverUnavailableError as error:
-        print('VeriCCL 求解器错误：' + str(error), file=sys.stderr); return 8
+        print('VeriCCL solver error: ' + str(error), file=sys.stderr); return 8
     except StorageFailure as error:
-        print('VeriCCL 存储错误：' + str(error), file=sys.stderr); return 7
+        print('VeriCCL storage error: ' + str(error), file=sys.stderr); return 7
     except (InputValidationError, VeriCCLError, ValueError, OSError) as error:
-        print('VeriCCL 输入或路径错误：' + str(error), file=sys.stderr); return 2
+        print('VeriCCL input or path error: ' + str(error), file=sys.stderr); return 2
     except Exception as error:
-        print('VeriCCL 内部错误：' + str(error), file=sys.stderr); return 5
+        print('VeriCCL internal error: ' + str(error), file=sys.stderr); return 5
 
 
 def console_main():

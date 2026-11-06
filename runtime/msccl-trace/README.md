@@ -1,8 +1,8 @@
-# MSCCL 测量与 trace 运行时
+# MSCCL measurement and trace runtime
 
-运行时使用仓库内固定源码及九个补丁。补丁依次提供逐步 trace、主机/设备 step 一致性、轻量测量、单次 trace 控制、显式版本、准备阶段准入、六算子分发、有界中止和重复 trace 周期。日常构建使用根目录 README 中的 `runtime/build_runtime.py`，源码、补丁和最终文件均经过散列校验。
+The runtime uses the repository's pinned source and nine patches. In order, the patches provide step-level tracing, host/device step consistency, lightweight measurement, single-invocation trace control, explicit versions, preparation-time admission, dispatch for six collectives, bounded abort, and repeated trace cycles. For regular builds, use `runtime/build_runtime.py` as described in the root README. Source files, patches, and final files are all checked by hash.
 
-需要从官方源码复现时，在项目根目录执行以下命令；CUDA 路径与 GPU 架构按实际环境填写：
+To reproduce the build from upstream source, run the following commands from the project root, using the CUDA path and GPU architecture for your environment:
 
 <!-- vericcl-msccl-strategy: strategy-a -->
 ```bash
@@ -21,33 +21,33 @@ make -C "$MSCCL_SRC" -j8 CUDA_HOME=/usr/local/cuda-12.8 \
   NVCC_GENCODE="-gencode=arch=compute_70,code=sm_70" src.build
 ```
 
-## 采集完整的一次调用
+## Capture one complete invocation
 
-轻量代价测量与详细 trace 使用不同模式。详细 trace 默认关闭；正式成对性能测量始终关闭详细 trace。
+Lightweight cost measurement and detailed tracing use different modes. Detailed tracing is disabled by default and remains disabled for formal paired performance measurements.
 
-创建 communicator 前设置：
+Set the following before creating the communicator:
 
-- `VERICCL_TRACE_ENABLE=1`：分配记录缓冲区。省略或设为 `0` 时关闭。
-- `VERICCL_TRACE_RECORDS`：每个 rank 的记录容量。单条记录为 64 字节，文件头为 40 字节。根据该 rank 实际执行的 XML 步骤数预估容量，NOP 不计为记录。
-- `VERICCL_TRACE_FILE_PREFIX`：完整输出路径前缀。rank `r` 写入 `<prefix>.rank-<r>.bin`。
-- `VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4` 和 `VERICCL_EXPECTED_MSCCL_SLICESTEPS=4`：创建 communicator 时核对固定 step 配置。
+- `VERICCL_TRACE_ENABLE=1`: allocate trace buffers. Tracing is disabled when omitted or set to `0`.
+- `VERICCL_TRACE_RECORDS`: record capacity per rank. Each record is 64 bytes, and the file header is 40 bytes. Estimate capacity from the XML steps that the rank executes; NOPs do not produce records.
+- `VERICCL_TRACE_FILE_PREFIX`: full output path prefix. Rank `r` writes to `<prefix>.rank-<r>.bin`.
+- `VERICCL_EXPECTED_MSCCL_CHUNKSTEPS=4` and `VERICCL_EXPECTED_MSCCL_SLICESTEPS=4`: check the fixed step configuration when creating the communicator.
 
-调用方包含 `runtime/include/vericcl_trace_control.h`，保持 communicator 对应的 CUDA device 为当前设备，且不并发提交新工作。按以下顺序执行：
+The caller includes `runtime/include/vericcl_trace_control.h`, keeps the communicator's CUDA device current, and avoids concurrent work submission. Use this sequence:
 
-1. 创建 communicator 后调用 `vericclTracePause(comm)`，再进行预热。
-2. 在目标调用之前取得时钟参考样本，调用 `vericclTraceReset(comm, expected_records)`。该函数等待 GPU 完成，检查容量，并清零计数和溢出标记。
-3. 只执行一次目标集合通信，等待完成。
-4. 调用 `vericclTraceFinish(comm)`，保存记录并关闭后续记录；在目标调用之后再取时钟参考样本。
-5. 检查所有 rank 的数据正确性、GPU 完成及清理回执，再解析文件。原始 `iteration` 保存 MSCCL 的 `workIndex`，用来核对这一次调用的身份。
+1. After creating the communicator, call `vericclTracePause(comm)`, then run warmup.
+2. Collect clock reference samples before the target invocation, then call `vericclTraceReset(comm, expected_records)`. This waits for GPU completion, checks capacity, and clears the count and overflow flag.
+3. Execute the target collective once and wait for completion.
+4. Call `vericclTraceFinish(comm)` to save records and disable further recording, then collect clock reference samples after the target invocation.
+5. Check data correctness, GPU completion, and cleanup receipts for every rank before parsing the files. The raw `iteration` field stores MSCCL's `workIndex` to identify the captured invocation.
 
-`runtime/probes/main.cu --capture-trace 1 --timed 1` 实现上述步骤，用于独立链路测量程序的开发检查。它额外保存 CUDA event 测得的本设备完整调用时间。该时间包含 trace 开销；正式收益验收使用另一次关闭 trace 的运行。旧 `runner.py` 中的多次诊断采集保留兼容用途，v5 单次接口为 `capture_once`。
+`runtime/probes/main.cu --capture-trace 1 --timed 1` implements this sequence for development checks of the standalone link measurement program. It also saves the device's full invocation time measured by CUDA events. This time includes tracing overhead; performance acceptance checks use a separate run with tracing disabled. Repeated diagnostic capture in the legacy `runner.py` remains for compatibility. The v5 single-invocation interface is `capture_once`.
 
-文件溢出或缺步骤时，完整性检查失败。解析器保留能够逐条验证的其他记录，并标明缺失位置；这些片段可支持局部分析。完整调度的瓶颈结论使用覆盖完整且因果关系可判定的记录。
+Overflow or missing steps fail the completeness check. The parser retains other individually verifiable records and marks missing locations, so these fragments can support local analysis. Bottleneck conclusions for a complete schedule use records with full coverage and determinable causal relationships.
 
-## 时钟与总完成时间
+## Clocks and total completion time
 
-v5 单次采集使用 SM 7.0 及以上设备的纳秒 `globaltimer`。采集程序在目标调用前后读取 GPU 时间，并用主机时间区间和 MPI 往返测量映射到 rank 0 的单调时钟。它只测量时钟关系，不调整系统时钟。
+The v5 single-invocation capture uses the nanosecond `globaltimer` on SM 7.0 and newer devices. The capture program reads GPU time before and after the target invocation, then maps it to rank 0's monotonic clock using host time intervals and MPI round-trip measurements. This measures clock relationships while leaving system clocks unchanged.
 
-解析器要求参考样本包围目标调用，并保存映射误差。单个设备内的步骤时长直接由本设备时间差计算。跨设备先后关系只有在误差区间不重叠时才确定，否则标记为不确定。完整 trace 的首个步骤到最后一个步骤给出带误差的全局时间区间；每个 rank 的 CUDA event 时间另行记录，保留两种时间的含义。
+The parser requires reference samples to bracket the target invocation and retains mapping errors. Step durations within a device are computed directly from that device's time differences. Cross-device order is determined when error intervals do not overlap; otherwise, it is marked uncertain. The first and last steps of a complete trace define a global time interval with error bounds. Each rank's CUDA event time is recorded separately to preserve the meaning of both measurements.
 
-`runtime/msccl-trace/tools/vericcl_clock_sync.cu` 是早期独立参考工具。v5 使用 `runtime/probes/clock_reference.cuh` 中的前后参考测量，避免用目标区间之外的一组旧样本直接外推。
+`runtime/msccl-trace/tools/vericcl_clock_sync.cu` is an earlier standalone reference tool. v5 uses the before-and-after reference measurements in `runtime/probes/clock_reference.cuh`, avoiding direct extrapolation from an older sample set outside the target interval.

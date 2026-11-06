@@ -168,9 +168,9 @@ def finalize_run(context: RunContext, result: RunResult) -> FinalizationResult:
                 if previous.is_file():
                     context.write_bytes('reports/previous-' + uuid.uuid4().hex + '-' + previous.name, previous.read_bytes())
         context.write_json("run-summary.json", payload, replace=getattr(context, 'resumed', False))
-        text = ("本次运行结果\n\n任务：" + context.task_id + "\n\n执行状态：" + result.execution
-                + "\n\n模型覆盖：" + result.model_coverage + "\n\n候选采用：" + result.acceptance
-                + "\n\n结束原因：" + result.stop_reason + "\n\n退出码：" + str(result.exit_code) + "\n")
+        text = ("Run results\n\nTask: " + context.task_id + "\n\nExecution status: " + result.execution
+                + "\n\nModel coverage: " + result.model_coverage + "\n\nCandidate acceptance: " + result.acceptance
+                + "\n\nStop reason: " + result.stop_reason + "\n\nExit code: " + str(result.exit_code) + "\n")
         context.write_bytes("reports/summary.md", context.redactor.text(text).encode("utf-8"), replace=getattr(context, "resumed", False))
         emit_event(context, "run_finalized", payload)
         if context.layout_version >= 2:

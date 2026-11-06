@@ -1,4 +1,4 @@
-"""从实际 schema 生成字段清单与 JSON Schema，防止教程字段漂移。"""
+"""Generate field references and JSON Schema from the implementation to keep documentation in sync."""
 import argparse
 import json
 from pathlib import Path
@@ -6,96 +6,96 @@ from pathlib import Path
 from vericcl.input.schema import SCHEMAS, public_schemas
 
 HELP = {
-    'name': '拓扑名称，仅用于识别。', 'ranks': '参与任务的逻辑 rank 数；节点内列表则列出其 rank。',
-    'nodes': '节点分组，完整覆盖 rank；节点编号不代替实际主机地址。', 'id': '本配置内唯一标识。',
-    'gateways': '可作为该节点对外连接端点的 rank。', 'directed_links': '有向直连或交换机抽象链路；反方向须单独提供。',
-    'src': '发送端 rank。', 'dst': '接收端 rank。', 'alpha_us': '每次服务固定开销，单位微秒。',
-    'beta_us_per_byte': '每字节服务开销，单位微秒/字节，带宽为其倒数。',
-    'max_channels': '允许的 channel 数上限；任务默认搜索 1 到 7，显式上限可到 16。',
-    'resources': '该链路占用的共享资源标识。', 'physical_path': '抽象链路对应的物理路径说明。',
-    'shared_resources': '声明不同抽象链路的共同瓶颈，防止重复计算物理带宽。',
-    'capacity_bytes_per_us': '资源总有效带宽，单位字节/微秒。', 'links': '属于资源的有向链路 [src,dst]。',
-    'kind': '共享资源类别。', 'groups': '用户提供的候选分层组。', 'local_costs': '当前数据类型和归约操作下的本地开销初值。',
-    'rank': '逻辑 rank 编号，从 0 开始。', 'copy': '本地读取、写入或复制的初始代价。', 'reduce': '本地归约的初始代价。',
-    'collective': '对应用可见的算子语义。', 'operator': '集合通信算子；手工内部节点还可使用 Scatter/Gather。',
-    'datatype': '数据类型；默认 float32，实际支持需通过运行时检查。',
-    'root': 'Broadcast/Reduce 的外部根，默认 0；手工节点表示该节点的根。',
-    'reduction_op': 'Reduce/AllReduce/ReduceScatter 的归约操作，默认 sum。其他外部算子须省略或为 null。',
-    'inplace': '是否使用合法的原位缓冲关系，默认关闭。', 'hyperparameters': '应用输入规模与最小 slice。',
-    'total_size_bytes': '每 rank 输入字节数 M；Broadcast 指 root 消息大小。',
-    'slice_size_bytes': '固定最小 slice 字节数 S；省略时先搜索合法分区。N 由 M/S 派生。',
-    'reference_slice_size_bytes': '解释原始 slice_id 硬约束的参考分区；重分区时仍绑定原字节范围。',
-    'solver': '求解器、CPU 配额和求解策略。', 'backend': '仅支持 SCIP；缺失时直接报错。',
-    'per_model_timeout_s': '单个求解模型的时间上限，仍受父阶段剩余额度约束。', 'cpu_budget': '整个任务可使用的 CPU 配额。',
-    'max_threads_per_model': '单模型线程上限，默认 12；实际还受 CPU 配额限制。',
-    'max_parallel_models': '同时运行模型数的上限；省略时由预算管理器控制。',
-    'solver_seed': 'SCIP 随机种子。', 'mip_gap': '允许的数值 MIP gap；不构成完整修复空间证明。',
-    'require_proven_optimal': '是否要求当前求解模型达到数值最优状态。', 'bdd_backend': '分析使用的 BDD 后端；CUDD 默认，autoref 仅显式选择。',
-    'budgets': '各阶段时间上限和最大调优轮数；时间均为秒。',
-    'max_initial_synthesis_s': '本次初始合成总时间上限。', 'max_online_validation_per_round_s': '一轮在线校准、trace 和实测的累计上限。',
-    'max_online_validation_total_s': '整个任务在线验证累计上限。', 'max_offline_validation_per_round_s': '一轮离线检查与分析累计上限。',
-    'max_offline_validation_total_s': '整个任务离线检查与分析累计上限。', 'max_repair_per_round_s': '一轮所有局部/结构/分区修复累计上限。',
-    'max_repair_total_s': '整个任务修复累计上限。', 'max_run_wall_s': '可选的整个任务墙钟上限。',
-    'cleanup_reserve_s': '从剩余时间中保留的收尾时间；不会延长父期限。', 'max_tuning_rounds': '最多开始多少轮调优；0 表示建立初始结果后结束。',
-    'tolerances': '浮点数值比较容差，执行时须明确提供。', 'absolute': '绝对误差容差。', 'relative': '相对误差容差。',
-    'calibration': '独立原语测量与代价模型校准。', 'enabled': '启用本配置段的功能。',
-    'launches': '每轮独立进程启动数；同次启动内的迭代不视为独立启动。',
-    'warmup_iterations': '每次启动的预热次数；详细 trace 在预热后清零再记录一次。',
-    'timed_iterations': '无详细 trace 时每次启动的计时次数。', 'max_rounds': '稳定性不满足时最多进行的测量轮数。',
-    'max_cv': '同轮样本变异系数上限。', 'max_relative_fit_error': '代价拟合允许的最大相对误差。',
-    'job_timeout_s': '完整单次测量任务上限，含启动、重试、收集与清理。', 'payload_sizes': '额外探针大小；不改变应用的 M/S。',
-    'trace_and_measure': '同一开关控制详细 trace 和候选正式实测收益门槛，默认关闭。',
-    'pairs': '预先确定的 AB/BA 成对启动数，须为至少 2 的偶数。', 'min_relative_gain': '实测要求的最低相对改善。',
-    'task_alpha': '整个任务允许的统计错误概率预算，最大 0.05。',
-    'single_attempt_alpha_cap': '单次比较的错误概率上限，仍受任务账本分配约束。',
-    'seed': '预先确定采样顺序的种子。', 'trace_capacity_bytes': '每 rank 的详细 trace 缓冲区字节数，至少容纳一次完整记录。',
-    'repair': '修复阶段的分析/求解分工。', 'mode': 'strategy_first 先选策略，joint 联合选择合法决策。',
-    'candidate_batch_size': '每批进入局部 SCIP 的候选数；不表示总搜索上限。', 'analysis_batch_size': '每批分析建议数；耗尽后继续扩展。',
-    'runtime_compatibility': '可关闭的完整静态运行时兼容检查；基础启动安全检查始终保留。',
-    'history': '跨任务调度与绝对校准缓存，两个开关互相独立，默认关闭。',
-    'schedule_reuse': '自动模式下检索同构且相对带宽接近的历史调度，再适配并重新验证；手工计划使用 false。',
-    'calibration_reuse': '仅复用精确设备/运行时/类型/模式身份下仍有效的测量组件。',
-    'relative_bandwidth_tolerance': '映射后的各带宽缩放比例最大值/最小值减一的允许上限。',
-    'max_schedule_candidates': '快速历史检索最多检查的候选数。', 'calibration_max_age_s': '校准缓存的最大年龄。',
-    'schedule_index': '历史调度索引路径；相对路径从案例目录解析。', 'calibration_index': '校准索引路径；相对路径从案例目录解析。',
-    'synthesis_method': '自动计划中 auto 按 M_switch 选择：小消息 hierarchy，大消息 constructive_trees；手工计划取 hierarchy，auto 同样解析为 hierarchy。',
-    'M_switch': '自动计划使用 auto 时显式给出的消息大小分界，单位字节。', 'stage_num': '逻辑阶段数硬约束；省略时自动确定。',
-    'forbidden_transfers': '[原 slice_id,src,dst,stage]，只禁止该阶段的这条直连边，仍可合法绕路。',
-    'strategies': '可选初始求解策略，默认不启用。', 'symmetry': '启用对称约简。', 'shortest_paths': '启用候选路径缩减策略。',
-    'batching': '显式启用分层求解的批处理开关；批量生成树方法按自身规则管理 batch。',
-    'objective_mode': '显式选择延迟/吞吐目标，或由消息规模自动选择。',
-    'manual': '显式手工计划，仅在 enabled=true 时使用。', 'stage_id': '逻辑阶段编号，从 0 开始。',
-    'group': '该手工节点允许使用的 rank 集合。', 'relay_ranks': '组内允许中转的 rank；不能引入组外 rank。',
-    'depends_on': '该手工节点依赖的节点 ID。', 'input_states': '手工节点的输入状态合同。', 'output_states': '手工节点的输出状态合同。',
-    'atoms': '阶段内的有向边禁用变量组，按各集合的全部组合展开。',
-    'slice_ids': '受约束的原始 slice 编号集合。', 'src_ranks': '禁用边的发送 rank 集合。',
-    'dst_ranks': '禁用边的接收 rank 集合。',
-    'offset': '逻辑数据位置编号。', 'contributors': '该状态包含的原始 slice_id 集合。',
-    'rank_map': '每个 rank 的实际主机和设备位置，必须完整且无重复设备。', 'host': 'SSH/MPI 均可访问的主机名或地址。',
-    'device': '该 host 进程可见的 CUDA 设备编号。', 'environment': '运行时环境变量白名单，值均为字符串。',
-    'paths': '显式工具链和可执行文件路径。', 'cuda_home': '已有 CUDA 安装根目录。', 'mpi_bin': '含 mpirun、mpicxx 的目录。',
-    'msccl_root': '编译后的 MSCCL 根目录，含 include/lib。', 'nccl_tests_root': '可选 nccl-tests 根目录。',
-    'vericcl_driver': '独立原语测量程序 vericcl-probe 的绝对路径。', 'vericcl_native': '完整调度执行程序 vericcl-native 的绝对路径。',
-    'device_memory_budget_bytes': '设备总预算；0 使用启动时可用显存界，仍检查实际分配。',
-    'protocol': '当前固定使用 Simple。', 'scratch_bytes_per_rank': '每 rank 允许的 scratch 字节数。',
-    'limits': '运行时结构上限，可设置更小值，不能超过编译支持值。', 'steps_per_tb': '每 TB 最大指令数。',
-    'tbs_per_rank': '每 rank 最大 TB 数；还须满足实际设备驻留能力。',
-    'send_tbs_per_channel': '每 channel 发送 TB 上限。', 'recv_tbs_per_channel': '每 channel 接收 TB 上限。',
-    'dependency_id': '依赖编号上限。', 'buffer_offset': '缓冲区 slice 偏移上限。', 'tb_layout': '默认按发送/接收分开编排；fused 须显式选择。',
-    'control': '单次执行的 rank 同步配置。', 'bind_address': 'rank 0 的可达监听地址。', 'port': '控制 TCP 端口。',
+    'name': 'Topology name, used only for identification.', 'ranks': 'Number of logical ranks in the task; within a node, the list of its ranks.',
+    'nodes': 'Node groups covering every rank; node IDs do not replace actual host addresses.', 'id': 'Unique identifier within this configuration.',
+    'gateways': 'Ranks that can serve as external connection endpoints for this node.', 'directed_links': 'Directed links, either direct or abstracted through switches; provide the reverse direction separately.',
+    'src': 'Sending rank.', 'dst': 'Receiving rank.', 'alpha_us': 'Fixed service overhead per operation, in microseconds.',
+    'beta_us_per_byte': 'Service cost per byte, in microseconds per byte; bandwidth is its reciprocal.',
+    'max_channels': 'Maximum allowed channel count; the default search covers 1 through 7, with an explicit upper limit of up to 16.',
+    'resources': 'Identifiers of shared resources used by this link.', 'physical_path': 'Description of the physical path represented by the abstract link.',
+    'shared_resources': 'Shared bottlenecks across abstract links, preventing physical bandwidth from being counted more than once.',
+    'capacity_bytes_per_us': 'Total effective resource bandwidth, in bytes per microsecond.', 'links': 'Directed links [src,dst] belonging to this resource.',
+    'kind': 'Shared resource category.', 'groups': 'User-provided candidate groups for hierarchical planning.', 'local_costs': 'Initial local cost estimates for the current datatype and reduction operation.',
+    'rank': 'Logical rank ID, starting at 0.', 'copy': 'Initial cost of local reads, writes, or copies.', 'reduce': 'Initial cost of local reduction.',
+    'collective': 'Application-visible collective semantics.', 'operator': 'Collective operator; internal manual nodes also support Scatter/Gather.',
+    'datatype': 'Datatype, defaulting to float32; actual support must pass runtime checks.',
+    'root': 'External root for Broadcast/Reduce, defaulting to 0; for a manual node, that node\'s root.',
+    'reduction_op': 'Reduction operation for Reduce/AllReduce/ReduceScatter, defaulting to sum. Omit or use null for other external operators.',
+    'inplace': 'Whether to use a valid in-place buffer layout; disabled by default.', 'hyperparameters': 'Application input size and minimum slice size.',
+    'total_size_bytes': 'Input bytes M per rank; for Broadcast, the root message size.',
+    'slice_size_bytes': 'Fixed minimum slice size S in bytes; if omitted, search for a valid partition first. N is derived as M/S.',
+    'reference_slice_size_bytes': 'Reference partition for hard constraints on original slice_id values; repartitioning preserves their original byte ranges.',
+    'solver': 'Solver, CPU quota, and solving strategies.', 'backend': 'Only SCIP is supported; its absence causes an immediate error.',
+    'per_model_timeout_s': 'Time limit for one solver model, also bounded by the remaining parent-phase budget.', 'cpu_budget': 'CPU quota available to the entire task.',
+    'max_threads_per_model': 'Thread limit per model, defaulting to 12; also bounded by the CPU quota.',
+    'max_parallel_models': 'Maximum number of concurrent models; managed by the budget manager if omitted.',
+    'solver_seed': 'SCIP random seed.', 'mip_gap': 'Allowed numerical MIP gap; it does not prove coverage of the full repair space.',
+    'require_proven_optimal': 'Whether the current solver model must reach numerical optimality.', 'bdd_backend': 'BDD backend for analysis; CUDD is the default, and autoref requires explicit selection.',
+    'budgets': 'Phase time limits and maximum tuning rounds; all times are in seconds.',
+    'max_initial_synthesis_s': 'Total time limit for initial synthesis in this run.', 'max_online_validation_per_round_s': 'Cumulative limit for online calibration, tracing, and measurement in one round.',
+    'max_online_validation_total_s': 'Cumulative online validation limit for the entire task.', 'max_offline_validation_per_round_s': 'Cumulative limit for offline checks and analysis in one round.',
+    'max_offline_validation_total_s': 'Cumulative limit for offline checks and analysis across the task.', 'max_repair_per_round_s': 'Cumulative limit for all local, structural, and partition repairs in one round.',
+    'max_repair_total_s': 'Cumulative repair limit for the entire task.', 'max_run_wall_s': 'Optional wall-clock time limit for the entire task.',
+    'cleanup_reserve_s': 'Cleanup time reserved from the remaining budget; does not extend the parent deadline.', 'max_tuning_rounds': 'Maximum number of tuning rounds to start; 0 stops after establishing the initial result.',
+    'tolerances': 'Floating-point comparison tolerances, which must be provided explicitly for execution.', 'absolute': 'Absolute error tolerance.', 'relative': 'Relative error tolerance.',
+    'calibration': 'Independent primitive measurement and cost-model calibration.', 'enabled': 'Enable the feature in this configuration section.',
+    'launches': 'Independent process launches per round; iterations within one launch do not count as independent launches.',
+    'warmup_iterations': 'Warmup iterations per launch; detailed tracing resets after warmup and records one iteration.',
+    'timed_iterations': 'Timed iterations per launch without detailed tracing.', 'max_rounds': 'Maximum measurement rounds when stability criteria are unmet.',
+    'max_cv': 'Maximum coefficient of variation among samples in one round.', 'max_relative_fit_error': 'Maximum allowed relative error in cost fitting.',
+    'job_timeout_s': 'Time limit for one complete measurement job, including launch, retries, collection, and cleanup.', 'payload_sizes': 'Additional probe sizes; do not change the application M/S.',
+    'trace_and_measure': 'One switch controls detailed tracing and the formal measured-gain threshold for candidates; disabled by default.',
+    'pairs': 'Predetermined number of paired AB/BA launches; must be an even number of at least 2.', 'min_relative_gain': 'Minimum relative improvement required in measurements.',
+    'task_alpha': 'Statistical error probability budget for the entire task, at most 0.05.',
+    'single_attempt_alpha_cap': 'Error probability limit for one comparison, also subject to allocation by the task ledger.',
+    'seed': 'Seed that fixes the sampling order in advance.', 'trace_capacity_bytes': 'Detailed trace buffer bytes per rank; must accommodate the file header and all trace records for one complete invocation.',
+    'repair': 'Division of analysis and solving work during repair.', 'mode': 'strategy_first selects a strategy first; joint selects valid decisions jointly.',
+    'candidate_batch_size': 'Candidates sent to local SCIP per batch; does not limit the total search.', 'analysis_batch_size': 'Analysis suggestions per batch; expand further when exhausted.',
+    'runtime_compatibility': 'Full static runtime compatibility checks, which can be disabled; basic launch safety checks always remain active.',
+    'history': 'Cross-task schedule and absolute calibration caches; the two switches are independent and disabled by default.',
+    'schedule_reuse': 'In automatic mode, retrieve isomorphic historical schedules with similar relative bandwidths, then adapt and revalidate them; use false for manual plans.',
+    'calibration_reuse': 'Reuse only valid measurement components with exactly matching device, runtime, datatype, and mode identities.',
+    'relative_bandwidth_tolerance': 'Maximum allowed value of the largest mapped bandwidth scale divided by the smallest, minus one.',
+    'max_schedule_candidates': 'Maximum candidates checked by fast history lookup.', 'calibration_max_age_s': 'Maximum calibration cache age.',
+    'schedule_index': 'Historical schedule index path; resolve relative paths from the case directory.', 'calibration_index': 'Calibration index path; resolve relative paths from the case directory.',
+    'synthesis_method': 'For automatic plans, auto uses M_switch to select hierarchy for small messages and constructive_trees for large messages; manual plans use hierarchy, and auto also resolves to hierarchy.',
+    'M_switch': 'Explicit message-size threshold in bytes when automatic plans use auto.', 'stage_num': 'Hard constraint on the number of logical stages; determined automatically if omitted.',
+    'forbidden_transfers': '[original slice_id,src,dst,stage]; forbids only this direct edge in the specified stage, while valid alternate paths remain allowed.',
+    'strategies': 'Optional initial solving strategies, disabled by default.', 'symmetry': 'Enable symmetry reduction.', 'shortest_paths': 'Enable candidate path reduction.',
+    'batching': 'Explicitly enable batching for hierarchical solving; the constructive tree method manages batches by its own rules.',
+    'objective_mode': 'Explicitly select a latency or throughput objective, or choose automatically by message size.',
+    'manual': 'Explicit manual plan, used only when enabled=true.', 'stage_id': 'Logical stage ID, starting at 0.',
+    'group': 'Ranks available to this manual node.', 'relay_ranks': 'Ranks allowed to relay within the group; ranks outside the group are not allowed.',
+    'depends_on': 'IDs of nodes on which this manual node depends.', 'input_states': 'Input state contract for the manual node.', 'output_states': 'Output state contract for the manual node.',
+    'atoms': 'Variable groups that forbid directed edges within a stage, expanded over all combinations of their sets.',
+    'slice_ids': 'Original slice IDs subject to the constraint.', 'src_ranks': 'Sending ranks of forbidden edges.',
+    'dst_ranks': 'Receiving ranks of forbidden edges.',
+    'offset': 'Logical data position ID.', 'contributors': 'Original slice_id values contained in this state.',
+    'rank_map': 'Actual host and device placement for every rank; must be complete with no duplicate devices.', 'host': 'Hostname or address reachable through both SSH and MPI.',
+    'device': 'CUDA device ID visible to the process on this host.', 'environment': 'Allowed runtime environment variables, all with string values.',
+    'paths': 'Explicit toolchain and executable paths.', 'cuda_home': 'Root of an existing CUDA installation.', 'mpi_bin': 'Directory containing mpirun and mpicxx.',
+    'msccl_root': 'Built MSCCL root, containing include/lib.', 'nccl_tests_root': 'Optional nccl-tests root directory.',
+    'vericcl_driver': 'Absolute path to the independent primitive measurement program vericcl-probe.', 'vericcl_native': 'Absolute path to the full-schedule execution program vericcl-native.',
+    'device_memory_budget_bytes': 'Total device memory budget; 0 uses available memory at launch as the bound, while still checking actual allocations.',
+    'protocol': 'Currently fixed to Simple.', 'scratch_bytes_per_rank': 'Allowed scratch bytes per rank.',
+    'limits': 'Runtime structural limits; may be reduced but cannot exceed compiled limits.', 'steps_per_tb': 'Maximum instructions per TB.',
+    'tbs_per_rank': 'Maximum TBs per rank; must also fit the actual device residency capacity.',
+    'send_tbs_per_channel': 'Maximum send TBs per channel.', 'recv_tbs_per_channel': 'Maximum receive TBs per channel.',
+    'dependency_id': 'Maximum dependency ID.', 'buffer_offset': 'Maximum buffer slice offset.', 'tb_layout': 'Separate send/receive layout by default; fused requires explicit selection.',
+    'control': 'Rank synchronization configuration for one execution.', 'bind_address': 'Reachable listening address of rank 0.', 'port': 'Control TCP port.',
 }
 ENV = {
-    'PATH': '子进程工具搜索路径。', 'LD_LIBRARY_PATH': '动态库搜索路径，优先目标运行时与 MPI。', 'PYTHONPATH': 'Python 模块搜索路径。',
-    'CUDA_HOME': 'CUDA 根目录。', 'CUDA_PATH': 'CUDA 根目录兼容变量。', 'CUDA_VISIBLE_DEVICES': '设备可见范围，会改变 device 编号含义。',
-    'NCCL_ALGO': '保留的 NCCL 算法接口。', 'NCCL_PROTO': '运行协议，任务使用 Simple。',
-    'NCCL_BUFFSIZE': '每 channel 通信缓冲配置，须是 1 到 2147483647 的十进制字节字符串。',
-    'NCCL_DEBUG': '运行时日志级别。', 'NCCL_DEBUG_SUBSYS': '运行时日志子系统。', 'NCCL_IB_HCA': '明确使用的 IB/RoCE 设备。',
-    'NCCL_IB_GID_INDEX': '显式 GID 编号。', 'NCCL_SOCKET_IFNAME': '通信网卡选择。', 'NCCL_P2P_DISABLE': '是否禁用 GPU P2P 路径。',
-    'NCCL_SHM_DISABLE': '是否禁用主机共享内存路径。', 'MSCCL_XML_FILES': '既有 MSCCL XML 加载接口；原生版本接口显式绑定计划。',
-    'NCCL_TESTS_ROOT': '可选 nccl-tests 根目录。', 'MSCCL_ROOT': '运行时根目录。', 'OMP_NUM_THREADS': 'OpenMP 线程数。',
-    'OMPI_MCA_btl': 'Open MPI BTL 组件。', 'OMPI_MCA_pml': 'Open MPI PML 组件。', 'UCX_NET_DEVICES': 'UCX 网络设备。', 'UCX_TLS': 'UCX 传输选择。',
-    'OMPI_MCA_btl_tcp_if_include': 'Open MPI TCP 数据通道使用的接口或网段；各节点须互相可达。',
-    'OMPI_MCA_oob_tcp_if_include': 'Open MPI 控制通道使用的接口或网段；可与 TCP 数据通道显式使用同一网段。',
+    'PATH': 'Executable search path for child processes.', 'LD_LIBRARY_PATH': 'Dynamic library search path, prioritizing the target runtime and MPI.', 'PYTHONPATH': 'Python module search path.',
+    'CUDA_HOME': 'CUDA root directory.', 'CUDA_PATH': 'Compatibility variable for the CUDA root directory.', 'CUDA_VISIBLE_DEVICES': 'Visible device set, which changes the meaning of device IDs.',
+    'NCCL_ALGO': 'Retained NCCL algorithm interface.', 'NCCL_PROTO': 'Runtime protocol; tasks use Simple.',
+    'NCCL_BUFFSIZE': 'Communication buffer size per channel, as a decimal byte string from 1 to 2147483647.',
+    'NCCL_DEBUG': 'Runtime logging level.', 'NCCL_DEBUG_SUBSYS': 'Runtime logging subsystems.', 'NCCL_IB_HCA': 'Explicitly selected IB/RoCE devices.',
+    'NCCL_IB_GID_INDEX': 'Explicit GID index.', 'NCCL_SOCKET_IFNAME': 'Communication network interface selection.', 'NCCL_P2P_DISABLE': 'Whether to disable GPU P2P paths.',
+    'NCCL_SHM_DISABLE': 'Whether to disable host shared-memory paths.', 'MSCCL_XML_FILES': 'Existing MSCCL XML loading interface; the native versioned interface binds plans explicitly.',
+    'NCCL_TESTS_ROOT': 'Optional nccl-tests root directory.', 'MSCCL_ROOT': 'Runtime root directory.', 'OMP_NUM_THREADS': 'OpenMP thread count.',
+    'OMPI_MCA_btl': 'Open MPI BTL components.', 'OMPI_MCA_pml': 'Open MPI PML component.', 'UCX_NET_DEVICES': 'UCX network devices.', 'UCX_TLS': 'UCX transport selection.',
+    'OMPI_MCA_btl_tcp_if_include': 'Interfaces or subnets for the Open MPI TCP data channel; nodes must be mutually reachable.',
+    'OMPI_MCA_oob_tcp_if_include': 'Interfaces or subnets for the Open MPI control channel; may explicitly use the same subnet as the TCP data channel.',
 }
 
 
@@ -104,16 +104,16 @@ def rows(spec, prefix):
         path = prefix + '.' + key
         description = ENV[key] if prefix == 'runtime.environment' else HELP[key]
         if path == 'atom.manual.nodes':
-            description = '手工逻辑节点；每个节点给出组、算子、依赖及可选状态合同。'
-        default = json.dumps(child['default'], ensure_ascii=False) if 'default' in child else '未指定'
-        if path == 'sketch.collective.root': default = '适用时 0'
-        if path == 'sketch.collective.reduction_op': default = '适用时 sum'
+            description = 'Manual logical nodes; each specifies a group, operator, dependencies, and optional state contracts.'
+        default = json.dumps(child['default'], ensure_ascii=False) if 'default' in child else 'unspecified'
+        if path == 'sketch.collective.root': default = '0 when applicable'
+        if path == 'sketch.collective.reduction_op': default = 'sum when applicable'
         limits = []
         for name, symbol in [('minimum', '≥'), ('exclusiveMinimum', '>'), ('maximum', '≤')]:
             if name in child: limits.append(symbol + str(child[name]))
         if 'enum' in child: limits.append(' / '.join(map(str, child['enum'])))
-        required = '必填' if key in spec.get('required', []) else '按启用条件检查' if 'default' not in child else '可省略或 null'
-        yield f'| `{path}` | {child["type"]} | `{default}` | {required}；{"，".join(limits) or "—"} | {description} |'
+        required = 'Required' if key in spec.get('required', []) else 'Checked when enabled' if 'default' not in child else 'May be omitted or null'
+        yield f'| `{path}` | {child["type"]} | `{default}` | {required}; {", ".join(limits) or "—"} | {description} |'
         yield from rows(child, path)
         if child['type'] == 'array': yield from rows(child['items'], path + '[]')
 
@@ -125,28 +125,28 @@ def main(argv=None):
     directory = args.project_root / 'docs/input-schemas'; directory.mkdir(parents=True, exist_ok=True)
     for name, schema in public_schemas().items():
         (directory / (name + '.json')).write_text(json.dumps(schema, ensure_ascii=False, indent=2) + '\n')
-    intro = '''# 输入字段参考
+    intro = '''# Input field reference
 
-此表由 `vericcl/input/schema.py` 生成。四份 JSON 都拒绝重复键、未知字段和非有限数；原文件不会被覆盖。省略或 null 表示未指定：有默认值时补入默认，无默认但本次启用功能需要的字段报错。字段在新旧位置重复出现时，即使值相同也报错。
+This table is generated from `vericcl/input/schema.py`. All four JSON inputs reject duplicate keys, unknown fields, and non-finite numbers; original files are never overwritten. An omitted or null value is unspecified: a default is applied when available, and a required field without a default raises an error when its feature is enabled. A field present in both its old and new locations raises an error even if the values match.
 
-M/S 必须整除，S 必须包含完整的数据类型元素；AllToAll/ReduceScatter 的 N=M/S 还须能被 rank 数整除。禁止直接输入 N 或 input_chunkup。不适用算子的 root/reduction_op 可以省略或 null，不能提供实际值。
+M must be divisible by S, and S must contain complete datatype elements. For AllToAll/ReduceScatter, N=M/S must also be divisible by the rank count. Do not provide N or input_chunkup directly. Omit root/reduction_op or use null for operators to which they do not apply; concrete values are rejected.
 
-命令行 `--set 路径=JSON` 可以补入未指定值。覆盖已有不同值须加 `--override-input`。原文件保存在 `process/input_snapshot/`，最终有效配置与来源写入 `run.json` 的 `effective_request`、`value_sources`。配置字段不读取 shell 占位符，请在写 JSON 时使用实际绝对路径。
+The command-line option `--set path=JSON` can fill unspecified values. Replacing a different existing value requires `--override-input`. Original files are saved in `process/input_snapshot/`; the final effective configuration and value sources are stored as `effective_request` and `value_sources` in `run.json`. Configuration fields do not expand shell placeholders; write actual absolute paths into JSON.
 
-solve 必须给初始合成预算和最大轮数；轮数大于 0 时还须给修复预算。所有处理入口需要单模型/CPU、离线每轮/累计及清理预算。校准启用或使用 calibrate 时，需要在线预算、拟合误差和单任务期限；trace/实测启用时还需要 trace 容量和任务期限。历史复用各自要求索引及对应容差/年龄。运行时数值检查使用显式绝对/相对容差。
+solve requires an initial synthesis budget and maximum round count; a count above 0 also requires repair budgets. All processing entry points require per-model/CPU, per-round/total offline, and cleanup budgets. Enabling calibration or using calibrate requires online budgets, a fit-error limit, and a per-job deadline. Enabling tracing/measurement also requires trace capacity and a job deadline. Each history reuse feature requires its index and the corresponding tolerance or age limit. Runtime numerical checks use explicit absolute and relative tolerances.
 
-JSON Schema 描述标准结构；跨字段算术、启用条件、重复键和明确的旧写法迁移由 load_request 检查。算子名称忽略大小写；兼容别名为 all_gather、all_reduce、all_to_all、reducescatter。旧 hyperparameters 中明确列出的 solver 参数可迁移；atom 顶层的 symmetry、shortest_paths、batching、objective_mode 可迁移。旧 total_solve_timeout_s 仅迁移为初始合成预算。force_resolve、force_recalibrate 及旧算法布尔开关已删除。
+JSON Schema describes the standard structure; load_request checks cross-field arithmetic, enabling conditions, duplicate keys, and explicitly supported legacy migrations. Operator names are case-insensitive; compatible aliases are all_gather, all_reduce, all_to_all, and reducescatter. Explicitly listed solver parameters in legacy hyperparameters can be migrated, as can symmetry, shortest_paths, batching, and objective_mode at the atom top level. Legacy total_solve_timeout_s migrates only to the initial synthesis budget. force_resolve, force_recalibrate, and legacy algorithm boolean switches have been removed.
 
-手工节点的 `atoms` 只指定 slice、源 rank、目标 rank 集合，阶段号取节点的 `stage_id`；展开后的每条约束只限制一个有向边。手工模式使用 hierarchy 求解各阶段，并保留分层子问题复用；整体调度历史复用仅用于自动计划。手工模式关闭时，节点与变量组不参与自动合成。
+A manual node's `atoms` specify only sets of slices, source ranks, and destination ranks; the stage comes from the node's `stage_id`. Each expanded constraint restricts one directed edge. Manual mode uses hierarchy to solve each stage and retains hierarchical subproblem reuse; whole-schedule history reuse is limited to automatic plans. When manual mode is disabled, its nodes and variable groups do not participate in automatic synthesis.
 
-下面的 object/array 行描述所属配置段，后续行描述其成员。array 中的 [] 表示每一个元素。更多运行方式见 [README](../README.md)，证据范围见 [适用边界](supported-configuration.md)。
+The object/array rows below describe configuration sections, and subsequent rows describe their members. Within arrays, [] denotes each element. See the [README](../README.md) for more workflows and [supported configurations](supported-configuration.md) for the scope of evidence.
 '''
     parts = [intro]
     for name, spec in SCHEMAS.items():
-        parts += [f'\n## {name}.json\n\n[机器可读 Schema](input-schemas/{name}.json)\n',
-                  '| 字段 | 类型 | 默认值 | 要求与取值 | 作用 |\n|---|---|---|---|---|', *rows(spec, name)]
+        parts += [f'\n## {name}.json\n\n[Machine-readable Schema](input-schemas/{name}.json)\n',
+                  '| Field | Type | Default | Requirements and values | Purpose |\n|---|---|---|---|---|', *rows(spec, name)]
     (args.project_root / 'docs/input-schema.md').write_text('\n'.join(parts) + '\n')
-    print('已生成四份 Schema 和完整字段参考。')
+    print('Generated four schemas and the complete field reference.')
 
 
 if __name__ == '__main__':

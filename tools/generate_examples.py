@@ -1,4 +1,4 @@
-"""生成使用初始估计代价、关闭硬件测量的小规模 v5 案例。"""
+"""Generate small v5 cases with initial cost estimates and hardware measurement disabled."""
 import argparse
 import json
 from pathlib import Path
@@ -11,7 +11,7 @@ def example_documents(operator='allreduce', method='hierarchy', *, inplace=False
     if operator not in OPERATORS or method not in METHODS:
         raise ValueError('unsupported example operator or synthesis method')
     return {
-        'topology': {'name': '教学示例：初始估计代价', 'ranks': ranks,
+        'topology': {'name': 'Tutorial example: initial cost estimates', 'ranks': ranks,
             'nodes': [{'id': 0, 'ranks': list(range(ranks))}],
             'directed_links': [{'src': a, 'dst': b, 'alpha_us': 1, 'beta_us_per_byte': .01}
                               for a in range(ranks) for b in range(ranks) if a != b],
@@ -83,7 +83,7 @@ def main(argv=None):
     for name, documents in example_cases():
         paths = write_documents(root / name, documents)
         manifest.append({'name': name, 'files': {key: str(path.relative_to(root)) for key, path in paths.items()},
-                         'scope': '初始估计模型、CPU 合成与验证；未执行 GPU 测量'})
+                         'scope': 'Initial estimated model, CPU synthesis and verification; no GPU measurements performed'})
     with (root / 'cases.json').open('x') as stream:
         stream.write(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n')
     print(str(root / 'cases.json'))
