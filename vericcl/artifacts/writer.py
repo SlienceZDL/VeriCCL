@@ -39,43 +39,8 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(str(path), os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def atomic_write_bytes(path: Path, data: bytes) -> None:
-    if not isinstance(path, Path):
-        raise SemanticError("atomic write path must be a Path")
-    if not isinstance(data, bytes):
-        raise SemanticError("atomic write data must be bytes")
-    if os.path.lexists(path):
-        raise FileExistsError("artifact already exists: {}".format(path))
-    temporary = path.with_name(
-        ".{}.{}.tmp".format(path.name, uuid.uuid4().hex)
-    )
-    try:
-        with temporary.open("xb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        # Atomic no-replace publication also rejects dangling symlinks and a
-        # competing writer that creates the destination after the first check.
-        os.link(temporary, path)
-        temporary.unlink()
-        _fsync_directory(path.parent)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
-def atomic_write_text(path: Path, text: str) -> None:
-    if not isinstance(text, str):
-        raise SemanticError("atomic write text must be a string")
-    atomic_write_bytes(path, text.encode("utf-8"))
+# Implemented in the dependency-light atomic module; re-exported here unchanged.
+from vericcl.artifacts.atomic import _fsync_directory, atomic_write_bytes, atomic_write_text  # noqa: E402,F401
 
 
 def _validation_statuses(outcome: VerificationOutcome) -> Mapping[str, str]:

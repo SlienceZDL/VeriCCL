@@ -65,17 +65,38 @@ def persist_candidate(context, bundle, inputs, *, origin, ordinal=None):
     return record
 
 
+def _checkpoint_document(context, relative, value):
+    """Write an immutable checkpoint document once per distinct content.
+
+    Checkpoint files are never replaced or deleted, and every state records
+    and resume verifies the SHA-256 of each referenced file. A later
+    checkpoint whose input or model document is byte-identical therefore
+    references the earlier immutable copy instead of writing (and fsyncing)
+    another one; its own state.json is still new.
+    """
+    data = context.encode_json(value)
+    digest = hashlib.sha256(data).hexdigest()
+    shared = getattr(context, 'checkpoint_documents', None)
+    if shared is None:
+        shared = context.checkpoint_documents = {}
+    existing = shared.get(digest)
+    if existing is not None and context.artifact(existing).is_file():
+        return existing, digest
+    path = context.write_bytes(relative, data)
+    stored = str(path.relative_to(context.root))
+    shared[digest] = stored
+    return stored, digest
+
+
 def save_checkpoint(context, inputs, budgets, model, bundle, *, phase, search=None, bundle_record=None, extra=None):
     prefix = context.relative_artifact('checkpoints/' + uuid.uuid4().hex)
     files, checksums = {}, {}
     for name, document in inputs.request_config.items():
         if name in {'topology', 'sketch', 'atom', 'runtime'}:
-            path = context.write_json(prefix + '/' + name + '.json', plain(document))
-            files[name] = str(path.relative_to(context.root))
-            checksums[files[name]] = hashlib.sha256(path.read_bytes()).hexdigest()
-    model_path = context.write_json(prefix + '/model.json', model_json(model))
-    model_relative = str(model_path.relative_to(context.root))
-    checksums[model_relative] = hashlib.sha256(model_path.read_bytes()).hexdigest()
+            files[name], checksums_value = _checkpoint_document(context, prefix + '/' + name + '.json', plain(document))
+            checksums[files[name]] = checksums_value
+    model_relative, model_checksum = _checkpoint_document(context, prefix + '/model.json', model_json(model))
+    checksums[model_relative] = model_checksum
     if bundle is not None:
         bundle_record = bundle_record or persist_candidate(context, bundle, inputs, origin='checkpoint')
         for name in ('xml', 'sidecar'):

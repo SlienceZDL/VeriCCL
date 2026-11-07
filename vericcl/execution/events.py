@@ -49,12 +49,16 @@ def emit_event(context, kind: str, data=None, *, rank=None) -> dict:
         prefix = "" if rank is None else "rank-" + str(rank) + "."
         text = "{time_utc} {kind} {data}\n".format(**event).encode("utf-8")
         try:
-            for name, content in ((prefix + "events.jsonl", encoded), (prefix + "run.log", text)):
+            # events.jsonl is the authoritative, durable record used by resume.
+            # run.log is its human-readable mirror: written and flushed for
+            # every event, but not fsynced (it is never read for recovery).
+            for name, content, durable in ((prefix + "events.jsonl", encoded, True), (prefix + "run.log", text, False)):
                 path = context.artifact(name)
                 with path.open("ab") as stream:
                     stream.write(content)
                     stream.flush()
-                    os.fsync(stream.fileno())
+                    if durable:
+                        os.fsync(stream.fileno())
         except OSError as error:
             context.fail_storage(error)
         return event

@@ -12,7 +12,7 @@ import threading
 import uuid
 
 from vericcl.artifacts.layout import resolve_case_paths
-from vericcl.artifacts.writer import atomic_write_bytes
+from vericcl.artifacts.atomic import atomic_write_bytes
 from vericcl.execution.security import ENVIRONMENT_ALLOWLIST, Redactor
 from vericcl.execution.status import ExitCode, FinalizationResult, RunResult
 from vericcl.execution.layout import PROCESS_DIRECTORIES, METADATA_SECTIONS, artifact_path, layout_version
@@ -38,6 +38,8 @@ class RunContext:
         self.storage_error = None
         self.finalized = False
         self.active_jobs = set()
+        # Proven SCIP outcomes of byte-identical owned models in this run.
+        self.solver_results = {}
 
     @classmethod
     def create(cls, project_root: Path, case_id: str, run_id: str, *, input_files=None,
@@ -121,14 +123,65 @@ class RunContext:
                 self.fail_storage(error)
             return path
 
+    def write_scratch_bytes(self, relative, data: bytes) -> Path:
+        """Publish rebuildable task scratch below ``tmp/`` without fsync.
+
+        ``tmp/`` holds regenerable data whose lifetime is managed by the
+        current task (for example owned SCIP worker requests); recovery never
+        reads it. Publication is still atomic and no-replace, so a reader never
+        observes a partial file, but durability against power loss is not paid
+        for on the solver's critical path.
+        """
+        path = self.artifact(relative)
+        if not path.is_relative_to(self.artifact('tmp')):
+            raise ValueError("scratch writes are limited to the task tmp directory")
+        return self.write_unsynced_bytes(relative, data)
+
+    def write_unsynced_bytes(self, relative, data: bytes) -> Path:
+        """Atomic no-replace publication without fsync, for redundant records.
+
+        Only for files whose content is also durably recorded elsewhere (for
+        example owned CPU solver job records, whose request, identity and
+        result are part of durable events) or that recovery never reads.
+        """
+        with self.lock:
+            self.ensure_writable()
+            path = self.artifact(relative)
+            if path.is_relative_to(self.artifact('input_snapshot')):
+                raise ValueError("input snapshot writes must be durable")
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if os.path.lexists(path):
+                    raise FileExistsError("artifact already exists: {}".format(path))
+                temporary = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp")
+                try:
+                    with temporary.open("xb") as stream:
+                        stream.write(data)
+                    os.link(temporary, path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            except FileExistsError:
+                raise
+            except OSError as error:
+                self.fail_storage(error)
+            return path
+
+    def write_scratch_json(self, relative, value) -> Path:
+        text = json.dumps(self.redactor.value(value), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+        return self.write_scratch_bytes(relative, text.encode("utf-8"))
+
+    def encode_json(self, value) -> bytes:
+        """The exact bytes write_json stores for an ordinary artifact."""
+        text = json.dumps(self.redactor.value(value), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+        return text.encode("utf-8")
+
     def write_json(self, relative, value, *, replace=False) -> Path:
         if self.layout_version >= 2 and str(relative) in METADATA_SECTIONS:
             return self.update_metadata(METADATA_SECTIONS[str(relative)], value, replace=replace)
         if self.layout_version >= 2 and str(relative) == 'run.json':
             value = {'schema_version': 2, 'task_id': self.task_id, 'run_id': self.run_id,
                      'root': str(self.root), **value}
-        text = json.dumps(self.redactor.value(value), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
-        return self.write_bytes(relative, text.encode("utf-8"), replace=replace)
+        return self.write_bytes(relative, self.encode_json(value), replace=replace)
 
     def update_metadata(self, section, value, *, replace=False):
         with self.lock:
