@@ -482,6 +482,22 @@ class PrimaryWorkflow:
             self.calibration(inputs, only_modes=tuple(sorted(modes)))
 
     def compare(self, bundle, inputs, record):
+        # Plan section 11.4: a model update invalidates old comparisons. A
+        # proposal generated before calibration replaced the model (for
+        # example the second proposal of one resynthesis batch) is reevaluated
+        # under the current model instead of being dropped as model_mismatch.
+        def stale(item):
+            return item.prediction is not None and item.prediction.model_version != self.model.version
+        if bundle.xml_text is not None and (stale(bundle) or stale(self.best)):
+            with self.stage('offline') as lease:
+                if stale(self.best):
+                    self.best = self.reassess(self.best, self.best_inputs, lease)
+                    self.best_record = self.store(self.best, self.best_inputs, 'incumbent_model_reassessment')
+                    if self.best.can_execute:
+                        self.publish_best('model_reassessment')
+                if stale(bundle):
+                    bundle = self.reassess(bundle, inputs, lease)
+                    record = self.store(bundle, inputs, 'candidate_model_reassessment')
         preliminary = accept_candidate(self.best, bundle, {})
         can_calibrate_missing = (self.original.request_config['sketch']['calibration']['enabled'] and
             all(bundle.checks[key].status.value == 'valid' for key in ('semantic', 'storage', 'endpoint', 'deadlock', 'xml', 'launch')) and

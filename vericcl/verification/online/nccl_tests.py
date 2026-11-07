@@ -142,6 +142,7 @@ def _performance_row(
     expected_bytes: Optional[int],
     *,
     allow_unchecked: bool,
+    checked_column: Optional[bool] = None,
 ) -> NcclTestRun:
     if len(fields) < 7:
         raise SemanticError("nccl-tests performance row is incomplete")
@@ -164,13 +165,18 @@ def _performance_row(
         raise SemanticError("nccl-tests datatype is missing")
     if len(fields) >= 11:
         prefix = fields[:-8]
+        # With checked_column set, only the column that runs the requested
+        # schedule (True: in-place, False: out-of-place) must carry a checked
+        # zero wrong count. nccl-tests prints "N/A" for checks it cannot
+        # perform in the other column (for example in-place AllToAll); a
+        # nonzero count there is still rejected.
         out_of_place = _measurement(
             fields[-8:-4],
-            allow_unchecked=allow_unchecked,
+            allow_unchecked=allow_unchecked or checked_column is True,
         )
         in_place = _measurement(
             fields[-4:],
-            allow_unchecked=allow_unchecked,
+            allow_unchecked=allow_unchecked or checked_column is False,
         )
     else:
         prefix = fields[:-4]
@@ -195,6 +201,7 @@ def parse_nccl_tests_table(
     text: str,
     *,
     allow_unchecked: bool = False,
+    checked_column: Optional[bool] = None,
 ) -> Tuple[NcclTestRun, ...]:
     if not isinstance(text, str):
         raise SemanticError("nccl-tests output must be a string")
@@ -215,6 +222,7 @@ def parse_nccl_tests_table(
                 fields,
                 None,
                 allow_unchecked=allow_unchecked,
+                checked_column=checked_column,
             )
         )
     if not runs:
@@ -227,6 +235,7 @@ def parse_nccl_tests_output(
     expected_bytes: int,
     *,
     allow_unchecked: bool = False,
+    checked_column: Optional[bool] = None,
 ) -> Tuple[NcclTestRun, ...]:
     if (
         isinstance(expected_bytes, bool)
@@ -234,9 +243,12 @@ def parse_nccl_tests_output(
         or expected_bytes < 1
     ):
         raise SemanticError("expected_bytes must be a positive integer")
+    if checked_column is not None and not isinstance(checked_column, bool):
+        raise SemanticError("checked_column must be a boolean in-place selector")
     rows = parse_nccl_tests_table(
         text,
         allow_unchecked=allow_unchecked,
+        checked_column=checked_column,
     )
     selected = tuple(
         row for row in rows if row.message_size_bytes == expected_bytes

@@ -256,6 +256,7 @@ class NcclTestsRunner:
                 rows = parse_nccl_tests_output(
                     output,
                     request.message_size_bytes,
+                    checked_column=request.inplace,
                 )
                 if len(rows) != 1:
                     raise SemanticError(
@@ -275,6 +276,7 @@ class NcclTestsRunner:
         rows = parse_nccl_tests_output(
             output,
             request.message_size_bytes,
+            checked_column=request.inplace,
         )
         if len(rows) != 1:
             raise SemanticError(

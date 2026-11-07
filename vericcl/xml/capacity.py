@@ -39,13 +39,37 @@ class RuntimeLimits:
 
 
 def simple_payload_capacity(buffsize_bytes, datatype_bytes):
-    if isinstance(buffsize_bytes, bool) or not isinstance(buffsize_bytes, int) or not 0 < buffsize_bytes <= 2**31 - 1:
-        raise SemanticError('NCCL_BUFFSIZE must be a positive signed 32-bit byte count')
+    if isinstance(buffsize_bytes, bool) or not isinstance(buffsize_bytes, int) or not 8 <= buffsize_bytes <= 2**31 - 1:
+        raise SemanticError('NCCL_BUFFSIZE must be a signed 32-bit byte count of at least 8')
     if datatype_bytes not in (1, 2, 4, 8) or isinstance(datatype_bytes, bool):
         raise SemanticError('unsupported datatype byte width')
     # Pinned runtime: NCCL_STEPS=8, Simple CHUNKSTEPS=SLICESTEPS=4.
     # Mirror the device integer divisions; a rounded-up B/2 is not sufficient.
     return ((buffsize_bytes // 8) // datatype_bytes) * datatype_bytes * 4
+
+
+# Pinned MSCCL computeColl (src/enqueue.cc) rejects a Simple-protocol launch
+# unless its chunk, (NCCL_BUFFSIZE / NCCL_STEPS) * MSCCL_CHUNKSTEPS bytes, is a
+# multiple of (nThreads - WARP_SIZE) * sizeof(uint64_t) / sizeof(datatype).
+# VeriCCL XML leaves nthreads unset, so nThreads - WARP_SIZE is
+# NCCL_SIMPLE_MAX_NTHREADS = 512. The native executor admits plans as custom
+# collectives with their own datatype; the legacy NCCL AllGather/Broadcast API
+# path counts bytes (datatype width 1) and is therefore stricter.
+MSCCL_SIMPLE_COPY_THREADS = 512
+
+
+def simple_chunk_granule(datatype_bytes):
+    if datatype_bytes not in (1, 2, 4, 8) or isinstance(datatype_bytes, bool):
+        raise SemanticError('unsupported datatype byte width')
+    return MSCCL_SIMPLE_COPY_THREADS * 8 // datatype_bytes
+
+
+def simple_chunk_geometry(buffsize_bytes, datatype_bytes):
+    """Return (chunk_bytes, required_multiple, valid) for the pinned runtime."""
+    simple_payload_capacity(buffsize_bytes, datatype_bytes)
+    chunk = (buffsize_bytes // 8) * 4
+    granule = simple_chunk_granule(datatype_bytes)
+    return chunk, granule, chunk % granule == 0
 
 
 @dataclass(frozen=True)
