@@ -420,6 +420,29 @@ class RouteSearch:
         self.columns = [[] for _ in self.groups]
         self.complete = [False] * len(self.groups)
         self.incumbent = None
+        self._capacity_times = None
+        self._column_data = {}
+
+    def _times(self):
+        if self._capacity_times is None:
+            self._capacity_times = _capacities(self.topology, self.inputs.hyperparameters.slice_size_bytes)
+        return self._capacity_times
+
+    def _column(self, route):
+        """Exact loads and float constraint coefficients of one route column.
+
+        Columns are only appended between solves, so every later model reuses
+        these values instead of recomputing them with rational arithmetic.
+        """
+        data = self._column_data.get(route)
+        if data is None:
+            times, resource_times = self._times()
+            links, resources = _loads(self.topology, route)
+            data = (links, resources,
+                    {edge: float(duration * links[edge]) for edge, duration in times.items()},
+                    {resource: float(duration * resources[resource]) for resource, duration in resource_times.items()})
+            self._column_data[route] = data
+        return data
 
     def expand(self):
         changed = False
@@ -439,7 +462,7 @@ class RouteSearch:
 
     def solve(self):
         inputs, context = self.inputs, self.context
-        times, resource_times = _capacities(self.topology, inputs.hyperparameters.slice_size_bytes)
+        times, resource_times = self._times()
         with model_lease(inputs, context) as (lease, threads):
             gp, model = ScipAdapter.create_model('vericcl-integer-route-columns')
             try:
@@ -452,20 +475,36 @@ class RouteSearch:
                     for column_index, route in enumerate(columns):
                         key = group_index, column_index
                         variables[key] = model.addVar('copies-%d-%d' % key, vtype='I', lb=0, ub=len(self.groups[group_index]))
-                        loads[key] = _loads(self.topology, route)
+                        loads[key] = self._column(route)
                     model.addCons(gp.quicksum(variables[group_index, j] for j in range(len(columns))) == len(self.groups[group_index]))
-                for edge, duration in times.items():
-                    model.addCons(gp.quicksum(variables[key] * float(duration * load[0][edge]) for key, load in loads.items()) <= objective)
-                for resource, duration in resource_times.items():
-                    model.addCons(gp.quicksum(variables[key] * float(duration * load[1][resource]) for key, load in loads.items()) <= objective)
+                # Same terms, coefficients and order as before (the serialized
+                # model is unchanged); only the rational products are cached.
+                for edge in times:
+                    model.addCons(gp.quicksum(variables[key] * load[2][edge] for key, load in loads.items()) <= objective)
+                for resource in resource_times:
+                    model.addCons(gp.quicksum(variables[key] * load[3][resource] for key, load in loads.items()) <= objective)
                 model.setObjective(objective)
                 initial = {key: len(self.groups[key[0]]) if key[1] == 0 else 0 for key in variables}
                 if self.incumbent is not None:
                     previous = {identifier: batch.route for batch in self.incumbent.batches for identifier in batch.demand_ids}
                     initial = {key: sum(previous[d.demand_id] == self.columns[key[0]][key[1]] for d in self.groups[key[0]]) for key in variables}
                 def cost(counts):
-                    return max([Fraction(0)] + [sum(duration * loads[key][0][edge] * counts[key] for key in counts) for edge, duration in times.items()]
-                               + [sum(duration * loads[key][1][resource] * counts[key] for key in counts) for resource, duration in resource_times.items()])
+                    # Exact bandwidth time: per-edge integer load totals over
+                    # the columns actually used, then one rational product.
+                    # Equal to summing duration * load * count over every column.
+                    link_totals = dict.fromkeys(times, 0)
+                    resource_totals = dict.fromkeys(resource_times, 0)
+                    for key, count in counts.items():
+                        if count:
+                            links, resources = loads[key][0], loads[key][1]
+                            for edge, value in links.items():
+                                if edge in link_totals:
+                                    link_totals[edge] += value * count
+                            for resource, value in resources.items():
+                                if resource in resource_totals:
+                                    resource_totals[resource] += value * count
+                    return max([Fraction(0)] + [times[edge] * total for edge, total in link_totals.items()]
+                               + [resource_times[resource] * total for resource, total in resource_totals.items()])
                 ScipAdapter.warm_start(model, [(variables[key], value) for key, value in initial.items()] + [(objective, float(cost(initial)))], complete=True)
                 context.model_calls += 1
                 result = model.optimize()

@@ -6,9 +6,10 @@ decisions. The common executable lowering replays actual dynamic bandwidth,
 local operations, buffer and TB dependencies to obtain complete T_pred.
 """
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import heapq
-from itertools import combinations
+from itertools import combinations, permutations
+import random
 from types import MappingProxyType
 
 from vericcl.errors import SemanticError
@@ -16,7 +17,7 @@ from vericcl.execution.budget import BudgetExhausted
 from vericcl.solver.scip_api import ScipAdapter
 from vericcl.solver.scheduling import fixed_topology_transfer_duration_us
 from vericcl.topology.model import LinkKey
-from .operators import model_lease, check_routed_semantics
+from .operators import model_lease, check_routed_semantics, Route, _bundle, _legal_route
 
 
 @dataclass(frozen=True)
@@ -345,6 +346,121 @@ def solve_fixed_routes(bundle, context):
             model.freeProb()
 
 
+def _route_signature(bundle):
+    """Everything the fixed-route timing models read from a route bundle."""
+    return (bundle.operations, tuple((batch.demand_ids, batch.route) for batch in bundle.batches))
+
+
+def _binomial_reduce_edges(root, order, available):
+    """Binomial in-tree to ``root``: position i sends its partial result to the
+    position with i's lowest set bit cleared, so the root's accumulator
+    receives only ceil(log2 P) partials instead of P-1 serialized ones."""
+    sequence = (root,) + tuple(order)
+    edges = []
+    for index in range(1, len(sequence)):
+        edge = (sequence[index], sequence[index & (index - 1)])
+        if edge not in available:
+            return None
+        edges.append(edge)
+    return tuple(sorted(edges))
+
+
+def _reduction_orders(root, nodes, rng, limit):
+    others = [rank for rank in nodes if rank != root]
+    orders, seen = [], set()
+
+    def add(sequence):
+        sequence = tuple(sequence)
+        if sequence not in seen:
+            seen.add(sequence)
+            orders.append(sequence)
+
+    add(sorted(others, key=lambda rank: (rank ^ root, rank)))
+    ring = sorted(others, key=lambda rank: (rank - root) % len(nodes))
+    for shift in range(len(ring)):
+        add(ring[shift:] + ring[:shift])
+    if len(others) <= 5:
+        for permutation in permutations(others):
+            add(permutation)
+    else:
+        attempts = 0
+        while len(orders) < limit and attempts < 4 * limit:
+            attempts += 1
+            sample = list(others)
+            rng.shuffle(sample)
+            add(sample)
+    return orders
+
+
+def reshape_reductions(bundle, context, *, passes=2, order_limit=24):
+    """Latency-aware reduction trees for a fixed integer allocation.
+
+    The integer routing objective counts link and resource loads only, so all
+    reduction trees tie and the breadth-first seed (a star whose root
+    accumulator serializes P-1 receive-reduce steps) is kept. This bounded
+    coordinate search keeps every batch's root, slices and distribution tree,
+    tries binomial reduction trees over several rank orders, and scores each
+    complete allocation with the same fixed-duration list scheduler used for
+    the seed (it models edge, shared-resource and accumulator conflicts). It
+    returns a variant only when that estimate strictly improves; the variant is
+    then timed and lowered like any other candidate, so acceptance still uses
+    the exact complete T_pred.
+    """
+    inputs, topology = bundle.inputs, bundle.topology
+    nodes = tuple(range(inputs.rank_count))
+    if len(nodes) < 3 or not any(batch.route.reduce_edges for batch in bundle.batches):
+        return None
+    available = {(key.src_rank, key.dst_rank) for key in topology.links}
+    by_id = {demand.demand_id: demand for demand in bundle.demands}
+    rng = random.Random(inputs.solver.solver_seed)
+
+    def build(routes):
+        return _bundle(inputs, topology, bundle.model_version, bundle.demands,
+                       [(batch.demand_ids, route) for batch, route in zip(bundle.batches, routes)],
+                       exact=False, complete=bundle.column_space_complete, generated=bundle.generated_columns,
+                       scope='reduction_tree_reshaping', lease=context.lease)
+
+    def estimate(candidate):
+        # Lexicographic (makespan, total finish time): the makespan is a global
+        # maximum, so improving one root's tree while the others still bound it
+        # would otherwise look like no progress and stall the search.
+        domains, durations = _domain(candidate)
+        schedule = _initial(candidate, domains, durations, context.lease)
+        return _makespan(schedule), sum(schedule.finish_us.values())
+
+    routes = [batch.route for batch in bundle.batches]
+    before = best = estimate(bundle)
+    orders = {}
+    evaluated = 0
+    for _ in range(passes):
+        improved = False
+        for index, batch in enumerate(bundle.batches):
+            route = routes[index]
+            if not route.reduce_edges:
+                continue
+            for order in orders.setdefault(route.root, _reduction_orders(route.root, nodes, rng, order_limit)):
+                context.lease.check()
+                edges = _binomial_reduce_edges(route.root, order, available)
+                if edges is None or edges == routes[index].reduce_edges:
+                    continue
+                trial = Route(route.root, edges, route.send_edges)
+                if not all(_legal_route(inputs, topology, by_id[identifier], trial, context.lease)
+                           for identifier in batch.demand_ids):
+                    continue
+                proposal = routes[:index] + [trial] + routes[index + 1:]
+                evaluated += 1
+                value = estimate(build(proposal))
+                if value < best:
+                    best, routes, improved = value, proposal, True
+        if not improved:
+            break
+    context.records.append({'phase': 'reduction_tree_reshaping', 'estimated_before_us': before[0],
+                            'estimated_after_us': best[0], 'evaluated': evaluated,
+                            'scope': 'fixed allocation; binomial reduction trees; fixed-duration estimate'})
+    # Only a strictly shorter estimated makespan justifies timing another candidate.
+    return build(routes) if best[0] < before[0] else None
+
+
 class CandidateStream:
     def __init__(self, bundle, context):
         self.bundle, self.context, self.stop_reason, self._started = bundle, context, None, False
@@ -354,21 +470,67 @@ class CandidateStream:
             raise SemanticError('fixed-route candidate streams can be consumed once')
         self._started = True
         bundle = self.bundle
+        timed = {}
+        reshaped = False
         try:
             while True:
                 # Yield a native-checked fixed-order seed first. Later full
                 # channel/order search uses only original data dependencies;
                 # a model timeout cannot erase this already yielded candidate.
                 timing_returned = False
-                try:
-                    candidate = solve_fixed_seed(bundle, self.context)
+                signature = _route_signature(bundle)
+                if signature in timed:
+                    # Column generation can return an integer allocation that
+                    # was already timed. Its timing models and schedules are
+                    # identical, so intermediate repeats only continue the
+                    # route search. The bundle that closes the column space is
+                    # still reported, bound to the already checked schedules,
+                    # so the stream's last candidates carry that evidence.
                     timing_returned = True
-                    yield candidate
-                    if bundle.operations:
-                        yield solve_fixed_routes(bundle, self.context)
-                except BudgetExhausted:
-                    self.context.lease.check()
-                    self.context.records.append({'phase': 'fixed_route_timing', 'status': 'timing_model_budget'})
+                    self.context.records.append({'phase': 'fixed_route_timing', 'status': 'duplicate_routes_skipped',
+                                                 'column_space_complete': bundle.column_space_complete})
+                    if bundle.column_space_complete:
+                        for previous in timed[signature]:
+                            yield replace(previous, bundle=bundle)
+                else:
+                    try:
+                        produced = []
+                        candidate = solve_fixed_seed(bundle, self.context)
+                        timing_returned = True
+                        produced.append(candidate)
+                        yield candidate
+                        if bundle.operations:
+                            candidate = solve_fixed_routes(bundle, self.context)
+                            produced.append(candidate)
+                            yield candidate
+                        # Only completely timed bundles are skipped later; a
+                        # bundle whose timing hit a model budget is retried.
+                        timed[signature] = tuple(produced)
+                    except BudgetExhausted:
+                        self.context.lease.check()
+                        self.context.records.append({'phase': 'fixed_route_timing', 'status': 'timing_model_budget'})
+                if not reshaped and timing_returned:
+                    # One latency-aware alternative for the first allocation:
+                    # same slices, roots and distribution trees, reshaped
+                    # reduction trees. It is an extra candidate, never a
+                    # replacement, and the column search continues unchanged.
+                    reshaped = True
+                    variant = reshape_reductions(bundle, self.context)
+                    if variant is not None and _route_signature(variant) not in timed:
+                        try:
+                            produced = []
+                            candidate = solve_fixed_seed(variant, self.context)
+                            produced.append(candidate)
+                            yield candidate
+                            if variant.operations:
+                                candidate = solve_fixed_routes(variant, self.context)
+                                produced.append(candidate)
+                                yield candidate
+                            timed[_route_signature(variant)] = tuple(produced)
+                        except BudgetExhausted:
+                            self.context.lease.check()
+                            self.context.records.append({'phase': 'fixed_route_timing', 'status': 'timing_model_budget',
+                                                         'scope': 'reduction_tree_reshaping'})
                 search = bundle._search
                 if search is None:
                     self.stop_reason = 'initial_route_seed_complete' if timing_returned else 'timing_model_budget'
