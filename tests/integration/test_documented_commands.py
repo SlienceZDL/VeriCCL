@@ -205,3 +205,29 @@ def test_manual_template_matches_operator_and_scale(tmp_path, operator, layout):
     assert plan.rank_count == sum(len(devices) for devices in layout.values())
     assert plan.collective.kind.value == operator
     assert inputs.atom_constraints.forbidden_transfers == ()
+
+
+def test_gpu_template_keeps_probe_sizes_within_capacity_for_large_messages(tmp_path):
+    from vericcl.execution.budget import StandaloneLease
+    from vericcl.input.loader import load_request
+    from vericcl.topology import load_topology
+    from vericcl.verification.online.probe_jobs import ProbeContext, payload_sizes
+    from vericcl.xml.capacity import simple_payload_capacity
+    environment = tutorial_project(tmp_path, layout={"localhost": [0, 1]})
+    environment.update(VERICCL_M=str(64 * 1024 * 1024), VERICCL_S=str(1024 * 1024),
+        VERICCL_GPU_INPUT=str(tmp_path / "examples/documented-case/input/gpu"),
+        VERICCL_PROBE=str(tmp_path / "runtime/probe"), VERICCL_NATIVE=str(tmp_path / "runtime/native"),
+        MPI_HOME=str(tmp_path / "mpi"), LD_LIBRARY_PATH=str(tmp_path / "lib"),
+        VERICCL_CONTROL_ADDRESS="127.0.0.1", VERICCL_CONTROL_PORT="24950")
+    script = commands()
+    run_documented(script["input-generate"] + "\n" + script["gpu-setup"], tmp_path, environment)
+    directory = Path(environment["VERICCL_GPU_INPUT"])
+    inputs = load_request({key: directory / (key + ".json")
+                           for key in ("topology", "sketch", "atom", "runtime")},
+                          {"sketch.calibration.enabled": True}, override_input=True,
+                          purpose="calibrate")
+    sizes = payload_sizes(ProbeContext(inputs, load_topology(inputs), StandaloneLease.after(10)))
+    capacity = simple_payload_capacity(int(environment["VERICCL_NCCL_BUFFSIZE"]), 4)
+    assert len(set(sizes)) >= 3
+    assert inputs.hyperparameters.slice_size_bytes in sizes
+    assert all(0 < size <= capacity and size % 4 == 0 for size in sizes)

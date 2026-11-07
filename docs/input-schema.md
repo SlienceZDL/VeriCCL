@@ -185,7 +185,7 @@ The object/array rows below describe configuration sections, and subsequent rows
 | `runtime.environment.MSCCL_ROOT` | string | `unspecified` | Checked when enabled; — | Runtime root directory. |
 | `runtime.environment.MSCCL_XML_FILES` | string | `unspecified` | Checked when enabled; — | Existing MSCCL XML loading interface; the native versioned interface binds plans explicitly. |
 | `runtime.environment.NCCL_ALGO` | string | `unspecified` | Checked when enabled; — | Retained NCCL algorithm interface. |
-| `runtime.environment.NCCL_BUFFSIZE` | string | `unspecified` | Required; — | Communication buffer size per channel, as a decimal byte string from 1 to 2147483647. |
+| `runtime.environment.NCCL_BUFFSIZE` | string | `unspecified` | Required; — | Communication buffer size per channel, as a decimal byte string from 8 to 2147483647; Simple-protocol alignment and slice-capacity checks also apply. |
 | `runtime.environment.NCCL_DEBUG` | string | `unspecified` | Checked when enabled; — | Runtime logging level. |
 | `runtime.environment.NCCL_DEBUG_SUBSYS` | string | `unspecified` | Checked when enabled; — | Runtime logging subsystems. |
 | `runtime.environment.NCCL_IB_GID_INDEX` | string | `unspecified` | Checked when enabled; — | Explicit GID index. |

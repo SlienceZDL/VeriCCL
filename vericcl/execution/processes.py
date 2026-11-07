@@ -200,9 +200,10 @@ def run_owned_process(context: RunContext, argv, lease: ProcessLease, *, cwd=Non
     """Run one owned local process group.
 
     ``durable_records=False`` is for CPU-only helpers (owned SCIP workers):
-    their request, identity and result are still published atomically under
-    jobs/<id>/ and recorded durably in the job_requested/job_started/
-    job_finished events, but the duplicate JSON files skip fsync.
+    their request, identity and result are published atomically under
+    jobs/<id>/ without fsync. Durable job_requested/job_started/job_finished
+    events retain the command, process identity and outcome; the full request
+    metadata remains in request.json.
     """
     def record(relative, value):
         if durable_records:

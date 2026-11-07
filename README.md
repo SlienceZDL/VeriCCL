@@ -8,9 +8,10 @@ VeriCCL provides two methods: `hierarchy` for hierarchical synthesis and `constr
 
 **Install the synthesizer**
 
-On Linux with Python 3.12, install the dependencies and VeriCCL:
+Use Linux with Python 3.12, Git, a C/C++ compiler, Make, curl, and patch. Run the commands below in one Bash session. Install the Python dependencies and VeriCCL:
 
 ```bash
+set -euo pipefail
 git clone --branch vericcl-v5 https://github.com/SlienceZDL/VeriCCL.git "$HOME/VeriCCL"
 cd "$HOME/VeriCCL"
 export VERICCL_ROOT="$(pwd -P)"
@@ -22,7 +23,7 @@ export VERICCL_PYTHON="$VERICCL_ROOT/.venv/bin/python"
 "$VERICCL_PYTHON" -m vericcl --version
 ```
 
-You can now synthesize schedules on the CPU. GPU measurement and execution require the setup below. For multiple nodes, install the same versions at the same absolute paths on each node. The following commands use Bash.
+You can now synthesize schedules on the CPU. GPU measurement and execution require the setup below. For multiple nodes, install the same versions at the same absolute paths on each node.
 
 **Configure CUDA and MPI**
 
@@ -40,42 +41,44 @@ curl -fL https://download.open-mpi.org/release/open-mpi/v4.1/openmpi-4.1.8.tar.g
 printf '%s  %s\n' fb41086bbed9300baa2f3d7572491facfe5257412fa524ec5a396aa9101d5c62 openmpi-4.1.8.tar.gz | sha256sum -c -
 tar -xzf openmpi-4.1.8.tar.gz
 cd openmpi-4.1.8
-./configure --prefix="$MPI_HOME" --disable-mpi-fortran > "$VERICCL_ROOT/examples/mpi-build/output/configure.log" 2>&1
+./configure --prefix="$MPI_HOME" --with-cuda="$CUDA_HOME" --disable-mpi-fortran > "$VERICCL_ROOT/examples/mpi-build/output/configure.log" 2>&1
 make -j8 > "$VERICCL_ROOT/examples/mpi-build/output/build.log" 2>&1
 make install > "$VERICCL_ROOT/examples/mpi-build/output/install.log" 2>&1
 cd "$VERICCL_ROOT"
 export PATH="$MPI_HOME/bin:$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$MPI_HOME/lib:$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 "$MPI_HOME/bin/mpirun" --version
+"$MPI_HOME/bin/ompi_info" --parsable --all | grep mpi_built_with_cuda_support
 ```
 
-Build output is saved in `examples/mpi-build/output/`. Use `tail -f` in another terminal to follow the relevant log.
+Build output is saved in `examples/mpi-build/output/`. These commands print no build progress to the terminal; use `tail -f` in another terminal to follow the relevant log. The final MPI check reports `true` for CUDA support.
 
 **Build the GPU runtime**
 
-The following commands build MSCCL, the measurement probes, and the schedule executor in order. Build artifacts are saved under `build/` in each output directory, with build records in `process/result.json`.
+`build_runtime.py` builds the patched MSCCL library. `build_probes.py` builds the measurement program, and `build_native.py` builds the schedule executor and C interface. Run them in this order. Each build uses a new output directory, with binaries under `build/` and build records in `process/result.json`.
 
 ```bash
-export VERICCL_BUILD="$VERICCL_ROOT/examples/runtime-build/output/tutorial-runtime"
+export VERICCL_BUILD_ID="build-$(date -u +%Y%m%dT%H%M%S)-$RANDOM"
+export VERICCL_BUILD="$VERICCL_ROOT/examples/runtime-build/output/$VERICCL_BUILD_ID-runtime"
 "$VERICCL_PYTHON" runtime/build_runtime.py --output-dir "$VERICCL_BUILD" \
   --cuda-home "$CUDA_HOME" --arch "$VERICCL_ARCH" --jobs 8 --timeout-s 900
 export VERICCL_MSCCL="$VERICCL_BUILD/build"
 "$VERICCL_PYTHON" runtime/build_probes.py \
-  --output-dir "$VERICCL_ROOT/examples/runtime-build/output/tutorial-probes" \
+  --output-dir "$VERICCL_ROOT/examples/runtime-build/output/$VERICCL_BUILD_ID-probes" \
   --cuda-home "$CUDA_HOME" --msccl-build "$VERICCL_MSCCL" \
   --mpi-bin "$MPI_HOME/bin" --arch "$VERICCL_ARCH" --timeout-s 180
 "$VERICCL_PYTHON" runtime/build_native.py \
-  --output-dir "$VERICCL_ROOT/examples/runtime-build/output/tutorial-native" \
+  --output-dir "$VERICCL_ROOT/examples/runtime-build/output/$VERICCL_BUILD_ID-native" \
   --cuda-home "$CUDA_HOME" --msccl-build "$VERICCL_MSCCL" \
   --mpi-bin "$MPI_HOME/bin" --arch "$VERICCL_ARCH" --timeout-s 180
-export VERICCL_PROBE="$VERICCL_ROOT/examples/runtime-build/output/tutorial-probes/build/bin/vericcl-probe"
-export VERICCL_NATIVE="$VERICCL_ROOT/examples/runtime-build/output/tutorial-native/build/bin/vericcl-native"
+export VERICCL_PROBE="$VERICCL_ROOT/examples/runtime-build/output/$VERICCL_BUILD_ID-probes/build/bin/vericcl-probe"
+export VERICCL_NATIVE="$VERICCL_ROOT/examples/runtime-build/output/$VERICCL_BUILD_ID-native/build/bin/vericcl-native"
 export LD_LIBRARY_PATH="$VERICCL_MSCCL/lib:$MPI_HOME/lib:$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 ldd "$VERICCL_PROBE"
 ldd "$VERICCL_NATIVE"
 ```
 
-Use `ldd` to check the dynamic library paths used by each program. The C interface library and headers are in `tutorial-native/build/lib` and `tutorial-native/build/include`.
+Use `ldd` to check that CUDA, MPI, and MSCCL resolve to the selected installations. The C interface library and headers are in the native build's `build/lib` and `build/include`. On multiple nodes, use the same `VERICCL_BUILD_ID` so that executable paths match.
 
 ## Inputs
 
@@ -97,10 +100,11 @@ M is the input size in bytes per rank, and S is the size in bytes per slice. M m
 
 **Set the task size**
 
-First, set the case directory and communication parameters. This example uses two hosts with four GPUs each. Replace `host-a` and `host-b` with actual hostnames or SSH aliases, and add or remove hosts and GPU IDs as needed. For a single node, use `{"localhost":[0,1,2,3]}`.
+First, set the case directory and communication parameters. This example uses two hosts with four GPUs each. Replace `host-a` and `host-b` with hostnames that resolve consistently on all participating nodes, and add or remove hosts and GPU IDs as needed. For a single node, use `{"localhost":[0,1,2,3]}`. Run configuration-generation commands from `VERICCL_ROOT` so Python can import the example helpers.
 
 <!-- vericcl-v5-command: case-setup -->
 ```bash
+cd "$VERICCL_ROOT"
 export VERICCL_CASE=my-case
 export VERICCL_INPUT="$VERICCL_ROOT/examples/$VERICCL_CASE/input/base"
 export VERICCL_LAYOUT='{"host-a":[0,1,2,3],"host-b":[0,1,2,3]}'
@@ -182,7 +186,7 @@ PY
 
 You can edit the generated JSON. When changing the task size, ensure that `topology.ranks`, `nodes[].ranks`, and `runtime.rank_map` cover the same ranks, with unique GPU IDs on each host. Links are directed, so list both directions for a bidirectional connection. When links share a NIC, switch port, or another resource, list them in `shared_resources[].links` and add the resource ID to each link's `resources`.
 
-The defaults are FP32 and out-of-place buffers, with sum for AllReduce. Set `sketch.collective.inplace=true` for in-place execution. `scratch_bytes_per_rank` is the temporary storage budget per rank. `NCCL_BUFFSIZE` is the communication buffer size in bytes, from 1 to 2147483647. As message sizes and rank counts grow, adjust these budgets to fit GPU memory.
+The defaults are FP32 and out-of-place buffers, with sum for AllReduce. Set `sketch.collective.inplace=true` for in-place execution. `scratch_bytes_per_rank` is the temporary storage budget per rank. `NCCL_BUFFSIZE` accepts integer byte counts from 8 to 2147483647. For the Simple protocol, choose a multiple of 8192 that is at least twice S; the 64 MiB example supports slices up to 32 MiB. As message sizes and rank counts grow, adjust these budgets to fit GPU memory.
 
 `max_run_wall_s` limits total wall time, and each stage also has its own time limit. With `max_tuning_rounds=0`, the run ends after generating and checking the initial schedule. For larger tasks, adjust solver time, CPU budgets, and slice size. See the [input reference](docs/input-schema.md) and [supported configurations](docs/supported-configuration.md) for all fields and runtime limits.
 
@@ -261,7 +265,7 @@ Results from `solve`, `verify`, and `calibrate` are saved in `examples/<case>/ou
 `solve` synthesizes a schedule from the four configuration files and runs the enabled measurement and repair steps. The general syntax is below; replace angle-bracket placeholders with actual values:
 
 ```text
-python -m vericcl solve --project-root <project-directory> --case <case-name> \
+"$VERICCL_PYTHON" -m vericcl solve --project-root <project-directory> --case <case-name> \
   --topology <topology-file> --sketch <communication-config> --atom <algorithm-config> --runtime <runtime-config>
 ```
 
@@ -281,7 +285,7 @@ The final schedule is saved in `schedule.xml`, with its description in `schedule
 `inspect` reads the specified run directory and prints its status, best schedule, and checkpoints as JSON:
 
 ```text
-python -m vericcl inspect --run <run-directory>
+"$VERICCL_PYTHON" -m vericcl inspect --run <run-directory>
 ```
 
 Use the following commands to inspect the previous run. To inspect another run, first set `VERICCL_RUN` to its absolute path.
@@ -312,7 +316,7 @@ PY
 `verify` checks the XML using the configuration that matches the schedule. `--sidecar` specifies the schedule description generated with the XML, and `--model` specifies the evaluation model:
 
 ```text
-python -m vericcl verify --project-root <project-directory> --case <case-name> \
+"$VERICCL_PYTHON" -m vericcl verify --project-root <project-directory> --case <case-name> \
   --topology <topology-file> --sketch <communication-config> --atom <algorithm-config> --runtime <runtime-config> \
   --xml <xml-path> --sidecar <sidecar-path> --model <model-path>
 ```
@@ -355,7 +359,7 @@ Each round verifies the current schedule and analyzes bottlenecks, converts sugg
 For an existing schedule, add `--tune` to the same `verify` command to enter this loop:
 
 ```text
-python -m vericcl verify <four-input-and-output-arguments> \
+"$VERICCL_PYTHON" -m vericcl verify <four-input-and-output-arguments> \
   --xml <xml-path> --sidecar <schedule-description-path> --model <model-path> --tune
 ```
 
@@ -389,7 +393,7 @@ d['runtime']['control'] = {'bind_address': os.environ['VERICCL_CONTROL_ADDRESS']
 d['sketch']['budgets'].update(max_online_validation_per_round_s=1800, max_online_validation_total_s=7200)
 d['sketch']['trace_and_measure'] = {'enabled': False, 'job_timeout_s': 600, 'trace_capacity_bytes': 16777216}
 d['sketch']['calibration'].update(max_relative_fit_error=0.1, job_timeout_s=600,
-    payload_sizes=sorted({d['sketch']['hyperparameters']['slice_size_bytes'], d['sketch']['hyperparameters']['total_size_bytes']} - {None}))
+    payload_sizes=[])
 write_documents(Path(os.environ['VERICCL_GPU_INPUT']), d)
 PY
 GPU_ARGS=(--project-root "$VERICCL_ROOT" --case "$VERICCL_CASE"
@@ -397,11 +401,11 @@ GPU_ARGS=(--project-root "$VERICCL_ROOT" --case "$VERICCL_CASE"
   --atom "$VERICCL_GPU_INPUT/atom.json" --runtime "$VERICCL_GPU_INPUT/runtime.json")
 ```
 
-Add network settings such as `NCCL_SOCKET_IFNAME` and `NCCL_IB_HCA` to `runtime.environment` as needed. Use actual values and absolute paths in the JSON.
+An empty `payload_sizes` lets the calibrator select at least three legal sizes around the effective slice size. Custom probe sizes must fit one Simple-protocol transfer and contain whole elements; they are independent of the full message size. Add network settings such as `NCCL_SOCKET_IFNAME` and `NCCL_IB_HCA` to `runtime.environment` as needed. Use actual values and absolute paths in the JSON.
 
 **Execute a schedule and capture a trace**
 
-`sketch.trace_and_measure.enabled` enables both tracing and measured comparisons. After warmup, the program records one complete invocation, then measures execution time separately. Enable this switch with the usual `solve` inputs:
+`sketch.trace_and_measure.enabled` enables both tracing and measured comparisons. After warmup, the program records one complete invocation. When comparing a repaired candidate with an accepted schedule, it measures their execution times separately with tracing disabled. Enable this switch with the usual `solve` inputs:
 
 ```bash
 "$VERICCL_PYTHON" -m vericcl solve "${GPU_ARGS[@]}" \
@@ -415,7 +419,7 @@ The output directory is printed to the terminal. Set `VERICCL_RUN` to that direc
 `calibrate` independently measures link, shared-bandwidth, local-computation, and memory-access costs. The general syntax is:
 
 ```text
-python -m vericcl calibrate --project-root <project-directory> --case <case-name> \
+"$VERICCL_PYTHON" -m vericcl calibrate --project-root <project-directory> --case <case-name> \
   --topology <topology-file> --sketch <communication-config> --atom <algorithm-config> --runtime <runtime-config> \
   --override-input --set sketch.calibration.enabled=true
 ```
@@ -427,7 +431,7 @@ Measure with the current GPU configuration:
   --override-input --set sketch.calibration.enabled=true
 ```
 
-The final model is saved in `model.json`. Model versions and differences are in `process/models/`; measurement jobs and logs are in `process/jobs/`. To include measurement, verification, and repair in synthesis, run:
+The final model is saved in `model.json`. A component is updated after its samples and fit pass the configured checks; `run.json` and `report.md` record the outcome and remaining estimates. Model versions and differences are in `process/models/`; measurement jobs and logs are in `process/jobs/`. To include measurement, verification, and repair in synthesis, run:
 
 ```bash
 "$VERICCL_PYTHON" -m vericcl solve "${GPU_ARGS[@]}" --override-input \
@@ -442,13 +446,14 @@ After a model update, the program reevaluates and compares schedules under the s
 First, build the same nccl-tests version on each participating node. The following commands build the test programs. `--release-receipts` records GPU release status after each process finishes:
 
 ```bash
-"$VERICCL_PYTHON" "$VERICCL_ROOT/examples/nccl-tests-build/input/build.py" --run-id tutorial-tests \
+export VERICCL_TEST_BUILD_ID="tests-$(date -u +%Y%m%dT%H%M%S)-$RANDOM"
+"$VERICCL_PYTHON" "$VERICCL_ROOT/examples/nccl-tests-build/input/build.py" --run-id "$VERICCL_TEST_BUILD_ID" \
   --cuda-home "$CUDA_HOME" --mpi-home "$MPI_HOME" \
   --msccl-build "$VERICCL_MSCCL" --arch "$VERICCL_ARCH" --release-receipts
-export VERICCL_NCCL_TESTS="$VERICCL_ROOT/examples/nccl-tests-build/output/tutorial-tests/process/rebuildable-cache/source/build"
+export VERICCL_NCCL_TESTS="$VERICCL_ROOT/examples/nccl-tests-build/output/$VERICCL_TEST_BUILD_ID/process/rebuildable-cache/source/build"
 ```
 
-Launch tests with `mpirun`. `-np` sets the process count, `--host` sets host placement, and `-g 1` uses one GPU per process. Use `all_gather_perf` for AllGather and `all_reduce_perf` for AllReduce:
+Use the same `VERICCL_TEST_BUILD_ID` on all participating nodes. Launch tests with `mpirun`. `-np` sets the process count, `--host` sets host placement, and `-g 1` uses one GPU per process. Use `all_gather_perf` for AllGather and `all_reduce_perf` for AllReduce:
 
 ```text
 mpirun -np <rank-count> --host <host:process-count,...> <test-program> \
@@ -509,7 +514,7 @@ Results are saved in `examples/<case>/output/<run_id>/`, with inputs under the s
 | `report.md` | Run result, check conclusions, predicted time, stop reason, and issues |
 | `run.log` | Chronological log of the main workflow |
 | `schedule.xml`, `schedule.json` | Accepted schedule with semantics, buffers, TBs, and event mappings; generated after a schedule qualifies |
-| `model.json` | Cost model for the final schedule, or the model published by a standalone calibration run |
+| `model.json` | Model matching the accepted schedule; otherwise the available current or checkpoint model, including standalone calibration output |
 | `checkpoint.json` | Latest checkpoint state, elapsed time, round count, and process file references |
 | `trace.json` | Trace analysis of the accepted schedule; generated when tracing is enabled and complete results are available |
 | `process/` | All intermediate records, historical versions, and files needed for recovery |
@@ -537,7 +542,7 @@ In `run.json`, `invocation`, `input_snapshot`, `effective_request`, `value_sourc
 `resume` continues from the checkpoint in the specified run directory:
 
 ```text
-python -m vericcl resume --run <run-directory>
+"$VERICCL_PYTHON" -m vericcl resume --run <run-directory>
 ```
 
 Set `VERICCL_RUN` to the directory to resume, then run:
@@ -553,3 +558,14 @@ Results continue in the original directory, and elapsed time remains cumulative 
 ```
 
 See `run.log` for execution details. If configuration or schedule checks fail, first inspect the results in `report.md`, `process/reports/`, and `process/candidates/`. For dynamic library loading errors, check the CUDA, MPI, and MSCCL paths. See the [runtime documentation](runtime/msccl-trace/README.md) for the trace interface.
+
+**Run CPU regression tests**
+
+The following command runs the CPU tests, including the documented input, synthesis, and verification examples. Keep its temporary directory under your home directory to exercise the same storage boundary as native jobs:
+
+```bash
+cd "$VERICCL_ROOT"
+export VERICCL_TEST_ID="cpu-$(date -u +%Y%m%dT%H%M%S)-$RANDOM"
+"$VERICCL_PYTHON" -m pytest -q -m "not hardware" \
+  --basetemp "$VERICCL_ROOT/examples/cpu-tests/output/$VERICCL_TEST_ID/tmp"
+```
