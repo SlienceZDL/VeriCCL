@@ -321,6 +321,7 @@ include tests/unit/solver/test_templates.py
 include tests/unit/test_cli.py
 include tests/unit/test_coverage_report.py
 include tests/unit/test_distribution_provenance.py
+include tests/unit/test_optimization_regressions.py
 include tests/unit/test_packaging_metadata.py
 include tests/unit/test_provenance.py
 include tests/unit/test_public_package.py
@@ -542,6 +543,7 @@ include tools/run_examples.py
 include vericcl/__init__.py
 include vericcl/__main__.py
 include vericcl/artifacts/__init__.py
+include vericcl/artifacts/atomic.py
 include vericcl/artifacts/distribution.py
 include vericcl/artifacts/hashing.py
 include vericcl/artifacts/layout.py

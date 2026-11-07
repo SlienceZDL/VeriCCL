@@ -88,7 +88,7 @@ ENV = {
     'PATH': 'Executable search path for child processes.', 'LD_LIBRARY_PATH': 'Dynamic library search path, prioritizing the target runtime and MPI.', 'PYTHONPATH': 'Python module search path.',
     'CUDA_HOME': 'CUDA root directory.', 'CUDA_PATH': 'Compatibility variable for the CUDA root directory.', 'CUDA_VISIBLE_DEVICES': 'Visible device set, which changes the meaning of device IDs.',
     'NCCL_ALGO': 'Retained NCCL algorithm interface.', 'NCCL_PROTO': 'Runtime protocol; tasks use Simple.',
-    'NCCL_BUFFSIZE': 'Communication buffer size per channel, as a decimal byte string from 1 to 2147483647.',
+    'NCCL_BUFFSIZE': 'Communication buffer size per channel, as a decimal byte string from 8 to 2147483647; Simple-protocol alignment and slice-capacity checks also apply.',
     'NCCL_DEBUG': 'Runtime logging level.', 'NCCL_DEBUG_SUBSYS': 'Runtime logging subsystems.', 'NCCL_IB_HCA': 'Explicitly selected IB/RoCE devices.',
     'NCCL_IB_GID_INDEX': 'Explicit GID index.', 'NCCL_SOCKET_IFNAME': 'Communication network interface selection.', 'NCCL_P2P_DISABLE': 'Whether to disable GPU P2P paths.',
     'NCCL_SHM_DISABLE': 'Whether to disable host shared-memory paths.', 'MSCCL_XML_FILES': 'Existing MSCCL XML loading interface; the native versioned interface binds plans explicitly.',
