@@ -58,6 +58,7 @@ include runtime/msccl-trace/patches/0006-vericcl-prepared-plan-admission.patch
 include runtime/msccl-trace/patches/0007-vericcl-full-collective-dispatch.patch
 include runtime/msccl-trace/patches/0008-vericcl-bounded-abort-signal.patch
 include runtime/msccl-trace/patches/0009-vericcl-live-trace-cycle.patch
+include runtime/msccl-trace/patches/0010-vericcl-fast-residency-query.patch
 include runtime/msccl-trace/tools/vericcl_clock_sync.cu
 include runtime/msccl-trace/tools/verify_patch.py
 include runtime/msccl-trace/upstream.json

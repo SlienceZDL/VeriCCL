@@ -181,7 +181,8 @@
     "runtime/msccl-trace/patches/0007-vericcl-full-collective-dispatch.patch": "a090e0693ec5c54f34b6d65ebfc86ba595cf40d1bf8d50a18349f31341ecf1c5",
     "runtime/msccl-trace/patches/0008-vericcl-bounded-abort-signal.patch": "497e48804704e33eafb2adb096f5433227c66d88e39673a32b07996cee119d12",
     "runtime/include/vericcl_plan.h": "e9e41964b303d7f47ea81ccaf69f79c127a6c0f96c58152e6605e405b99281b6",
-    "runtime/msccl-trace/patches/0009-vericcl-live-trace-cycle.patch": "2c2feec3dfeae664bc4f5ed133e8b7afdfa73fdbe5bfac39a614c8fa7752b667"
+    "runtime/msccl-trace/patches/0009-vericcl-live-trace-cycle.patch": "2c2feec3dfeae664bc4f5ed133e8b7afdfa73fdbe5bfac39a614c8fa7752b667",
+    "runtime/msccl-trace/patches/0010-vericcl-fast-residency-query.patch": "1eede2a91166d4140ab16bfeda0c56013e41e8c10b01e895b40ed765429c21c0"
   },
   "native_json_dependency": {
     "repository": "https://github.com/nlohmann/json",

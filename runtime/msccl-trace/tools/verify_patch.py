@@ -26,6 +26,7 @@ PATCH_FILES = (
     RUNTIME_ROOT / "patches" / "0007-vericcl-full-collective-dispatch.patch",
     RUNTIME_ROOT / "patches" / "0008-vericcl-bounded-abort-signal.patch",
     RUNTIME_ROOT / "patches" / "0009-vericcl-live-trace-cycle.patch",
+    RUNTIME_ROOT / "patches" / "0010-vericcl-fast-residency-query.patch",
 )
 FORMAT_HEADER = RUNTIME_ROOT / "include" / "vericcl_trace_format.h"
 METADATA_FILE = RUNTIME_ROOT / "upstream.json"
