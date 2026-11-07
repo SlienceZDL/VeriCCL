@@ -119,7 +119,10 @@ def runtime_environment(
     values = {
         "NCCL_ALGO": "MSCCL,RING",
         "NCCL_PROTO": "Simple",
-        "NCCL_BUFFSIZE": str(2 * config.slice_size_bytes),
+        # Two Simple slices, rounded up to the pinned MSCCL chunk geometry:
+        # a multiple of 8192 bytes keeps the byte-typed AllGather/Broadcast
+        # API path legal as well (see vericcl.xml.capacity.simple_chunk_geometry).
+        "NCCL_BUFFSIZE": str(-(-2 * config.slice_size_bytes // 8192) * 8192),
         "MSCCL_XML_FILES": str(xml_path),
         "VERICCL_EXPECTED_MSCCL_CHUNKSTEPS": "4",
         "VERICCL_EXPECTED_MSCCL_SLICESTEPS": "4",

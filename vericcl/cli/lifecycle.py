@@ -36,13 +36,17 @@ def _execute(request, context, **kwargs):
         raise
     except BaseException as error:
         if isinstance(error, KeyboardInterrupt):
-            category, execution = 'cancelled', 'cancelled'
+            category, execution, stop = 'cancelled', 'cancelled', 'cancelled'
         elif isinstance(error, SolverUnavailableError):
-            category, execution = 'backend', 'failed'
+            category, execution, stop = 'backend', 'failed', 'exception'
+        elif isinstance(error, InputValidationError):
+            # Contract errors detected after the run directory exists (for
+            # example manual-plan state contracts) are input errors, exit 2.
+            category, execution, stop = 'input', 'failed', 'input_error'
         else:
-            category, execution = 'internal', 'failed'
+            category, execution, stop = 'internal', 'failed', 'exception'
         emit_event(context, 'execution_exception', {'message': str(error), 'traceback': traceback.format_exc()})
-        result = RunResult(False, execution, stop_reason='exception', failure_category=category,
+        result = RunResult(False, execution, stop_reason=stop, failure_category=category,
                            optional_failures=(str(error),))
     finalized = finalize_run(context, result)
     print('VeriCCL: status=%s, stop_reason=%s, model_coverage=%s, exit_code=%d, directory=%s' %

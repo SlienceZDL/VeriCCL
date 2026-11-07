@@ -17,7 +17,8 @@ from vericcl.semantics.ranges import DataRange
 from vericcl.semantics.versions import StateVersion
 from vericcl.semantics.version_schedule import VersionSchedule, VersionOperation, OutputBinding, replay_version_schedule
 from vericcl.verification.model import CheckResult, ValidationStatus
-from vericcl.xml.capacity import ExecutionShape, BlockCapacity, StepCapacity, check_capacity, simple_payload_capacity
+from vericcl.xml.capacity import (ExecutionShape, BlockCapacity, StepCapacity, check_capacity, simple_payload_capacity,
+                                  simple_chunk_geometry)
 from .v5_model import StorageCandidate, CandidateBundle, Value, Instruction, StoragePlan, NativeStep, NativeBlock, NativeProgram, Address
 from .v5_buffers import build_storage_plan, canonical_region
 from .v5_program import lower_program, build_executable, emit_native_xml, execution_dependencies, _endpoints, _dependency_ancestors
@@ -278,11 +279,21 @@ def evaluate_program(source, storage, program, xml_text, context, *, supplied_si
         capacity = _capacity(program, context)
         inputs = context.inputs
         _launch_geometry(program, storage, context)
-        if simple_payload_capacity(int(inputs.request_config['runtime']['environment']['NCCL_BUFFSIZE']), DATATYPE_BYTES[inputs.collective.datatype]) < inputs.hyperparameters.slice_size_bytes:
+        buffsize = int(inputs.request_config['runtime']['environment']['NCCL_BUFFSIZE'])
+        element = DATATYPE_BYTES[inputs.collective.datatype]
+        if simple_payload_capacity(buffsize, element) < inputs.hyperparameters.slice_size_bytes:
             raise SemanticError('NCCL_BUFFSIZE cannot hold one whole Simple slice')
+        chunk, granule, geometry_valid = simple_chunk_geometry(buffsize, element)
+        if not geometry_valid:
+            raise SemanticError('NCCL_BUFFSIZE gives a %d-byte Simple chunk; the pinned MSCCL launch requires a '
+                                'multiple of %d bytes for %s' % (chunk, granule, inputs.collective.datatype))
         if not capacity.compatible:
             raise SemanticError('runtime capacity: ' + ', '.join(sorted({issue.code for issue in capacity.violations})))
-        checks['launch'] = _check('launch', evidence={'scope': 'static launch safety; node preflight is also required'})
+        legacy = simple_chunk_geometry(buffsize, 1)[2] if inputs.collective.kind in {
+            CollectiveKind.ALL_GATHER, CollectiveKind.BROADCAST} else geometry_valid
+        checks['launch'] = _check('launch', evidence={'scope': 'static launch safety; node preflight is also required',
+            'simple_chunk_bytes': chunk, 'simple_chunk_multiple': granule,
+            'legacy_nccl_api_chunk_geometry': legacy})
     except SemanticError as error:
         checks['launch'] = _check('launch', 'invalid', str(error))
     if context.inputs.request_config['sketch']['runtime_compatibility']['enabled']:

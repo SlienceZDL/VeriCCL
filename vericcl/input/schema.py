@@ -344,8 +344,11 @@ def _validate_topology(topology, runtime):
     if len({(item["host"], item["device"]) for item in mapping}) != ranks:
         raise InputValidationError("runtime.rank_map must use a distinct device for each rank on a host")
     raw = runtime["environment"]["NCCL_BUFFSIZE"]
-    if not raw.isascii() or not raw.isdigit() or not 0 < int(raw) <= 2**31 - 1:
-        raise InputValidationError("NCCL_BUFFSIZE must be a positive signed 32-bit byte count")
+    # Plan section 7.1: the valid native range is 8 through 2147483647 bytes.
+    # Smaller values leave no Simple step (NCCL_STEPS=8) and previously ended
+    # as "no initial candidate" instead of an input error.
+    if not raw.isascii() or not raw.isdigit() or not 8 <= int(raw) <= 2**31 - 1:
+        raise InputValidationError("NCCL_BUFFSIZE must be an integer byte count from 8 to 2147483647")
 
 
 def _validate_enabled(config, purpose):
