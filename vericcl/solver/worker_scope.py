@@ -1,7 +1,14 @@
-"""Fresh SCIP workers with serialized models, owned deadlines and checked results."""
+"""Fresh SCIP workers with serialized models, owned deadlines and checked results.
+
+The worker entry point (``python -m vericcl.solver.worker_scope DIR``) imports
+only the SCIP adapter and its budget/error helpers. Process ownership, run
+records and artifact writers are parent-side concerns and are imported lazily,
+so a fresh worker does not pay for loading the synthesis/verification stack.
+"""
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import math
 import os
@@ -11,7 +18,6 @@ import time
 import uuid
 
 from vericcl.errors import SemanticError
-from vericcl.execution.processes import ProcessLease, run_owned_process
 
 
 _SCOPE = ContextVar('vericcl_owned_solver_scope', default=None)
@@ -73,7 +79,36 @@ def _checked_install(model, solution, objectives, objective_values):
         model.engine.freeSol(candidate)
 
 
+_RESULT_CACHE_LIMIT = 512
+
+
+def _reusable(values):
+    """Only proven outcomes are independent of the remaining time budget."""
+    return ((values.get('status') == 'optimal' and values.get('lexicographic_complete') is True)
+            or values.get('status') == 'infeasible')
+
+
+def _result_cache(context):
+    cache = getattr(context, 'solver_results', None)
+    if cache is None:
+        cache = {}
+        context.solver_results = cache
+    return cache
+
+
+def _model_key(directory, request):
+    digest = hashlib.sha256()
+    for name in ('model.cip', 'model.set'):
+        data = (directory / name).read_bytes()
+        digest.update(len(data).to_bytes(8, 'little'))
+        digest.update(data)
+    stable = {key: request[key] for key in ('objectives', 'configuration', 'warm_solution')}
+    digest.update(json.dumps(stable, sort_keys=True, allow_nan=False).encode())
+    return digest.hexdigest()
+
+
 def solve_owned(model, lease, scope):
+    from vericcl.execution.processes import ProcessLease, run_owned_process
     from vericcl.solver.scip_api import ScipAdapter, ScipSolveResult
     model.result = None
     started = time.monotonic()
@@ -102,14 +137,36 @@ def solve_owned(model, lease, scope):
         raise SemanticError('owned SCIP model variable names must be unique')
     model.engine.writeProblem(str(directory / 'model.cip'), trans=False, genericnames=False, verbose=False)
     model.engine.writeParams(str(directory / 'model.set'), comments=False, onlychanged=True, verbose=False)
-    context.write_json('tmp/' + identifier + '/request.json', {
+    request = {
         'objectives': [{'name': name, **_linear(expression)} for expression, name in objectives],
         'configuration': model.configuration, 'warm_solution': warm_solution,
         'work_deadline': work, 'parent_pid': os.getpid(),
-    })
+    }
+    context.write_scratch_json('tmp/' + identifier + '/request.json', request)
+    key = _model_key(directory, request)
+    cache = _result_cache(context)
+    reused = cache.get(key)
+    if reused is not None:
+        # A byte-identical model, parameter file, objective list, warm start
+        # and thread allocation already finished with a proof (optimal or
+        # infeasible) in this run. SCIP is deterministic for identical input,
+        # so a fresh worker would return the same outcome; the parent still
+        # rechecks feasibility and objective values independently below.
+        source, values = reused
+        outcome = ScipSolveResult(**{**values, 'objective_values': tuple(values['objective_values']),
+                                     'solution': dict(values['solution']), 'elapsed_s': time.monotonic() - started})
+        if outcome.primal is not None:
+            _checked_install(model, outcome.solution, objectives, outcome.objective_values)
+        context.write_scratch_json('tmp/' + identifier + '/reused.json',
+                                   {'source_job': source, 'model_sha256': key, 'status': outcome.status})
+        from vericcl.execution.events import emit_event
+        emit_event(context, 'solver_result_reused', {'job_id': identifier, 'source_job': source,
+                                                     'model_sha256': key, 'status': outcome.status})
+        model.result = outcome
+        return outcome
     result = run_owned_process(context, (sys.executable, '-m', 'vericcl.solver.worker_scope', str(directory)),
         ProcessLease(hard, hard - work), cwd=Path(__file__).resolve().parents[2], job_id=identifier,
-        cancel_check=lambda: lease.cancelled)
+        cancel_check=lambda: lease.cancelled, durable_records=False)
     if not result.cleanup_complete:
         lease.ownership_unresolved = True
         raise SemanticError('owned SCIP process did not confirm cleanup; CPU resources remain occupied')
@@ -120,6 +177,10 @@ def solve_owned(model, lease, scope):
         outcome = ScipSolveResult(**values)
         if outcome.primal is not None:
             _checked_install(model, outcome.solution, objectives, outcome.objective_values)
+        if _reusable(values):
+            if len(cache) >= _RESULT_CACHE_LIMIT:
+                cache.pop(next(iter(cache)))
+            cache[key] = (identifier, values)
         model.result = outcome
         return outcome
     if result.status in {'timeout', 'not_started', 'cancelled'}:
@@ -127,8 +188,25 @@ def solve_owned(model, lease, scope):
     raise SemanticError('native SCIP worker failed; see jobs/' + identifier)
 
 
+def _publish_scratch(path, data):
+    """Atomic no-replace publication of a worker scratch result.
+
+    The parent reads ``result.json`` only after this process has exited, and
+    ``tmp/`` is rebuildable task scratch, so durability (fsync) is not needed;
+    the temporary-name plus link publication still never exposes a partial
+    result and never replaces an existing one.
+    """
+    path = Path(path)
+    temporary = path.with_name('.{}.{}.tmp'.format(path.name, uuid.uuid4().hex))
+    try:
+        with temporary.open('xb') as stream:
+            stream.write(data)
+        os.link(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _worker(directory):
-    from vericcl.artifacts.writer import atomic_write_bytes
     from vericcl.execution.budget import StandaloneLease
     from vericcl.solver.scip_api import ScipAdapter
     request = json.loads((directory / 'request.json').read_text())
@@ -154,7 +232,7 @@ def _worker(directory):
         if warm:
             ScipAdapter.warm_start(model, [(variables[name], value) for name, value in warm.items()], complete=True)
         outcome = ScipAdapter.solve(model, lease)
-        atomic_write_bytes(directory / 'result.json', (json.dumps(asdict(outcome), allow_nan=False) + '\n').encode())
+        _publish_scratch(directory / 'result.json', (json.dumps(asdict(outcome), allow_nan=False) + '\n').encode())
     finally:
         model.freeProb()
 

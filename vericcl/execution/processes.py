@@ -65,12 +65,27 @@ def signal_owned_process_group(identity: ProcessIdentity, sig: int) -> bool:
 
 
 def _active_group_members(identity: ProcessIdentity) -> tuple[int, ...]:
+    # Same predicate as _proc_stat (state, pgrp), using raw descriptors: this
+    # scan visits every /proc entry after each owned job, and pathlib/text
+    # decoding dominated its cost on hosts with ~1000 processes.
     active = []
-    for path in Path("/proc").iterdir():
-        if path.name.isdigit():
-            state = _proc_stat(int(path.name))
-            if state is not None and state[1] == identity.pgid and state[0] not in {"Z", "X"}:
-                active.append(int(path.name))
+    pgid = identity.pgid
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            descriptor = os.open("/proc/" + name + "/stat", os.O_RDONLY)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        try:
+            raw = os.read(descriptor, 4096)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        finally:
+            os.close(descriptor)
+        fields = raw.rsplit(b")", 1)[-1].split()
+        if len(fields) > 2 and int(fields[2]) == pgid and fields[0] not in (b"Z", b"X"):
+            active.append(int(name))
     return tuple(active)
 
 
@@ -151,6 +166,12 @@ class ProcessResult:
         return result
 
 
+# Executable digests keyed by the file's full stat identity. Any replacement or
+# in-place modification changes the inode, size, mtime or (kernel-maintained)
+# ctime, so a hit always describes the same bytes that a fresh hash would read.
+_EXECUTABLE_DIGESTS: dict = {}
+
+
 def _executable_identity(argv, cwd, environment):
     executable = shutil.which(argv[0], path=environment.get("PATH"))
     if executable is None:
@@ -160,15 +181,35 @@ def _executable_identity(argv, cwd, environment):
         path = cwd / path
     path = path.resolve()
     try:
-        with path.open("rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        status = path.stat()
+        key = (str(path), status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns)
+        digest = _EXECUTABLE_DIGESTS.get(key)
+        if digest is None:
+            with path.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            if path.stat().st_ctime_ns == status.st_ctime_ns:
+                _EXECUTABLE_DIGESTS[key] = digest
     except OSError:
         digest = None
     return {"path": str(path), "sha256": digest}
 
 
 def run_owned_process(context: RunContext, argv, lease: ProcessLease, *, cwd=None,
-                      environment=None, job_id=None, rank=None, max_output_bytes=None, cancel_check=None) -> ProcessResult:
+                      environment=None, job_id=None, rank=None, max_output_bytes=None, cancel_check=None,
+                      durable_records=True) -> ProcessResult:
+    """Run one owned local process group.
+
+    ``durable_records=False`` is for CPU-only helpers (owned SCIP workers):
+    their request, identity and result are still published atomically under
+    jobs/<id>/ and recorded durably in the job_requested/job_started/
+    job_finished events, but the duplicate JSON files skip fsync.
+    """
+    def record(relative, value):
+        if durable_records:
+            context.write_json(relative, value)
+        else:
+            context.write_unsynced_bytes(relative, context.encode_json(value))
+
     command = tuple(argv)
     if not command or any(not isinstance(a, str) or "\x00" in a for a in command):
         raise ValueError("argv must contain valid string arguments")
@@ -195,7 +236,7 @@ def run_owned_process(context: RunContext, argv, lease: ProcessLease, *, cwd=Non
         elif sensitive_key(argument) and index + 1 < len(command):
             argument_secrets.append(command[index + 1])
     context.redactor = Redactor(context.redactor.secrets + tuple(argument_secrets), env)
-    context.write_json("jobs/" + job_id + "/request.json", {
+    record("jobs/" + job_id + "/request.json", {
         "job_id": job_id, "argv": command, "cwd": str(actual_cwd), "environment": env,
         "program": _executable_identity(command, actual_cwd, env),
         "deadline_monotonic": lease.deadline_monotonic, "rank": rank,
@@ -252,7 +293,7 @@ def run_owned_process(context: RunContext, argv, lease: ProcessLease, *, cwd=Non
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
             identity = ProcessIdentity.capture(process.pid)
             context.active_jobs.add(job_id)
-            context.write_json("jobs/" + job_id + "/identity.json", asdict(identity))
+            record("jobs/" + job_id + "/identity.json", asdict(identity))
             safe_emit("job_started", {"job_id": job_id, "identity": asdict(identity)})
             status, cleanup = "running", False
             for name, pipe in (("stdout", process.stdout), ("stderr", process.stderr)):
@@ -336,7 +377,10 @@ def run_owned_process(context: RunContext, argv, lease: ProcessLease, *, cwd=Non
             if not stream.closed:
                 save(name, b"", final=True)
                 try:
-                    os.fsync(stream.fileno())
+                    # An empty capture has no bytes to make durable; its
+                    # existence is already recorded by the job request/result.
+                    if written[name] or counts[name]:
+                        os.fsync(stream.fileno())
                     stream.close()
                 except OSError as error:
                     context.storage_error = storage_failure = context.redactor.text(str(error))
@@ -346,6 +390,6 @@ def run_owned_process(context: RunContext, argv, lease: ProcessLease, *, cwd=Non
                            counts["stdout"], counts["stderr"], truncated["stdout"], truncated["stderr"],
                            cleanup, time.monotonic() - started, capture_complete)
     if storage_failure is None:
-        context.write_json("jobs/" + job_id + "/result.json", result.as_json())
+        record("jobs/" + job_id + "/result.json", result.as_json())
         emit_event(context, "job_finished", result.as_json(), rank=rank)
     return result

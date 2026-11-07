@@ -25,13 +25,29 @@ class _RejectLegacyPackage(importlib.abc.MetaPathFinder):
         return None
 
 
-def test_public_workflow_has_no_legacy_package_dependency(tmp_path, monkeypatch):
+def _vericcl_module(name):
+    return name == "vericcl" or name.startswith("vericcl.")
+
+
+@pytest.fixture
+def isolated_vericcl_modules():
+    # monkeypatch restores the modules this test removes, but modules first
+    # imported during the test would otherwise stay bound to the throw-away
+    # package copies (for example a second LinkKey class). Leave sys.modules
+    # with exactly the vericcl modules that existed before the test.
+    before = {name for name in sys.modules if _vericcl_module(name)}
+    yield
+    for name in [name for name in sys.modules if _vericcl_module(name) and name not in before]:
+        del sys.modules[name]
+
+
+def test_public_workflow_has_no_legacy_package_dependency(tmp_path, isolated_vericcl_modules, monkeypatch):
     for module_name in tuple(sys.modules):
         if module_name == LEGACY_PACKAGE or module_name.startswith(
             LEGACY_PACKAGE + "."
         ):
             monkeypatch.delitem(sys.modules, module_name)
-        if module_name == "vericcl" or module_name.startswith("vericcl."):
+        if _vericcl_module(module_name):
             monkeypatch.delitem(sys.modules, module_name)
     blocker = _RejectLegacyPackage()
     monkeypatch.setattr(sys, "meta_path", [blocker, *sys.meta_path])
