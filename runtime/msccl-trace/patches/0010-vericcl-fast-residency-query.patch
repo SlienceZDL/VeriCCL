@@ -1,0 +1,25 @@
+diff --git a/src/enqueue.cc b/src/enqueue.cc
+--- a/src/enqueue.cc
++++ b/src/enqueue.cc
+@@ -854,13 +854,17 @@
+   if (info->algorithm == NCCL_ALGO_MSCCL){
+     struct mscclAlgorithm* mscclAlgo = &info->comm->mscclHostComm.mscclDevComm.mscclAlgos[info->mscclInfo.mscclAlgoIndex];
+     int residentBlocks = 0;
+-    cudaDeviceProp deviceProperties;
+-    CUDACHECK(cudaGetDeviceProperties(&deviceProperties, comm->cudaDev));
++    int multiProcessorCount = 0;
++    // This guard runs for every MSCCL launch and needs only the SM count.
++    // cudaGetDeviceProperties fills every device attribute and costs about
++    // 1.6 ms per call with driver 575 on V100, which dominated small
++    // collectives; the single attribute query costs well under a microsecond.
++    CUDACHECK(cudaDeviceGetAttribute(&multiProcessorCount, cudaDevAttrMultiProcessorCount, comm->cudaDev));
+     CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+         &residentBlocks, ncclKerns[work->header.funcIndex], info->nThreads, 0));
+-    if (residentBlocks <= 0 || mscclAlgo->nBlocks > residentBlocks * deviceProperties.multiProcessorCount) {
++    if (residentBlocks <= 0 || mscclAlgo->nBlocks > residentBlocks * multiProcessorCount) {
+       WARN("VeriCCL: MSCCL plan has %d TBs but this kernel/device permits at most %d resident TBs", 
+-           mscclAlgo->nBlocks, residentBlocks * deviceProperties.multiProcessorCount);
++           mscclAlgo->nBlocks, residentBlocks * multiProcessorCount);
+       return ncclInvalidUsage;
+     }
+ 

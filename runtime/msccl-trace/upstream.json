@@ -11,7 +11,7 @@
     "src/include/msccl.h": "a47fa754f0a2709aada41f388d769649331d638cf6c67b2b2bebd130fe7723a4",
     "src/include/vericcl_trace_format.h": "d9bc36fd6c039867fc13f1ff898fcd972bf2a5be457670b24e14430bba358e78",
     "src/init.cc": "65a427fa028f40c7b92c36579a150f558ef0dd4d1c94c47748187a76036f0108",
-    "src/enqueue.cc": "96cd8933315019099177125a9d9667befa096cdabb7086feb928a8b4ab90bfa8",
+    "src/enqueue.cc": "b6de78d5c67e2e33498b2a94671b922a031b650659a52baa1db8e5c1a74e611a",
     "src/include/vericcl_probe.h": "d66af0c7ffb12afea0a7032ba415657ed21c92de6e8108b7e3eaae88085306a8",
     "src/include/comm.h": "3c3a656faf2005925aaa4511f3759c9e969ebce027e8369cd4630e1a85b2ed92",
     "src/include/vericcl_plan.h": "e9e41964b303d7f47ea81ccaf69f79c127a6c0f96c58152e6605e405b99281b6"
@@ -36,5 +36,6 @@
   "v5_prepared_admission": "actual selected kernel occupancy, Simple geometry and allocated scratch checked before READY",
   "v5_full_collective_dispatch": "explicit XML index supports external collective labels and rank-dependent AllGather/ReduceScatter in-place partitions",
   "v5_abort": "signal before freeing; dependency waits observe abort; application confirms stream completion before communicator destruction",
-  "v5_trace_cycle": "idle version can alternate light counters, trace-off sampling and one complete detailed trace; reset preserves allocation"
+  "v5_trace_cycle": "idle version can alternate light counters, trace-off sampling and one complete detailed trace; reset preserves allocation",
+  "v5_launch_residency_query": "per-launch occupancy guard reads only the SM-count attribute instead of all device properties (same check, about 1.6 ms less per MSCCL launch)"
 }
