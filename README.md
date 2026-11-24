@@ -83,6 +83,8 @@ Create them from the [field reference](docs/input-schema.md). `M` is input bytes
 
 Choose `hierarchy` or `constructive_trees` in `atom.synthesis_method`. In `sketch.json`, set budgets, `calibration.enabled`, `trace_and_measure.enabled`, and `symbolic.enabled` as needed. `budgets.max_tuning_rounds` controls the repeated verification-repair loop.
 
+Set `sketch.symbolic.enabled` to `true` to enable the full symbolic execution and BDD features.
+
 ## Synthesize
 
 `solve` synthesizes a schedule and runs the enabled calibration and tuning stages:
