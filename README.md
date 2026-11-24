@@ -6,14 +6,13 @@ VeriCCL synthesizes, verifies, and tunes AllGather and AllReduce schedules. It u
 
 Use Linux with Git, Make, and the following dependency ranges. Choose a CUDA-compatible host compiler and NVIDIA driver.
 
-| Dependency | Minimum | Upper bound | Used by |
-|---|---|---|---|
-| Python | 3.12 | < 3.14 | Synthesizer |
-| CUDA Toolkit | 11.0 | < 13.0 for Volta/V100 | GPU runtime |
-| Open MPI | 4.1 | < 5.0 for this guide | GPU launch and measurement |
-| CMake | 3.20 | No project-imposed upper bound | Optional CPU accelerator |
-| C++ compiler | C++17 support | Within the selected CUDA toolkit's compiler range | GPU runtime |
-| C++ compiler | C++20 support | No project-imposed upper bound | Optional CPU accelerator |
+| Dependency | Minimum | Upper bound |
+|---|---|---|
+| Python | 3.12 | < 3.14 |
+| CUDA Toolkit | 11.0 | < 13.0 for Volta/V100 |
+| Open MPI | 4.1 | < 5.0 for this guide |
+| CMake | 3.20 | No project-imposed upper bound |
+| C++ compiler | C++17 support | Within the selected CUDA toolkit's compiler range |
 
 Python bounds follow the package metadata. CUDA needs [C++17 support](https://docs.nvidia.com/cuda/archive/11.0/cuda-c-programming-guide/#cpp17-language-features); [Volta compilation support ends before CUDA 13](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/). Other GPUs require a toolkit that supports their architecture. The Open MPI range retains the ORTE launch options used by the runtime. These are build and interface bounds; choose matching versions on all participating hosts.
 
