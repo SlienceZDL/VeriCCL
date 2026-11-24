@@ -19,6 +19,13 @@ def solve_owned(tmp_path, model, seconds=8):
     return run, outcome
 
 
+@pytest.fixture(autouse=True)
+def _force_process_isolation(monkeypatch):
+    # These tests cover the owned-subprocess path, which by default is only
+    # used for models above the isolation threshold.
+    monkeypatch.setenv('VERICCL_ISOLATE_MODEL_VARS', '0')
+
+
 def test_native_solver_result_survives_fresh_child_and_parent_remains_reusable(tmp_path):
     _, model = ScipAdapter.create_model('owned-integer')
     x = model.addVar('x', vtype='INTEGER', lb=0)
@@ -26,10 +33,10 @@ def test_native_solver_result_survives_fresh_child_and_parent_remains_reusable(t
     model.setObjective(x)
     run, result = solve_owned(tmp_path, model)
     assert result.numerical_optimal and model.getVal(x) == 3
-    identity = json.loads(next((run.artifact('jobs')).glob('scip-*/identity.json')).read_text())
+    identity = json.loads(next((run.root / 'jobs').glob('scip-*/identity.json')).read_text())
     assert identity['pid'] == identity['pgid'] and identity['pid'] != os.getpid()
     assert not run.active_jobs
-    assert next((run.artifact('tmp')).glob('scip-*/model.cip')).is_file()
+    assert next((run.root / 'tmp').glob('scip-*/model.cip')).is_file()
     model.freeProb()
 
 
@@ -70,3 +77,14 @@ def test_expired_owned_solver_keeps_only_existing_checked_incumbent(tmp_path):
     assert result.status == 'time_limit' and result.primal == 8
     assert result.dual_bound is None and not result.numerical_optimal
     model.freeProb()
+
+
+def test_small_model_is_solved_in_process_under_default_threshold(tmp_path, monkeypatch):
+    monkeypatch.delenv('VERICCL_ISOLATE_MODEL_VARS', raising=False)
+    _, model = ScipAdapter.create_model('in-process')
+    x = model.addVar('x', vtype='INTEGER', lb=0)
+    model.addCons(x >= 3)
+    model.setObjective(x)
+    run, result = solve_owned(tmp_path, model)
+    assert result.numerical_optimal and model.getVal(x) == 3
+    assert not list((run.root / 'jobs').glob('scip-*'))

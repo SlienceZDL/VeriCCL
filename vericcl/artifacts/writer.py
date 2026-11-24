@@ -20,6 +20,7 @@ from vericcl.errors import SemanticError
 from vericcl.input.json_codec import canonical_json
 from vericcl.input.models import ForbiddenTransfer, ObjectiveMode, ResolvedInput
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.solver.model import (
     SearchDiagnostics,
     SolveCandidate,
@@ -39,8 +40,66 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-# Implemented in the dependency-light atomic module; re-exported here unchanged.
-from vericcl.artifacts.atomic import _fsync_directory, atomic_write_bytes, atomic_write_text  # noqa: E402,F401
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def fsync_paths(paths) -> None:
+    """Force existing files, then their distinct directories, to stable storage."""
+    directories = []
+    for path in paths:
+        path = Path(path)
+        with path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        if path.parent not in directories:
+            directories.append(path.parent)
+    for directory in directories:
+        _fsync_directory(directory)
+
+
+def atomic_write_bytes(path: Path, data: bytes, *, durable: bool = True) -> None:
+    """Publish ``data`` at ``path`` all-or-nothing, never replacing a file.
+
+    The temporary-file + link publication keeps a reader or a killed process
+    from ever seeing a partial file.  ``durable`` additionally forces the file
+    and its directory entry to disk before returning, which only matters
+    across a power loss; per-run working records skip it and are made durable
+    once at finalization (``RunContext.make_durable``).
+    """
+    if not isinstance(path, Path):
+        raise SemanticError("atomic write path must be a Path")
+    if not isinstance(data, bytes):
+        raise SemanticError("atomic write data must be bytes")
+    if os.path.lexists(path):
+        raise FileExistsError("artifact already exists: {}".format(path))
+    temporary = path.with_name(
+        ".{}.{}.tmp".format(path.name, uuid.uuid4().hex)
+    )
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(data)
+            if durable:
+                stream.flush()
+                os.fsync(stream.fileno())
+        # Atomic no-replace publication also rejects dangling symlinks and a
+        # competing writer that creates the destination after the first check.
+        os.link(temporary, path)
+        temporary.unlink()
+        if durable:
+            _fsync_directory(path.parent)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    if not isinstance(text, str):
+        raise SemanticError("atomic write text must be a string")
+    atomic_write_bytes(path, text.encode("utf-8"))
 
 
 def _validation_statuses(outcome: VerificationOutcome) -> Mapping[str, str]:
@@ -224,7 +283,7 @@ def _sidecar_payload(
 def _parse_symbol(payload: object) -> Symbol:
     if not isinstance(payload, Mapping):
         raise SemanticError("schedule sidecar symbol is invalid")
-    return Symbol(
+    return symbolic_step(
         src_rank=payload.get("src_rank"),
         dst_rank=payload.get("dst_rank"),
         ready_time=payload.get("ready_time"),
@@ -246,7 +305,32 @@ def _parse_stage(payload: object) -> PathStage:
 def _parse_atom(payload: object) -> Atom:
     if not isinstance(payload, Mapping):
         raise SemanticError("schedule sidecar atom is invalid")
-    return Atom(
+    if "s" in payload:
+        # {s, pd, t}: rebuild the stage groups of the path and re-execute it symbolically.
+        s, pd, t = payload.get("s"), payload.get("pd"), payload.get("t")
+        if not isinstance(pd, Mapping) or not isinstance(pd.get("symbols"), (list, tuple)):
+            raise SemanticError("schedule sidecar atom path is invalid")
+        if not isinstance(s, Mapping) or not isinstance(t, Mapping):
+            raise SemanticError("schedule sidecar atom is invalid")
+        groups = []
+        for value in pd.get("symbols", ()):
+            if not isinstance(value, Mapping):
+                raise SemanticError("schedule sidecar symbol is invalid")
+            key = (value.get("stage_id", s.get("stage")), value.get("operator") or "SEND")
+            symbol = symbolic_step(value.get("src_rank"), value.get("dst_rank"), value.get("ready_time"),
+                                   symbol_id=value.get("symbol_id"))
+            if groups and groups[-1][0] == key:
+                groups[-1][1].append(symbol)
+            else:
+                groups.append((key, [symbol]))
+        return Atom.build(
+            slice_id=s.get("slice_id"),
+            slice_size_bytes=s.get("slice_size"),
+            path=tuple(PathStage(stage, operator, tuple(symbols)) for (stage, operator), symbols in groups),
+            st_time=t.get("st_time"),
+            ed_time=t.get("ed_time"),
+        )
+    return Atom.build(
         slice_id=payload.get("slice_id"),
         slice_size_bytes=payload.get("slice_size_bytes"),
         path=tuple(_parse_stage(value) for value in payload.get("path", ())),

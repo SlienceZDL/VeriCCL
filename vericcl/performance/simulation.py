@@ -111,7 +111,9 @@ def _rates(active, costs, model, used, number, unmeasured, lease=None):
         for resource in resources:
             used.add("resource:" + resource)
         if profile is not None:
-            for resource in resources:
+            # Sorted: the first conflicting resource reported must not depend
+            # on set iteration order (hash randomization).
+            for resource in sorted(resources):
                 assigned = sum(number(profile.rates[op.flow_id]) for op in group if resource in op.resources)
                 if assigned > number(model.resources[resource]):
                     raise SemanticError("measured rate vector conflicts with resource capacity " + resource)
@@ -133,12 +135,15 @@ def _rates(active, costs, model, used, number, unmeasured, lease=None):
     return rates, sources
 
 
-def predict(executable: Executable, model: CostModel, *, exact=False, lease=None) -> Prediction:
+def predict(executable: Executable, model: CostModel, *, exact=False, lease=None, detail=True) -> Prediction:
     """Replay fixed decisions; exact mode treats serialized decimals as rationals.
 
     Exact mode removes floating arithmetic from event ordering and completion
     comparison. It certifies only this model evaluation, not search coverage or
     agreement between the model and measured hardware behavior.
+
+    ``detail=False`` returns the same totals, coverage and usage without the
+    per-operation times, events and segments (for ranking alternatives).
     """
     if lease is not None:
         lease.check()
@@ -173,6 +178,14 @@ def predict(executable: Executable, model: CostModel, *, exact=False, lease=None
                 unavailable.add(key)
                 changed = True
     pending = set(operations) - unavailable
+    if exact:
+        # Same replay on the native core when it is built (VERICCL_CORE);
+        # costs and the unavailable set above stay shared with this reference.
+        from vericcl.native.simulate import native_predict
+        accelerated = native_predict(executable, model, operations, costs, unavailable, missing, lease,
+                                     detail=detail)
+        if accelerated is not None:
+            return accelerated
     releases = [(number(operations[key].not_before_us), key)
                 for key in pending if degrees[key] == 0]
     heapq.heapify(releases)
@@ -270,6 +283,8 @@ def predict(executable: Executable, model: CostModel, *, exact=False, lease=None
                 else "measured" if sources_used <= {"measured", "history"}
                 else "partial" if sources_used & {"measured", "history"} else "initial")
     ratio = (int(t_pred.numerator), int(t_pred.denominator)) if exact and t_pred is not None else None
+    if not detail:
+        starts, ends, events, segments = {}, {}, [], []
     return Prediction(model.version, None if t_pred is None else as_float(t_pred),
                       None if output_ready is None else as_float(output_ready),
                       MappingProxyType({key: as_float(value) for key, value in starts.items()}),

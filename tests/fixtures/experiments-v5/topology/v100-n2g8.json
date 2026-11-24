@@ -1,0 +1,4066 @@
+{
+ "directed_links": [
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [],
+   "src": 0
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [],
+   "src": 0
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [],
+   "src": 0
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [],
+   "src": 0
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [],
+   "src": 0
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [],
+   "src": 0
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [],
+   "src": 0
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [],
+   "src": 1
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [],
+   "src": 1
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [],
+   "src": 1
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [],
+   "src": 1
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [],
+   "src": 1
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [],
+   "src": 1
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [],
+   "src": 1
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [],
+   "src": 2
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [],
+   "src": 2
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [],
+   "src": 2
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [],
+   "src": 2
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [],
+   "src": 2
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [],
+   "src": 2
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [],
+   "src": 2
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [],
+   "src": 3
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [],
+   "src": 3
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [],
+   "src": 3
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [],
+   "src": 3
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [],
+   "src": 3
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [],
+   "src": 3
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [],
+   "src": 3
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [],
+   "src": 4
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [],
+   "src": 4
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [],
+   "src": 4
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [],
+   "src": 4
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [],
+   "src": 4
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [],
+   "src": 4
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [],
+   "src": 4
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [],
+   "src": 5
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [],
+   "src": 5
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [],
+   "src": 5
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [],
+   "src": 5
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [],
+   "src": 5
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [],
+   "src": 5
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [],
+   "src": 5
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [],
+   "src": 6
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [],
+   "src": 6
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [],
+   "src": 6
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [],
+   "src": 6
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [],
+   "src": 6
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [],
+   "src": 6
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [],
+   "src": 6
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [],
+   "src": 7
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [],
+   "src": 7
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [],
+   "src": 7
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [],
+   "src": 7
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [],
+   "src": 7
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [],
+   "src": 7
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [],
+   "src": 7
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [],
+   "src": 8
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [],
+   "src": 8
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [],
+   "src": 8
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [],
+   "src": 8
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [],
+   "src": 8
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [],
+   "src": 8
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [],
+   "src": 8
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [],
+   "src": 9
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [],
+   "src": 9
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [],
+   "src": 9
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [],
+   "src": 9
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [],
+   "src": 9
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [],
+   "src": 9
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [],
+   "src": 9
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [],
+   "src": 10
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [],
+   "src": 10
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [],
+   "src": 10
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [],
+   "src": 10
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [],
+   "src": 10
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [],
+   "src": 10
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [],
+   "src": 10
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [],
+   "src": 11
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [],
+   "src": 11
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [],
+   "src": 11
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [],
+   "src": 11
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [],
+   "src": 11
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [],
+   "src": 11
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [],
+   "src": 11
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [],
+   "src": 12
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [],
+   "src": 12
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [],
+   "src": 12
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [],
+   "src": 12
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [],
+   "src": 12
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [],
+   "src": 12
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [],
+   "src": 12
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [],
+   "src": 13
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [],
+   "src": 13
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [],
+   "src": 13
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [],
+   "src": 13
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [],
+   "src": 13
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [],
+   "src": 13
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [],
+   "src": 13
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [],
+   "src": 14
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [],
+   "src": 14
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [],
+   "src": 14
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [],
+   "src": 14
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [],
+   "src": 14
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [],
+   "src": 14
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [],
+   "src": 14
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [],
+   "src": 15
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [],
+   "src": 15
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [],
+   "src": 15
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 3.0517578125e-05,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [],
+   "src": 15
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [],
+   "src": 15
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [],
+   "src": 15
+  },
+  {
+   "alpha_us": 1,
+   "beta_us_per_byte": 1.52587890625e-05,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [],
+   "src": 15
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 0
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 0
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 0
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 0
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 0
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 0
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 0
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 0
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 1
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 1
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 1
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 1
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 1
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 1
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 1
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 1
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 2
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 2
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 2
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 2
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 2
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 2
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 2
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 2
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 3
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 3
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 3
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 3
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 3
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 3
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 3
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 3
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 4
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 4
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 4
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 4
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 4
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 4
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 4
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 4
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 5
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 5
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 5
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 5
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 5
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 5
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 5
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 5
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 6
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 6
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 6
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 6
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 6
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 6
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 6
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 6
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 8,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 7
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 9,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 7
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 10,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 7
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 11,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 7
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 12,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 7
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 13,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 7
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 14,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 7
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 15,
+   "max_channels": 16,
+   "resources": [
+    "ib-n0-to-n1",
+    "nic-n0-egress",
+    "nic-n1-ingress"
+   ],
+   "src": 7
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 8
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 8
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 8
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 8
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 8
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 8
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 8
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 8
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 9
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 9
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 9
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 9
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 9
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 9
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 9
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 9
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 10
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 10
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 10
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 10
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 10
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 10
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 10
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 10
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 11
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 11
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 11
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 11
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 11
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 11
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 11
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 11
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 12
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 12
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 12
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 12
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 12
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 12
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 12
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 12
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 13
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 13
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 13
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 13
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 13
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 13
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 13
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 13
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 14
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 14
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 14
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 14
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 14
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 14
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 14
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 14
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 0,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 15
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 1,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 15
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 2,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 15
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 3,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 15
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 4,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 15
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 5,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 15
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 6,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 15
+  },
+  {
+   "alpha_us": 4,
+   "beta_us_per_byte": 0.00018310546875,
+   "dst": 7,
+   "max_channels": 16,
+   "resources": [
+    "ib-n1-to-n0",
+    "nic-n1-egress",
+    "nic-n0-ingress"
+   ],
+   "src": 15
+  }
+ ],
+ "name": "v100-n2g8",
+ "nodes": [
+  {
+   "gateways": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "id": 0,
+   "ranks": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ]
+  },
+  {
+   "gateways": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+   ],
+   "id": 1,
+   "ranks": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+   ]
+  }
+ ],
+ "ranks": 16,
+ "shared_resources": [
+  {
+   "capacity_bytes_per_us": 5461.333333333333,
+   "id": "ib-n0-to-n1",
+   "kind": "link",
+   "links": [
+    [
+     0,
+     8
+    ],
+    [
+     0,
+     9
+    ],
+    [
+     0,
+     10
+    ],
+    [
+     0,
+     11
+    ],
+    [
+     0,
+     12
+    ],
+    [
+     0,
+     13
+    ],
+    [
+     0,
+     14
+    ],
+    [
+     0,
+     15
+    ],
+    [
+     1,
+     8
+    ],
+    [
+     1,
+     9
+    ],
+    [
+     1,
+     10
+    ],
+    [
+     1,
+     11
+    ],
+    [
+     1,
+     12
+    ],
+    [
+     1,
+     13
+    ],
+    [
+     1,
+     14
+    ],
+    [
+     1,
+     15
+    ],
+    [
+     2,
+     8
+    ],
+    [
+     2,
+     9
+    ],
+    [
+     2,
+     10
+    ],
+    [
+     2,
+     11
+    ],
+    [
+     2,
+     12
+    ],
+    [
+     2,
+     13
+    ],
+    [
+     2,
+     14
+    ],
+    [
+     2,
+     15
+    ],
+    [
+     3,
+     8
+    ],
+    [
+     3,
+     9
+    ],
+    [
+     3,
+     10
+    ],
+    [
+     3,
+     11
+    ],
+    [
+     3,
+     12
+    ],
+    [
+     3,
+     13
+    ],
+    [
+     3,
+     14
+    ],
+    [
+     3,
+     15
+    ],
+    [
+     4,
+     8
+    ],
+    [
+     4,
+     9
+    ],
+    [
+     4,
+     10
+    ],
+    [
+     4,
+     11
+    ],
+    [
+     4,
+     12
+    ],
+    [
+     4,
+     13
+    ],
+    [
+     4,
+     14
+    ],
+    [
+     4,
+     15
+    ],
+    [
+     5,
+     8
+    ],
+    [
+     5,
+     9
+    ],
+    [
+     5,
+     10
+    ],
+    [
+     5,
+     11
+    ],
+    [
+     5,
+     12
+    ],
+    [
+     5,
+     13
+    ],
+    [
+     5,
+     14
+    ],
+    [
+     5,
+     15
+    ],
+    [
+     6,
+     8
+    ],
+    [
+     6,
+     9
+    ],
+    [
+     6,
+     10
+    ],
+    [
+     6,
+     11
+    ],
+    [
+     6,
+     12
+    ],
+    [
+     6,
+     13
+    ],
+    [
+     6,
+     14
+    ],
+    [
+     6,
+     15
+    ],
+    [
+     7,
+     8
+    ],
+    [
+     7,
+     9
+    ],
+    [
+     7,
+     10
+    ],
+    [
+     7,
+     11
+    ],
+    [
+     7,
+     12
+    ],
+    [
+     7,
+     13
+    ],
+    [
+     7,
+     14
+    ],
+    [
+     7,
+     15
+    ]
+   ]
+  },
+  {
+   "capacity_bytes_per_us": 5461.333333333333,
+   "id": "ib-n1-to-n0",
+   "kind": "link",
+   "links": [
+    [
+     8,
+     0
+    ],
+    [
+     8,
+     1
+    ],
+    [
+     8,
+     2
+    ],
+    [
+     8,
+     3
+    ],
+    [
+     8,
+     4
+    ],
+    [
+     8,
+     5
+    ],
+    [
+     8,
+     6
+    ],
+    [
+     8,
+     7
+    ],
+    [
+     9,
+     0
+    ],
+    [
+     9,
+     1
+    ],
+    [
+     9,
+     2
+    ],
+    [
+     9,
+     3
+    ],
+    [
+     9,
+     4
+    ],
+    [
+     9,
+     5
+    ],
+    [
+     9,
+     6
+    ],
+    [
+     9,
+     7
+    ],
+    [
+     10,
+     0
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     10,
+     2
+    ],
+    [
+     10,
+     3
+    ],
+    [
+     10,
+     4
+    ],
+    [
+     10,
+     5
+    ],
+    [
+     10,
+     6
+    ],
+    [
+     10,
+     7
+    ],
+    [
+     11,
+     0
+    ],
+    [
+     11,
+     1
+    ],
+    [
+     11,
+     2
+    ],
+    [
+     11,
+     3
+    ],
+    [
+     11,
+     4
+    ],
+    [
+     11,
+     5
+    ],
+    [
+     11,
+     6
+    ],
+    [
+     11,
+     7
+    ],
+    [
+     12,
+     0
+    ],
+    [
+     12,
+     1
+    ],
+    [
+     12,
+     2
+    ],
+    [
+     12,
+     3
+    ],
+    [
+     12,
+     4
+    ],
+    [
+     12,
+     5
+    ],
+    [
+     12,
+     6
+    ],
+    [
+     12,
+     7
+    ],
+    [
+     13,
+     0
+    ],
+    [
+     13,
+     1
+    ],
+    [
+     13,
+     2
+    ],
+    [
+     13,
+     3
+    ],
+    [
+     13,
+     4
+    ],
+    [
+     13,
+     5
+    ],
+    [
+     13,
+     6
+    ],
+    [
+     13,
+     7
+    ],
+    [
+     14,
+     0
+    ],
+    [
+     14,
+     1
+    ],
+    [
+     14,
+     2
+    ],
+    [
+     14,
+     3
+    ],
+    [
+     14,
+     4
+    ],
+    [
+     14,
+     5
+    ],
+    [
+     14,
+     6
+    ],
+    [
+     14,
+     7
+    ],
+    [
+     15,
+     0
+    ],
+    [
+     15,
+     1
+    ],
+    [
+     15,
+     2
+    ],
+    [
+     15,
+     3
+    ],
+    [
+     15,
+     4
+    ],
+    [
+     15,
+     5
+    ],
+    [
+     15,
+     6
+    ],
+    [
+     15,
+     7
+    ]
+   ]
+  },
+  {
+   "capacity_bytes_per_us": 5461.333333333333,
+   "id": "nic-n0-egress",
+   "kind": "nic",
+   "links": [
+    [
+     0,
+     8
+    ],
+    [
+     0,
+     9
+    ],
+    [
+     0,
+     10
+    ],
+    [
+     0,
+     11
+    ],
+    [
+     0,
+     12
+    ],
+    [
+     0,
+     13
+    ],
+    [
+     0,
+     14
+    ],
+    [
+     0,
+     15
+    ],
+    [
+     1,
+     8
+    ],
+    [
+     1,
+     9
+    ],
+    [
+     1,
+     10
+    ],
+    [
+     1,
+     11
+    ],
+    [
+     1,
+     12
+    ],
+    [
+     1,
+     13
+    ],
+    [
+     1,
+     14
+    ],
+    [
+     1,
+     15
+    ],
+    [
+     2,
+     8
+    ],
+    [
+     2,
+     9
+    ],
+    [
+     2,
+     10
+    ],
+    [
+     2,
+     11
+    ],
+    [
+     2,
+     12
+    ],
+    [
+     2,
+     13
+    ],
+    [
+     2,
+     14
+    ],
+    [
+     2,
+     15
+    ],
+    [
+     3,
+     8
+    ],
+    [
+     3,
+     9
+    ],
+    [
+     3,
+     10
+    ],
+    [
+     3,
+     11
+    ],
+    [
+     3,
+     12
+    ],
+    [
+     3,
+     13
+    ],
+    [
+     3,
+     14
+    ],
+    [
+     3,
+     15
+    ],
+    [
+     4,
+     8
+    ],
+    [
+     4,
+     9
+    ],
+    [
+     4,
+     10
+    ],
+    [
+     4,
+     11
+    ],
+    [
+     4,
+     12
+    ],
+    [
+     4,
+     13
+    ],
+    [
+     4,
+     14
+    ],
+    [
+     4,
+     15
+    ],
+    [
+     5,
+     8
+    ],
+    [
+     5,
+     9
+    ],
+    [
+     5,
+     10
+    ],
+    [
+     5,
+     11
+    ],
+    [
+     5,
+     12
+    ],
+    [
+     5,
+     13
+    ],
+    [
+     5,
+     14
+    ],
+    [
+     5,
+     15
+    ],
+    [
+     6,
+     8
+    ],
+    [
+     6,
+     9
+    ],
+    [
+     6,
+     10
+    ],
+    [
+     6,
+     11
+    ],
+    [
+     6,
+     12
+    ],
+    [
+     6,
+     13
+    ],
+    [
+     6,
+     14
+    ],
+    [
+     6,
+     15
+    ],
+    [
+     7,
+     8
+    ],
+    [
+     7,
+     9
+    ],
+    [
+     7,
+     10
+    ],
+    [
+     7,
+     11
+    ],
+    [
+     7,
+     12
+    ],
+    [
+     7,
+     13
+    ],
+    [
+     7,
+     14
+    ],
+    [
+     7,
+     15
+    ]
+   ]
+  },
+  {
+   "capacity_bytes_per_us": 5461.333333333333,
+   "id": "nic-n0-ingress",
+   "kind": "nic",
+   "links": [
+    [
+     8,
+     0
+    ],
+    [
+     8,
+     1
+    ],
+    [
+     8,
+     2
+    ],
+    [
+     8,
+     3
+    ],
+    [
+     8,
+     4
+    ],
+    [
+     8,
+     5
+    ],
+    [
+     8,
+     6
+    ],
+    [
+     8,
+     7
+    ],
+    [
+     9,
+     0
+    ],
+    [
+     9,
+     1
+    ],
+    [
+     9,
+     2
+    ],
+    [
+     9,
+     3
+    ],
+    [
+     9,
+     4
+    ],
+    [
+     9,
+     5
+    ],
+    [
+     9,
+     6
+    ],
+    [
+     9,
+     7
+    ],
+    [
+     10,
+     0
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     10,
+     2
+    ],
+    [
+     10,
+     3
+    ],
+    [
+     10,
+     4
+    ],
+    [
+     10,
+     5
+    ],
+    [
+     10,
+     6
+    ],
+    [
+     10,
+     7
+    ],
+    [
+     11,
+     0
+    ],
+    [
+     11,
+     1
+    ],
+    [
+     11,
+     2
+    ],
+    [
+     11,
+     3
+    ],
+    [
+     11,
+     4
+    ],
+    [
+     11,
+     5
+    ],
+    [
+     11,
+     6
+    ],
+    [
+     11,
+     7
+    ],
+    [
+     12,
+     0
+    ],
+    [
+     12,
+     1
+    ],
+    [
+     12,
+     2
+    ],
+    [
+     12,
+     3
+    ],
+    [
+     12,
+     4
+    ],
+    [
+     12,
+     5
+    ],
+    [
+     12,
+     6
+    ],
+    [
+     12,
+     7
+    ],
+    [
+     13,
+     0
+    ],
+    [
+     13,
+     1
+    ],
+    [
+     13,
+     2
+    ],
+    [
+     13,
+     3
+    ],
+    [
+     13,
+     4
+    ],
+    [
+     13,
+     5
+    ],
+    [
+     13,
+     6
+    ],
+    [
+     13,
+     7
+    ],
+    [
+     14,
+     0
+    ],
+    [
+     14,
+     1
+    ],
+    [
+     14,
+     2
+    ],
+    [
+     14,
+     3
+    ],
+    [
+     14,
+     4
+    ],
+    [
+     14,
+     5
+    ],
+    [
+     14,
+     6
+    ],
+    [
+     14,
+     7
+    ],
+    [
+     15,
+     0
+    ],
+    [
+     15,
+     1
+    ],
+    [
+     15,
+     2
+    ],
+    [
+     15,
+     3
+    ],
+    [
+     15,
+     4
+    ],
+    [
+     15,
+     5
+    ],
+    [
+     15,
+     6
+    ],
+    [
+     15,
+     7
+    ]
+   ]
+  },
+  {
+   "capacity_bytes_per_us": 5461.333333333333,
+   "id": "nic-n1-egress",
+   "kind": "nic",
+   "links": [
+    [
+     8,
+     0
+    ],
+    [
+     8,
+     1
+    ],
+    [
+     8,
+     2
+    ],
+    [
+     8,
+     3
+    ],
+    [
+     8,
+     4
+    ],
+    [
+     8,
+     5
+    ],
+    [
+     8,
+     6
+    ],
+    [
+     8,
+     7
+    ],
+    [
+     9,
+     0
+    ],
+    [
+     9,
+     1
+    ],
+    [
+     9,
+     2
+    ],
+    [
+     9,
+     3
+    ],
+    [
+     9,
+     4
+    ],
+    [
+     9,
+     5
+    ],
+    [
+     9,
+     6
+    ],
+    [
+     9,
+     7
+    ],
+    [
+     10,
+     0
+    ],
+    [
+     10,
+     1
+    ],
+    [
+     10,
+     2
+    ],
+    [
+     10,
+     3
+    ],
+    [
+     10,
+     4
+    ],
+    [
+     10,
+     5
+    ],
+    [
+     10,
+     6
+    ],
+    [
+     10,
+     7
+    ],
+    [
+     11,
+     0
+    ],
+    [
+     11,
+     1
+    ],
+    [
+     11,
+     2
+    ],
+    [
+     11,
+     3
+    ],
+    [
+     11,
+     4
+    ],
+    [
+     11,
+     5
+    ],
+    [
+     11,
+     6
+    ],
+    [
+     11,
+     7
+    ],
+    [
+     12,
+     0
+    ],
+    [
+     12,
+     1
+    ],
+    [
+     12,
+     2
+    ],
+    [
+     12,
+     3
+    ],
+    [
+     12,
+     4
+    ],
+    [
+     12,
+     5
+    ],
+    [
+     12,
+     6
+    ],
+    [
+     12,
+     7
+    ],
+    [
+     13,
+     0
+    ],
+    [
+     13,
+     1
+    ],
+    [
+     13,
+     2
+    ],
+    [
+     13,
+     3
+    ],
+    [
+     13,
+     4
+    ],
+    [
+     13,
+     5
+    ],
+    [
+     13,
+     6
+    ],
+    [
+     13,
+     7
+    ],
+    [
+     14,
+     0
+    ],
+    [
+     14,
+     1
+    ],
+    [
+     14,
+     2
+    ],
+    [
+     14,
+     3
+    ],
+    [
+     14,
+     4
+    ],
+    [
+     14,
+     5
+    ],
+    [
+     14,
+     6
+    ],
+    [
+     14,
+     7
+    ],
+    [
+     15,
+     0
+    ],
+    [
+     15,
+     1
+    ],
+    [
+     15,
+     2
+    ],
+    [
+     15,
+     3
+    ],
+    [
+     15,
+     4
+    ],
+    [
+     15,
+     5
+    ],
+    [
+     15,
+     6
+    ],
+    [
+     15,
+     7
+    ]
+   ]
+  },
+  {
+   "capacity_bytes_per_us": 5461.333333333333,
+   "id": "nic-n1-ingress",
+   "kind": "nic",
+   "links": [
+    [
+     0,
+     8
+    ],
+    [
+     0,
+     9
+    ],
+    [
+     0,
+     10
+    ],
+    [
+     0,
+     11
+    ],
+    [
+     0,
+     12
+    ],
+    [
+     0,
+     13
+    ],
+    [
+     0,
+     14
+    ],
+    [
+     0,
+     15
+    ],
+    [
+     1,
+     8
+    ],
+    [
+     1,
+     9
+    ],
+    [
+     1,
+     10
+    ],
+    [
+     1,
+     11
+    ],
+    [
+     1,
+     12
+    ],
+    [
+     1,
+     13
+    ],
+    [
+     1,
+     14
+    ],
+    [
+     1,
+     15
+    ],
+    [
+     2,
+     8
+    ],
+    [
+     2,
+     9
+    ],
+    [
+     2,
+     10
+    ],
+    [
+     2,
+     11
+    ],
+    [
+     2,
+     12
+    ],
+    [
+     2,
+     13
+    ],
+    [
+     2,
+     14
+    ],
+    [
+     2,
+     15
+    ],
+    [
+     3,
+     8
+    ],
+    [
+     3,
+     9
+    ],
+    [
+     3,
+     10
+    ],
+    [
+     3,
+     11
+    ],
+    [
+     3,
+     12
+    ],
+    [
+     3,
+     13
+    ],
+    [
+     3,
+     14
+    ],
+    [
+     3,
+     15
+    ],
+    [
+     4,
+     8
+    ],
+    [
+     4,
+     9
+    ],
+    [
+     4,
+     10
+    ],
+    [
+     4,
+     11
+    ],
+    [
+     4,
+     12
+    ],
+    [
+     4,
+     13
+    ],
+    [
+     4,
+     14
+    ],
+    [
+     4,
+     15
+    ],
+    [
+     5,
+     8
+    ],
+    [
+     5,
+     9
+    ],
+    [
+     5,
+     10
+    ],
+    [
+     5,
+     11
+    ],
+    [
+     5,
+     12
+    ],
+    [
+     5,
+     13
+    ],
+    [
+     5,
+     14
+    ],
+    [
+     5,
+     15
+    ],
+    [
+     6,
+     8
+    ],
+    [
+     6,
+     9
+    ],
+    [
+     6,
+     10
+    ],
+    [
+     6,
+     11
+    ],
+    [
+     6,
+     12
+    ],
+    [
+     6,
+     13
+    ],
+    [
+     6,
+     14
+    ],
+    [
+     6,
+     15
+    ],
+    [
+     7,
+     8
+    ],
+    [
+     7,
+     9
+    ],
+    [
+     7,
+     10
+    ],
+    [
+     7,
+     11
+    ],
+    [
+     7,
+     12
+    ],
+    [
+     7,
+     13
+    ],
+    [
+     7,
+     14
+    ],
+    [
+     7,
+     15
+    ]
+   ]
+  }
+ ]
+}

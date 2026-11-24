@@ -6,6 +6,7 @@ from vericcl.composer import compose, recompute_earliest_times
 from vericcl.composer.timing import _retime
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.topology.model import (
     DirectedLink,
     LinkKey,
@@ -296,14 +297,14 @@ def test_recompute_serializes_distinct_links_in_one_shared_resource_slot():
     )
     transfers = []
     for transfer_id, dst_rank in (("branch-a", 1), ("branch-b", 2)):
-        atom = Atom(
+        atom = Atom.build(
             slice_id=0,
             slice_size_bytes=1024,
             path=(
                 PathStage(
                     0,
                     "SEND",
-                    (Symbol(0, dst_rank, 0.0),),
+                    (symbolic_step(0, dst_rank, 0.0),),
                 ),
             ),
             st_time=0.0,

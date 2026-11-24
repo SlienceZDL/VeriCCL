@@ -69,6 +69,28 @@ def _immutable(path, data):
         os.fsync(stream.fileno())
 
 
+def session_records(job, key, records):
+    """Rank records of one job from a batch session, labelled with its job id.
+
+    The native session names each job by its session key (one key per job);
+    the coordinator maps it back so records compare like single launches.
+    Records naming another job are left unchanged and fail validation.
+    """
+    return [dict(record, job_id=job.job_id) if record.get('job_id') == key else record for record in records]
+
+
+def _immutable_unsynced(path, data):
+    """Exclusive-create publication without fsync (rebuildable inputs)."""
+    path = owned_home_path(path)
+    if path.exists():
+        if path.read_bytes() != data:
+            raise ValueError('refusing to overwrite another remote job artifact')
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('xb') as stream:
+        stream.write(data)
+
+
 def combine_rank_samples(job, artifact, results):
     expected_ranks = {item['rank'] for item in job.rank_map}
     if len(results) != len(expected_ranks) or {r.get('rank') for r in results} != expected_ranks:
@@ -80,7 +102,8 @@ def combine_rank_samples(job, artifact, results):
         if result.get('correct') is not True or result.get('gpu_released') is not True:
             raise ValueError('native correctness or GPU release acknowledgement is missing')
         for key in ('datatype', 'reduction_op', 'payload_bytes', 'timed_iterations'):
-            if result.get(key) != getattr(job, key):
+            wanted = job.runtime_payload_bytes if key == 'payload_bytes' else getattr(job, key)
+            if result.get(key) != wanted:
                 raise ValueError('native sample configuration mismatch: ' + key)
         for endpoint in result.get('endpoints', []):
             key = (result['rank'], endpoint.get('tb'), endpoint.get('step'))
@@ -96,15 +119,43 @@ def combine_rank_samples(job, artifact, results):
     expected = {(e['rank'], e['tb'], e['step']) for e in artifact.endpoints}
     if set(endpoints) != expected:
         raise ValueError('native endpoint coverage differs from the prepared XML')
-    by_flow = {}
+    by_role = {}
     native_kinds = {'send': 0, 'recv': 1, 'rrc': 4, 'copy': 6, 'reduce': 7}
     for definition in artifact.endpoints:
         endpoint = endpoints[(definition['rank'], definition['tb'], definition['step'])]
         if endpoint.get('kind') != native_kinds[definition['role']] or endpoint.get('channel') != definition['channel']:
             raise ValueError('native primitive or channel mismatch')
-        by_flow.setdefault(definition['flow_id'], []).append(endpoint['service_ns'] / endpoint['samples'] / 1000)
-    return {'flow_us': {flow: max(values) for flow, values in by_flow.items()},
-            'pairing_rule': 'max_endpoint_mean_service_once_per_physical_transfer',
+        key = (definition['flow_id'], definition['rank'], definition['tb'])
+        by_role[key] = by_role.get(key, 0.0) + endpoint['service_ns'] / endpoint['samples'] / 1000
+    # One endpoint TB runs the flow's chain of steps; the flow's per-step
+    # service is its slower endpoint's chain time divided by the chain length.
+    steps = getattr(job, 'chain_steps', 1)
+    service = {}
+    for (flow, _, _), value in by_role.items():
+        service[flow] = max(service.get(flow, 0.0), value / steps)
+    # GPU step timers see a network transfer only while the GPU copies to or
+    # from its host staging buffer (no GPU Direct RDMA): the NIC and proxy
+    # time between pieces is invisible to them, so concurrent inter-host
+    # flows looked contention-free. The timed iterations of one probe run
+    # back to back, so the launch's wall time per iteration is the mode's
+    # true completion time. Scale the inter-host flows so that the slowest
+    # ends with the iteration, keeping their measured relative speeds.
+    # Intra-host transfers are performed by the GPU itself and its timers
+    # are exact; the wall time would only add the per-call launch overhead.
+    hosts = {}
+    for item in job.rank_map:
+        hosts[item.get('original_rank', item.get('rank'))] = item.get('host')
+    network = {flow.flow_id for flow in job.flows
+               if hosts.get(flow.src_rank) is not None and hosts.get(flow.src_rank) != hosts.get(flow.dst_rank)}
+    walls = [r['timed_wall_s'] / r['timed_iterations'] * 1e6 for r in results
+             if isinstance(r.get('timed_wall_s'), (int, float)) and not isinstance(r.get('timed_wall_s'), bool)
+             and r['timed_wall_s'] > 0]
+    wall_us = max(walls) / steps if walls else None
+    slowest = max((service[flow] for flow in network if flow in service), default=None)
+    scale = max(1.0, wall_us / slowest) if wall_us and slowest else 1.0
+    return {'flow_us': {flow: value * (scale if flow in network else 1.0) for flow, value in service.items()},
+            'service_us': service, 'wall_us_per_iteration': wall_us, 'wall_scale': scale,
+            'pairing_rule': 'endpoint_service_scaled_to_launch_wall_per_iteration',
             'correct': True, 'gpu_released': True, 'rank_results': results}
 
 
@@ -117,6 +168,36 @@ def _create_rank_context(root, task_id, rank):
     context.write_json('run.json', {'task_id': task_id, 'rank': rank, 'kind': 'native_probe_rank'})
     emit_event(context, 'run_started')
     return context
+
+
+def physical_cores():
+    """Cores of this host usable by this process (Open MPI rankfile slot units)."""
+    cores = set()
+    for cpu in sorted(os.sched_getaffinity(0)):
+        base = Path('/sys/devices/system/cpu/cpu%d/topology' % cpu)
+        try:
+            cores.add((base.joinpath('physical_package_id').read_text().strip(),
+                       base.joinpath('core_id').read_text().strip()))
+        except OSError:
+            cores.add(('cpu', str(cpu)))
+    return max(1, len(cores))
+
+
+def unbound_rankfile(mapping, is_local, cores_by_host):
+    """Exact rank-to-host placement without pinning ranks to one core.
+
+    A rankfile slot list is also a CPU binding. ``slot=0`` bound every rank of
+    a host - with its NCCL proxy and network threads - to core 0, so each
+    network step waited for scheduler time slices (probe iterations took
+    13 ms instead of 3 ms and inter-host contention was never observed).
+    Each rank may use every core; NCCL then places its threads near its GPU.
+    """
+    lines = []
+    for item in mapping:
+        cores = max(1, int(cores_by_host.get(item['host']) or 1))
+        lines.append('rank %d=%s slot=0-%d\n' % (item['rank'], 'localhost' if is_local(item['host']) else item['host'],
+                                                  cores - 1))
+    return ''.join(lines).encode()
 
 
 def _machine_inventory(binary, environment):
@@ -174,9 +255,32 @@ def _prepare(root, encoded, host):
     root.mkdir(parents=True, exist_ok=True)
     _immutable(root / 'launch.json', json.dumps(payload, sort_keys=True).encode())
     schedule = payload.get('kind') == 'schedule'
-    _immutable(root / ('schedule.xml' if schedule else 'probe.xml'), payload['xml'].encode())
+    if payload.get('kind') == 'probe_batch':
+        # One session runs many probe modes; identical XMLs are written once.
+        # These inputs are rebuildable (the coordinator keeps the payload),
+        # so they are published without a per-file fsync.
+        for key, xml in sorted(payload['xmls'].items()):
+            if not re.fullmatch(r'x[0-9]{4,6}', key):
+                raise ValueError('invalid batch probe XML key')
+            _immutable_unsynced(root / 'xml' / (key + '.xml'), xml.encode())
+        _immutable_unsynced(root / 'plan.txt', payload['plan'].encode())
+    else:
+        _immutable(root / ('schedule.xml' if schedule else 'probe.xml'), payload['xml'].encode())
     if schedule:
         _immutable(root / 'manifest.json', json.dumps(payload['manifest'], sort_keys=True).encode())
+        # Versions of a planned measurement sequence (rebuildable from the
+        # coordinator's payload; the native side verifies every XML digest).
+        for digest, item in sorted((payload.get('versions') or {}).items()):
+            if not re.fullmatch(r'[0-9a-f]{64}', digest) or item['manifest'].get('version_id') != digest:
+                raise ValueError('invalid measurement sequence version identity')
+            _immutable_unsynced(root / 'versions' / digest / 'schedule.xml', item['xml'].encode())
+            _immutable_unsynced(root / 'versions' / digest / 'manifest.json',
+                                json.dumps(item['manifest'], sort_keys=True).encode())
+        if payload['native_config'].get('mode') == 'live' and payload['manifest']['trace_prefix']:
+            prefix = owned_home_path(Path(payload['manifest']['trace_prefix']))
+            if not prefix.is_relative_to(root / 'versions'):
+                raise ValueError('live trace temporary path leaves the session versions directory')
+            prefix.parent.mkdir(parents=True, exist_ok=True)
         _immutable(root / 'native-config.json', json.dumps(payload['native_config'], sort_keys=True).encode())
     (root / 'native').mkdir(exist_ok=True)
     (root / 'tmp').mkdir(exist_ok=True)
@@ -187,8 +291,9 @@ def _prepare(root, encoded, host):
     devices = [inventory.get('gpus', {}).get(str(m['device']), {}).get('uuid') for m in local_mapping]
     if not devices or any(not device for device in devices):
         raise ValueError('native launch requires actual GPU UUIDs for persistent ownership')
-    from vericcl.execution.ownership import GPUOwnershipRegistry
+    from vericcl.live.ownership import GPUOwnershipRegistry
     registry_root = owned_home_path(Path(payload['project_root']) / 'examples/_shared/output/native-ownership')
+    _reclaim_verified(GPUOwnershipRegistry(registry_root), devices, str(root))
     GPUOwnershipRegistry(registry_root).acquire(devices, str(root), {'task_id': payload['task_id'],
         'host': host, 'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(), 'root': str(root)})
     _immutable(root / ('prepared-' + host + '.json'), json.dumps({
@@ -198,7 +303,62 @@ def _prepare(root, encoded, host):
         'inventory': inventory, 'ownership_registry': str(registry_root), 'device_uuids': devices,
         'expected_ranks': [m['rank'] for m in payload['job']['rank_map'] if m['host'] == host],
     }).encode())
-    return {'status': 'prepared', 'host': host, 'root': str(root)}
+    return {'status': 'prepared', 'host': host, 'root': str(root), 'cpu_cores': physical_cores()}
+
+
+def _gpu_compute_processes():
+    """{gpu_uuid: [pid, ...]} of running compute processes, or None if unknown."""
+    try:
+        result = subprocess.run(['nvidia-smi', '--query-compute-apps=gpu_uuid,pid', '--format=csv,noheader'],
+                                capture_output=True, text=True, timeout=10, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    processes = {}
+    for line in result.stdout.splitlines():
+        fields = [field.strip() for field in line.split(',')]
+        if len(fields) == 2 and fields[0]:
+            processes.setdefault(fields[0], []).append(fields[1])
+    return processes
+
+
+def _reclaim_verified(registry, devices, current_owner):
+    """Release unreleased entries of earlier owners that are verifiably gone.
+
+    An earlier session that ended without a GPU release acknowledgement
+    leaves its GPUs quarantined. They are reclaimed only when every native
+    process group that owner recorded on this host is gone and nvidia-smi
+    reports no compute process on those GPUs; otherwise acquire refuses.
+    """
+    snapshot = registry.snapshot()
+    stale = {}
+    for device in devices:
+        entry = snapshot.get(device)
+        if entry and entry.get('state') != 'released' and entry.get('owner') != current_owner:
+            stale.setdefault(entry['owner'], []).append(device)
+    if not stale:
+        return
+    processes = _gpu_compute_processes()
+    if processes is None:
+        return
+    for owner, owned in stale.items():
+        if any(processes.get(device) for device in owned):
+            continue
+        alive = []
+        owner_root = Path(owner)
+        for identity_path in sorted(owner_root.glob('ranks/*/jobs/native/identity.json')):
+            try:
+                identity = ProcessIdentity(**json.loads(identity_path.read_text()))
+            except (OSError, ValueError, TypeError):
+                alive.append(str(identity_path))
+                continue
+            if identity.matches() and _active_group_members(identity):
+                alive.append(str(identity_path))
+        if alive:
+            continue
+        registry.reclaim(owned, owner, {'verified_absent': True, 'by': current_owner,
+            'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+            'checked': 'owner native process groups absent; no compute process on these GPUs',
+            'time_ns': time.time_ns()})
 
 
 def _rank(root):
@@ -220,6 +380,8 @@ def _rank(root):
     job = payload['job']
     if payload.get('kind') == 'schedule':
         command = [payload['binary'], 'schedule', '--config', str(root / 'native-config.json')]
+    elif payload.get('kind') == 'probe_batch':
+        command = [payload['binary'], 'batch', '--plan', str(root / 'plan.txt'), '--output-dir', str(root / 'native')]
     else:
         command = _probe_command(payload, root, rank)
     result = run_owned_process(context, command, ProcessLease.after(remaining, cleanup_reserve_s=min(3, remaining / 4)),
@@ -234,7 +396,7 @@ def _probe_command(payload, root, rank):
     job = payload['job']
     mapping = {item['original_rank']: item['rank'] for item in job['rank_map']}
     command = [payload['binary'], 'probe', '--job-id', job['job_id'], '--xml', str(root / 'probe.xml'),
-               '--output-dir', str(root / 'native'), '--payload-bytes', str(job['payload_bytes']),
+               '--output-dir', str(root / 'native'), '--payload-bytes', str(job['payload_bytes'] * job.get('chain_steps', 1)),
                '--datatype', job['datatype'], '--reduction-op', job['reduction_op'],
                '--devices', ','.join(str(item['device']) for item in job['rank_map']),
                '--warmup', str(job['warmup_iterations']), '--timed', str(job['timed_iterations']),
@@ -366,6 +528,8 @@ def _collection_inventory(root, host, prepared, payload, *, receipts_only=False)
                 artifacts.append('native/clock.rank-%d.log' % rank)
         if payload.get('kind') == 'schedule':
             artifacts.extend(str(path.relative_to(root)) for path in (root / 'native' / ('rank-%d' % rank)).glob('*.json'))
+        if payload.get('kind') == 'probe_batch':
+            artifacts.extend(str(path.relative_to(root)) for path in (root / 'native').glob('*.w%d.jsonl' % rank))
     groups, metadata = [], {}
     for names in (receipts, artifacts):
         present = []
@@ -420,7 +584,7 @@ def _collect(root, host, *, cursor=None, inventory_digest=None):
     if _collection_inventory(root, host, prepared, payload, receipts_only=receipt_page)[3] != digest:
         raise ValueError('collection inventory snapshot changed during page collection')
     if (legacy or cursor == 0) and prepared.get('ownership_registry'):
-        from vericcl.execution.ownership import GPUOwnershipRegistry
+        from vericcl.live.ownership import GPUOwnershipRegistry
         acknowledgements = collected_cleanup_receipts([{'files': files}])
         complete = set(acknowledgements) == set(prepared['expected_ranks'])
         never_started = (root / 'NOT_STARTED').is_file() and not (root / 'ranks').exists()
@@ -437,6 +601,36 @@ def _collect(root, host, *, cursor=None, inventory_digest=None):
                 'scope': 'receipts' if receipt_page else 'complete',
                 'total_bytes': sum(value[0] for value in metadata.values()), 'receipt_files': len(receipts),
                 'artifact_files': len(artifacts), 'page_limit_bytes': maximum_bytes}}
+
+
+def _live_capture_inventory(root, host, capture_id):
+    root = owned_home_path(root)
+    if not isinstance(capture_id, str) or not re.fullmatch(r'command-[1-9][0-9]*', capture_id):
+        raise ValueError('invalid live capture identity')
+    prepared = json.loads((root / ('prepared-' + _host(host) + '.json')).read_text())
+    files, total = {}, 0
+    for rank in prepared['expected_ranks']:
+        prefix = 'native/captures/' + capture_id + '/'
+        record_path = checked_job_path(root, prefix + 'rank-%d.json' % rank)
+        record = json.loads(record_path.read_text())
+        names = [prefix + 'rank-%d.json' % rank]
+        if record['trace_enabled']:
+            names += [prefix + 'trace.rank-%d.bin' % rank, prefix + 'clock.rank-%d.log' % rank]
+        for name in names:
+            path = checked_job_path(root, name)
+            if not path.is_file():
+                raise ValueError('live capture is missing a required file')
+            size = path.stat().st_size; total += size
+            if total > 64 * 1024 * 1024:
+                raise ValueError('live capture exceeds the 64 MiB per-host collection limit; original evidence retained')
+            files[name] = {'bytes': size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    # Read-only inventory; it neither releases nor finishes the live GPU owner.
+    return {'host': host, 'files': files, 'runtime_identity':
+            {key: prepared[key] for key in ('binary_sha256', 'inventory')}}
+
+
+# Jobs per measurement session (whole modes; see execute_batch).
+SESSION_MAX_JOBS = 64
 
 
 class NativeProbeDriver:
@@ -558,7 +752,7 @@ class NativeProbeDriver:
         return collected, errors
 
     def _launch(self, job, artifact, context, round_index, launch_index, timeout, *, trace_plan=None):
-        from .probe_jobs import probe_artifact_key
+        from .probe_jobs import probe_artifact_key, probe_environment
         run = context.run_context
         root = owned_home_path(run.artifact('models/probes/%s/round-%02d/launch-%03d' % (probe_artifact_key(job), round_index, launch_index)))
         paths = context.inputs.request_config['runtime']['paths']
@@ -567,7 +761,7 @@ class NativeProbeDriver:
         if not binary or not mpi_bin:
             raise ValueError('native probes require runtime.paths.vericcl_driver and mpi_bin')
         hosts = sorted({_host(m['host']) for m in job.rank_map})
-        environment = dict(context.inputs.request_config['runtime']['environment'])
+        environment = probe_environment(context.inputs)
         environment.update(PYTHONPATH=str(self.project_root), VERICCL_TRACE_ENABLE='0',
                            TMPDIR=str(root / 'tmp'), NCCL_PROTO='Simple')
         payload = {'root': str(root), 'project_root': str(self.project_root), 'binary': str(binary),
@@ -581,16 +775,18 @@ class NativeProbeDriver:
         prepared, collected, cleanup, error, fatal = [], [], [], None, None
         started, execution = False, None
         try:
+            cores = {}
             for host in hosts:
                 remaining = deadline - time.monotonic() - reserve
-                self._helper(context, host, ['prepare', '--root', str(root), '--host', host, '--payload', encoded], min(10., remaining), 'prepare')
+                record = self._helper(context, host, ['prepare', '--root', str(root), '--host', host, '--payload', encoded], min(10., remaining), 'prepare')
+                cores[host] = record.get('cpu_cores') if isinstance(record, dict) else None
                 prepared.append(host)
             # rankfile preserves original-to-MPI mapping even when ranks from a
             # host are interleaved. Every native rank uses its explicit GPU id.
             root.mkdir(parents=True, exist_ok=True)
             (root / 'tmp').mkdir(exist_ok=True)
             rankfile = root / 'rankfile'
-            _immutable(rankfile, ''.join('rank %d=%s slot=0\n' % (m['rank'], 'localhost' if self._is_local(m['host']) else m['host']) for m in job.rank_map).encode())
+            _immutable(rankfile, unbound_rankfile(job.rank_map, self._is_local, cores))
             command = [str(Path(mpi_bin) / 'mpirun'), '--rankfile', str(rankfile), '--bind-to', 'none',
                        '-np', str(len(job.rank_map)), self.python, '-m', 'vericcl.verification.online.remote',
                        'rank', '--root', str(root)]
@@ -663,32 +859,321 @@ class NativeProbeDriver:
         if error:
             return None, evidence
         try:
-            sample = combine_rank_samples(job, artifact, rank_results)
-            sample.update(round=round_index, launch=launch_index)
             inventories = {item['host']: item['prepared'] for item in collected}
-            runtime_facts, complete = [], True
-            for mapping in job.rank_map:
-                prepared = inventories[mapping['host']]
-                inventory = prepared.get('inventory', {})
-                device = inventory.get('gpus', {}).get(str(mapping['device']))
-                facts = next(r for r in rank_results if r['rank'] == mapping['rank'])
-                complete = complete and bool(inventory.get('complete') and device)
-                if job.host_scope == 'inter' and not inventory.get('network'):
-                    complete = False
-                runtime_facts.append({'host': mapping['host'], 'device': mapping['device'], 'gpu': device,
-                    'runtime_library': inventory.get('runtime_library'), 'binary_sha256': prepared['binary_sha256'],
-                    'cuda_runtime_version': facts['cuda_runtime_version'], 'cuda_driver_version': facts['cuda_driver_version'],
-                    'nccl_version': facts['nccl_version'], 'compute_capability': facts['compute_capability'],
-                    'network': inventory.get('network') if job.host_scope == 'inter' else None})
-            sample['runtime_identity'] = {'ranks': runtime_facts,
-                'environment': dict(context.inputs.request_config['runtime']['environment']), 'protocol': 'Simple',
-                'task_scope': None if complete else run.task_id}
-            sample['measured_at'] = datetime.now(timezone.utc).isoformat()
+            sample = self._identified_sample(job, artifact, rank_results, inventories, context, round_index, launch_index)
             return sample, evidence
         except ValueError as failure:
             evidence['error'] = str(failure)
             run.write_json(str((root / 'launch-result.json').relative_to(run.root)), evidence, replace=True)
             return None, evidence
+
+    def _identified_sample(self, job, artifact, rank_results, inventories, context, round_index, launch_index):
+        """One launch's combined sample with its runtime identity (raises ValueError)."""
+        from .probe_jobs import probe_environment
+        sample = combine_rank_samples(job, artifact, rank_results)
+        sample.update(round=round_index, launch=launch_index)
+        runtime_facts, complete = [], True
+        for mapping in job.rank_map:
+            prepared = inventories[_host(mapping['host'])]
+            inventory = prepared.get('inventory', {})
+            device = inventory.get('gpus', {}).get(str(mapping['device']))
+            facts = next(r for r in rank_results if r['rank'] == mapping['rank'])
+            complete = complete and bool(inventory.get('complete') and device)
+            if job.host_scope == 'inter' and not inventory.get('network'):
+                complete = False
+            runtime_facts.append({'host': mapping['host'], 'device': mapping['device'], 'gpu': device,
+                'runtime_library': inventory.get('runtime_library'), 'binary_sha256': prepared['binary_sha256'],
+                'cuda_runtime_version': facts['cuda_runtime_version'], 'cuda_driver_version': facts['cuda_driver_version'],
+                'nccl_version': facts['nccl_version'], 'compute_capability': facts['compute_capability'],
+                'network': inventory.get('network') if job.host_scope == 'inter' else None})
+        sample['runtime_identity'] = {'ranks': runtime_facts,
+            'environment': probe_environment(context.inputs), 'protocol': 'Simple',
+            'task_scope': None if complete else context.run_context.task_id}
+        sample['measured_at'] = datetime.now(timezone.utc).isoformat()
+        return sample
+
+    def _session(self, jobs, artifacts, context, round_index, timeout):
+        """Run every launch of every job in one MPI session (plan.md step 4.1).
+
+        One preparation per host, one mpirun over the union of the jobs'
+        GPUs, one collection. Each job runs on its own NCCL communicator over
+        its member GPUs; each launch is an independent episode (barrier,
+        warmup, reset, timed iterations). Returns ({job_id: [samples] or an
+        error string}, evidence) with samples identical in form to _launch.
+        """
+        from .probe_jobs import probe_environment
+        run = context.run_context
+        session = uuid.uuid4().hex[:12]
+        root = owned_home_path(run.artifact('models/probe-sessions/round-%02d-%s' % (round_index, session)))
+        paths = context.inputs.request_config['runtime']['paths']
+        binary, mpi_bin = paths.get('vericcl_driver'), paths.get('mpi_bin')
+        if not binary or not mpi_bin:
+            raise ValueError('native probes require runtime.paths.vericcl_driver and mpi_bin')
+        placements = sorted({(_host(m['host']), m['device']) for job in jobs for m in job.rank_map})
+        world = {placement: index for index, placement in enumerate(placements)}
+        mapping = [{'rank': index, 'host': host, 'device': device} for (host, device), index in world.items()]
+        keys = {job.job_id: 'j%04d' % index for index, job in enumerate(jobs)}
+        # Identical probe XMLs (one per mode, independent of payload) share a
+        # file, and a mode's payload variants run back to back so the native
+        # session keeps their communicator.
+        xml_keys, xml_text = {}, {}
+        for job in jobs:
+            digest = hashlib.sha256(artifacts[job.job_id].xml.encode()).hexdigest()
+            if digest not in xml_keys:
+                xml_keys[digest] = 'x%04d' % len(xml_keys)
+                xml_text[xml_keys[digest]] = artifacts[job.job_id].xml
+        def mode_order(job):
+            digest = hashlib.sha256(artifacts[job.job_id].xml.encode()).hexdigest()
+            members = tuple(world[(_host(item['host']), item['device'])]
+                            for item in sorted(job.rank_map, key=lambda item: item['rank']))
+            return xml_keys[digest], members, job.runtime_payload_bytes
+        tolerances = dict(context.inputs.request_config['sketch']['tolerances'])
+        lines = ['world devices=' + ','.join(str(item['device']) for item in mapping)]
+        for job in sorted(jobs, key=mode_order):
+            ordered = sorted(job.rank_map, key=lambda item: item['rank'])
+            members = [world[(_host(item['host']), item['device'])] for item in ordered]
+            local = {item['original_rank']: item['rank'] for item in job.rank_map}
+            flows = ','.join('%s:%d:%d:%d' % (flow.kind, local[flow.src_rank], local[flow.dst_rank], flow.channel)
+                             for flow in job.flows)
+            lines.append('job key=%s xml=%s payload=%d datatype=%s reduction=%s warmup=%d timed=%d launches=%d '
+                         'atol=%r rtol=%r members=%s flows=%s' % (
+                             keys[job.job_id], root / 'xml' / (mode_order(job)[0] + '.xml'), job.runtime_payload_bytes,
+                             job.datatype, job.reduction_op, job.warmup_iterations, job.timed_iterations,
+                             job.launches, float(tolerances['absolute']), float(tolerances['relative']),
+                             ','.join(map(str, members)), flows))
+        environment = probe_environment(context.inputs)
+        environment.update(PYTHONPATH=str(self.project_root), VERICCL_TRACE_ENABLE='0',
+                           TMPDIR=str(root / 'tmp'), NCCL_PROTO='Simple')
+        payload = {'kind': 'probe_batch', 'root': str(root), 'project_root': str(self.project_root),
+                   'binary': str(binary), 'python': self.python,
+                   'job': {'job_id': 'session-' + session, 'rank_map': mapping},
+                   'xmls': xml_text,
+                   'plan': '\n'.join(lines) + '\n', 'environment': environment, 'task_id': run.task_id,
+                   'timeout_s': timeout, 'tolerances': tolerances, 'trace_plan': None}
+        relative = str(root.relative_to(run.root))
+        run.write_json(relative + '/incoming-payload.json', payload)
+        hosts = sorted({item['host'] for item in mapping})
+        deadline = time.monotonic() + timeout
+        reserve = min(10., timeout / 3)
+        prepared, collected, cleanup, error, fatal = [], [], [], None, None
+        started, execution = False, None
+        cores = {}
+        try:
+            for host in hosts:
+                left = min(15., deadline - time.monotonic() - reserve)
+                self._helper(context, host, ['stage', '--root', str(root)], left, 'batch-stage')
+                if not self._is_local(host):
+                    copied = self._call(context, ['scp', '-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
+                                                  str(root / 'incoming-payload.json'),
+                                                  host + ':' + str(root / 'incoming-payload.json')], left, 'batch-copy')
+                    if copied.status != 'completed' or not copied.cleanup_complete:
+                        raise RuntimeError('batch payload copy did not complete')
+                record = self._helper(context, host, ['prepare-file', '--root', str(root), '--host', host],
+                                      min(30., deadline - time.monotonic() - reserve), 'batch-prepare')
+                cores[host] = record.get('cpu_cores') if isinstance(record, dict) else None
+                prepared.append(host)
+            (root / 'tmp').mkdir(exist_ok=True)
+            rankfile = root / 'rankfile'
+            _immutable(rankfile, unbound_rankfile(mapping, self._is_local, cores))
+            command = [str(Path(mpi_bin) / 'mpirun'), '--mca', 'orte_abort_on_non_zero_status', '0',
+                       '--rankfile', str(rankfile), '--bind-to', 'none', '-np', str(len(mapping)),
+                       self.python, '-m', 'vericcl.verification.online.remote', 'rank', '--root', str(root)]
+            started = True
+            execution = self._call(context, command, deadline - time.monotonic() - reserve, 'batch-mpi',
+                                   environment=environment)
+            run.write_json(relative + '/launcher-result.json', execution.as_json())
+            if execution.status != 'completed' or not execution.cleanup_complete:
+                error = 'MPI batch session did not complete cleanly'
+        except (BudgetExhausted, StorageFailure) as failure:
+            fatal, error = failure, str(failure)
+        except Exception as failure:
+            error = str(failure)
+        finally:
+            for host in prepared:
+                try:
+                    allowance = max(.2, (deadline - time.monotonic()) / max(1, 2 * len(prepared)))
+                    if started and error:
+                        cleanup.append(self._helper(context, host, ['cleanup', '--root', str(root), '--host', host,
+                                                    '--timeout', str(max(.05, allowance / 2))], allowance, 'cleanup'))
+                except StorageFailure:
+                    raise
+                except Exception as failure:
+                    error = (error + '; ' if error else '') + str(failure)
+            collected, collection_errors = self._collect_evidence(context, prepared, root, deadline + 30, 'collect',
+                                                                  relative + '/collected')
+            if collection_errors:
+                error = '; '.join(([error] if error else []) + [str(item) for item in collection_errors])
+        wrappers = collected_cleanup_receipts(collected)
+        complete = set(wrappers) == {item['rank'] for item in mapping}
+        released = complete and all(item.get('gpu_released') is True for item in wrappers.values())
+        process_clean = complete and all(item.get('cleanup_complete') is True for item in wrappers.values())
+        launcher_clean = (not started or (execution is not None and
+            (execution.cleanup_complete is True or reconcile_owned_process(run, execution))))
+        if started and not released:
+            self.quarantined.update((item['host'], item['device']) for item in mapping)
+            run.write_json('live/native-resource-ownership.json', {
+                'quarantined': [list(item) for item in sorted(self.quarantined)],
+                'last_job_id': payload['job']['job_id'], 'reason': 'GPU release acknowledgement missing'}, replace=True)
+        evidence = {'error': error, 'gpu_released': released, 'cleanup_confirmed': process_clean and launcher_clean,
+                    'launcher_cleanup_confirmed': launcher_clean, 'cleanup': cleanup, 'prepared_hosts': prepared,
+                    'session': relative}
+        run.write_json(relative + '/launch-result.json', evidence)
+        if fatal is not None:
+            raise fatal
+        lines_by_key = {}
+        for collection in collected:
+            for name, data in collection['files'].items():
+                match = re.fullmatch(r'native/(j[0-9]{4,6})\.w([0-9]+)\.jsonl', name)
+                if match:
+                    for line in base64.b64decode(data).decode().splitlines():
+                        if line.strip():
+                            lines_by_key.setdefault(match.group(1), []).append(json.loads(line))
+            for name, page in collection.get('archived_files', {}).items():
+                match = re.fullmatch(r'native/(j[0-9]{4,6})\.w([0-9]+)\.jsonl', name)
+                if match:
+                    stored = run.artifact(relative + '/collected/' + collection['host'] + '/' + name)
+                    for line in stored.read_text().splitlines():
+                        if line.strip():
+                            lines_by_key.setdefault(match.group(1), []).append(json.loads(line))
+        inventories = {item['host']: item['prepared'] for item in collected}
+        outcome = {}
+        for job in jobs:
+            records = session_records(job, keys[job.job_id], lines_by_key.get(keys[job.job_id], []))
+            failures = [record for record in records if record.get('status') != 'completed']
+            if failures or not records:
+                outcome[job.job_id] = (failures[0].get('error') if failures else None) or error or 'no batch result'
+                continue
+            try:
+                samples = []
+                for launch in range(1, job.launches + 1):
+                    rank_results = [record for record in records if record.get('launch') == launch]
+                    samples.append(self._identified_sample(job, artifacts[job.job_id], rank_results, inventories,
+                                                           context, round_index, launch))
+                outcome[job.job_id] = samples
+            except (ValueError, KeyError, StopIteration) as failure:
+                outcome[job.job_id] = 'invalid batch result: ' + str(failure)
+        return outcome, evidence
+
+    def execute_batch(self, jobs, context):
+        """Measure many probe jobs in shared sessions; same results as execute()."""
+        from .probe_jobs import ProbeResult, probe_artifact_key
+        from .probe_xml import build_probe_xml
+        if context.run_context is None:
+            raise ValueError('native measurement requires an owned RunContext')
+        owned_home_path(self.project_root)
+        ownership = context.run_context.artifact('live/native-resource-ownership.json')
+        if ownership.is_file():
+            self.quarantined.update(tuple(item) for item in json.loads(ownership.read_text())['quarantined'])
+        results, eligible, artifacts = {}, [], {}
+        for job in jobs:
+            if job.reduction_op == 'avg':
+                results[job.job_id] = ProbeResult(job.job_id, 'unsupported', self.driver_kind,
+                    message='the pinned CustomCollective runtime lacks average-reduction dispatch',
+                    cleanup_confirmed=True, gpu_released=True,
+                    provenance={'capability_check': 'source_checked_before_GPU_launch'})
+            elif any((m['host'], m['device']) in self.quarantined for m in job.rank_map):
+                results[job.job_id] = ProbeResult(job.job_id, 'blocked_owned_resources', self.driver_kind,
+                                                  message='an earlier job has no GPU release acknowledgement')
+            else:
+                artifacts[job.job_id] = build_probe_xml(job)
+                context.run_context.write_bytes('models/probes/' + probe_artifact_key(job) + '/probe.xml',
+                                                artifacts[job.job_id].xml.encode())
+                eligible.append(job)
+        samples = {job.job_id: [] for job in eligible}
+        rounds = {job.job_id: [] for job in eligible}
+        clean = released = True
+        job_state = {job.job_id: (True, True) for job in eligible}
+        pending, round_index = list(eligible), 0
+        while pending:
+            round_index += 1
+            active = [job for job in pending if round_index <= job.max_rounds]
+            for job in pending:
+                if round_index > job.max_rounds:
+                    results[job.job_id] = ProbeResult(job.job_id, 'unstable', self.driver_kind, tuple(samples[job.job_id]),
+                        'no stable round within configured retry count', cleanup_confirmed=clean,
+                        gpu_released=released, provenance={'rounds': rounds[job.job_id]})
+            if not active:
+                break
+            # A round runs in chunks of whole modes (payload variants of one
+            # probe XML stay together): a failed session loses one chunk, and
+            # each chunk's deadline is the sum of its jobs' timeouts within
+            # the stage lease (job_timeout_s bounds one job, not a session).
+            chunks, current_chunk, current_xml = [], [], None
+            for job in sorted(active, key=lambda item: (artifacts[item.job_id].xml, item.payload_bytes)):
+                xml = artifacts[job.job_id].xml
+                if current_chunk and len(current_chunk) >= SESSION_MAX_JOBS and xml != current_xml:
+                    chunks.append(current_chunk)
+                    current_chunk = []
+                current_chunk.append(job)
+                current_xml = xml
+            if current_chunk:
+                chunks.append(current_chunk)
+            outcome, evidence_list = {}, []
+            for chunk in chunks:
+                context.lease.check()
+                timeout = min(sum(job.timeout_s for job in chunk), context.lease.remaining_seconds())
+                if timeout <= 20 or not clean or not released:
+                    for job in chunk:
+                        outcome[job.job_id] = ('probe session time limit reached before starting this chunk'
+                                               if timeout <= 20 else 'an earlier session left GPU release unconfirmed')
+                    continue
+                chunk_outcome, evidence = self._session(chunk, artifacts, context, round_index, timeout)
+                evidence_list.append(evidence)
+                clean = clean and evidence['cleanup_confirmed']
+                released = released and evidence['gpu_released']
+                for job in chunk:
+                    job_state[job.job_id] = (evidence['cleanup_confirmed'], evidence['gpu_released'])
+                    outcome[job.job_id] = chunk_outcome.get(job.job_id)
+                    if not (evidence['cleanup_confirmed'] and evidence['gpu_released']):
+                        outcome[job.job_id] = evidence.get('error') or 'probe cleanup or GPU release is unconfirmed'
+            evidence = {'session': [item['session'] for item in evidence_list],
+                        'error': '; '.join(item['error'] for item in evidence_list if item.get('error')) or None}
+            following = []
+            for job in active:
+                current = outcome.get(job.job_id)
+                if context.run_context.active_jobs:
+                    results[job.job_id] = ProbeResult(job.job_id, 'failed', self.driver_kind, tuple(samples[job.job_id]),
+                        'owned processes remain unresolved', cleanup_confirmed=False,
+                        gpu_released=released, provenance={'rounds': rounds[job.job_id], 'session': evidence['session']})
+                    continue
+                if not isinstance(current, list):
+                    # A chunk whose cleanup/release is unconfirmed marks its own
+                    # jobs uncertain; completed chunks keep their results.
+                    unresolved = isinstance(current, str) and ('unconfirmed' in current or 'earlier session' in current)
+                    results[job.job_id] = ProbeResult(job.job_id, 'failed', self.driver_kind, tuple(samples[job.job_id]),
+                        str(current), cleanup_confirmed=not unresolved, gpu_released=not unresolved,
+                        provenance={'rounds': rounds[job.job_id], 'session': evidence['session']})
+                    continue
+                for launch_index, sample in enumerate(current, 1):
+                    context.run_context.write_json('models/probes/%s/sample-%02d-%03d.json' % (
+                        probe_artifact_key(job), round_index, launch_index), sample)
+                samples[job.job_id].extend(current)
+                cvs = {}
+                for flow in job.flows:
+                    values = [sample['flow_us'][flow.flow_id] for sample in current]
+                    cvs[flow.flow_id] = statistics.pstdev(values) / statistics.mean(values)
+                rounds[job.job_id].append({'round': round_index, 'cv_by_flow': cvs, 'session': evidence['session'],
+                                           'stable': all(value <= job.max_cv for value in cvs.values())})
+                if not rounds[job.job_id][-1]['stable']:
+                    following.append(job)
+                    continue
+                identities = [sample['runtime_identity'] for sample in current]
+                job_clean, job_released = job_state[job.job_id]
+                if any(identity != identities[0] for identity in identities[1:]):
+                    results[job.job_id] = ProbeResult(job.job_id, 'environment_changed', self.driver_kind,
+                        tuple(samples[job.job_id]), 'runtime identity changed within the measurement round',
+                        cleanup_confirmed=job_clean, gpu_released=job_released, provenance={'rounds': rounds[job.job_id]})
+                    continue
+                results[job.job_id] = ProbeResult(job.job_id, 'completed', self.driver_kind, tuple(samples[job.job_id]),
+                    cleanup_confirmed=job_clean, gpu_released=job_released,
+                    provenance={'selected_round': round_index, 'rounds': rounds[job.job_id],
+                                'measurement_id': job.execution_id,
+                                'measured_at': min(sample['measured_at'] for sample in current),
+                                'runtime_identity': identities[0],
+                                'measurement': 'actual_msccl_primitive_service',
+                                'launch_scope': 'shared_mpi_session_episode'})
+            pending = following
+        return results
 
     def execute(self, job, context):
         from .probe_jobs import ProbeResult, probe_artifact_key
@@ -779,17 +1264,36 @@ class NativeProbeDriver:
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('cancel-before-launch', 'stage', 'prepare-file', 'prepare', 'rank', 'cleanup', 'collect'))
+    parser.add_argument('action', choices=('live-capture-inventory', 'stage-version', 'cancel-before-launch', 'stage', 'prepare-file', 'prepare', 'rank', 'cleanup', 'collect'))
     parser.add_argument('--root', required=True)
     parser.add_argument('--host')
     parser.add_argument('--payload')
+    parser.add_argument('--payload-file')
+    parser.add_argument('--capture-id')
     parser.add_argument('--cursor', type=int)
     parser.add_argument('--inventory-digest')
     parser.add_argument('--timeout', type=float, default=2)
     args = parser.parse_args(argv)
     if args.action == 'rank':
         return _rank(args.root)
-    if args.action == 'cancel-before-launch':
+    if args.action == 'live-capture-inventory':
+        result = _live_capture_inventory(args.root, _host(args.host), args.capture_id)
+    elif args.action == 'stage-version':
+        root = owned_home_path(args.root)
+        if (root / 'STOP').exists():
+            raise ValueError('session stopped before version distribution')
+        update = json.loads(checked_job_path(root, args.payload_file).read_text())
+        version = update['manifest']['version_id']
+        if not re.fullmatch('[0-9a-f]{64}', version) or hashlib.sha256(update['xml'].encode()).hexdigest() != version:
+            raise ValueError('version identity mismatch')
+        destination = root / 'versions' / version
+        if update['manifest']['xml_path'] != str(destination / 'schedule.xml'):
+            raise ValueError('version XML path leaves the owned immutable version')
+        _immutable(destination / 'schedule.xml', update['xml'].encode())
+        _immutable(destination / 'manifest.json', json.dumps(update['manifest'], sort_keys=True).encode())
+        result = {'status': 'version_staged', 'version_id': version,
+                  'manifest_sha256': hashlib.sha256((destination / 'manifest.json').read_bytes()).hexdigest()}
+    elif args.action == 'cancel-before-launch':
         root = owned_home_path(args.root)
         _immutable(root / 'STOP', b'stop\n')
         if (root / 'ranks').exists():

@@ -27,7 +27,7 @@ from vericcl.tuning.strategies import RepairContext, build_domain, solve_repair
 from vericcl.verification.bottlenecks import AnalysisContext, SearchScope, analyze
 from vericcl.verification.global_bound import certify_global_cut, check_global_cut
 from vericcl.verification.online.campaign import run_calibration
-from vericcl.verification.online.probe_jobs import ProbeContext, ProbeFlow, _mode, payload_sizes
+from vericcl.verification.online.probe_jobs import ProbeContext, ProbeFlow, mode_jobs
 from vericcl.verification.online.model_publication import model_json
 from vericcl.workflow_state import build_budgets, save_checkpoint, persist_candidate, checkpoint_inputs, plain
 from vericcl.xml.lower import lower_and_check, LoweringContext
@@ -105,6 +105,7 @@ class PrimaryWorkflow:
         self.restored = restored
         self.calibrated = False
         self.calibration_status = 'not_run'
+        self.probe_classes = None
         if restored:
             self.model = load_model(context.artifact(restored['model']))
             self.best_inputs = checkpoint_inputs(context, restored)
@@ -120,8 +121,7 @@ class PrimaryWorkflow:
     def checkpoint(self):
         return save_checkpoint(self.context, self.best_inputs or self.original, self.budgets, self.model,
             self.best, phase=self.phase, search={'processed': sorted(self.processed), 'expanded': sorted(self.expanded)},
-            bundle_record=self.best_record, extra={'purpose': self.request.purpose, 'tune': self.request.tune, 'calibrated': self.calibrated,
-                                                  'original_config': plain(self.original.request_config),
+            bundle_record=self.best_record, original_inputs=self.original, extra={'purpose': self.request.purpose, 'tune': self.request.tune, 'calibrated': self.calibrated,
                 'candidates': [record['record'] for _, _, record in self.candidates],
                 'initial_model_version': self.initial_model.version, 'best_trace': self.best_trace})
 
@@ -162,7 +162,25 @@ class PrimaryWorkflow:
             'model_version': self.model.version, 't_pred_us': None if refreshed.prediction is None else refreshed.prediction.t_pred_us})
         return refreshed
 
-    def _initial_parameter_candidates(self, inputs, lowering, lease):
+    def _admit_initial(self, bundle, lowering):
+        """Repair type 1: fix a hard correctness violation before dropping a candidate."""
+        from vericcl.xml.v5_model import CandidateBundle
+        if not isinstance(bundle, CandidateBundle) or bundle.can_execute:
+            return bundle, 'initial'
+        from vericcl.tuning.correctness import repair_correctness
+        steps = (self.original.request_config['sketch']['repair'].get('correctness') or {}).get('max_steps', 8)
+        repaired, report = repair_correctness(bundle, lowering, max_steps=steps)
+        if report.status != 'not_correctness':
+            emit_event(self.context, 'correctness_repair', {'xml_sha256': bundle.xml_sha256, **report.as_json()})
+        return (repaired, 'initial_correctness_repair') if repaired is not None else (bundle, 'initial')
+
+    def _initial_parameter_candidates(self, inputs, lowering, lease, variants=()):
+        """Yield (bundle, origin, bound inputs) for one synthesis binding.
+
+        ``variants`` are bindings with the same slice partition and another
+        channel count; hierarchy synthesis evaluates them only for its best
+        plans instead of running a full synthesis per channel count.
+        """
         history = inputs.request_config['sketch']['history']
         if history['schedule_reuse']:
             from vericcl.solver.history_index import find_schedules, adapt_schedule
@@ -176,16 +194,28 @@ class PrimaryWorkflow:
                     bundle = lower_and_check(adapt_schedule(hit, inputs), lowering)
                 except SemanticError:
                     continue
-                yield bundle, 'history'
+                yield bundle, 'history', inputs
+        bindings = {inputs.solver.max_channels: (inputs, lowering)}
+        for variant in variants:
+            bindings.setdefault(variant.solver.max_channels, (variant, self.lowering(variant, lease)))
+        def binding(item):
+            bound = getattr(item, 'inputs', None)
+            return bindings[bound.solver.max_channels] if bound is not None else (inputs, lowering)
         if inputs.selected_synthesis_method == 'hierarchy':
-            stream = iter(plan_hierarchy(inputs, lowering.topology, self.model, HierarchyContext(lease)))
+            # Plans are ranked by the same lowering + cost model that scores
+            # the final candidate, not by the composer's coarse makespan.
+            from vericcl.xml.v5_lower import predict_only
+            stream = iter(plan_hierarchy(inputs, lowering.topology, self.model, HierarchyContext(
+                lease, rank=lambda item: predict_only(item, binding(item)[1]),
+                variants=tuple(bound for bound, _ in bindings.values() if bound is not inputs))))
         else:
             route_context = RouteContext(lease)
             stream = iter(optimize_fixed_routes(construct_routes(inputs, lowering.topology, self.model, route_context), route_context))
         try:
             for candidate in stream:
                 lease.check()
-                yield lower_and_check(candidate, lowering), 'initial'
+                bound, bound_lowering = binding(candidate)
+                yield (*self._admit_initial(lower_and_check(candidate, bound_lowering), bound_lowering), bound)
         finally:
             if hasattr(stream, 'close'):
                 stream.close()
@@ -195,11 +225,23 @@ class PrimaryWorkflow:
             domain = initial_parameter_domain(self.original, lease=lease)
             self.context.write_json('reports/initial-parameter-domain.json', plain(domain))
             pending, active = deque(), {}
+            bindings = [(choice, ()) for choice in domain.candidates]
+            if self.original.selected_synthesis_method == 'hierarchy' and len(domain.candidates) > 1:
+                # One synthesis at the largest channel count (its slice
+                # partition gives every channel a chunk per rank); the other
+                # counts are bindings of the same partition, evaluated for the
+                # best plans only (plan.md step 3.5: no full synthesis per C).
+                primary = max(domain.candidates, key=lambda choice: (choice.channels, -choice.slice_bytes))
+                same_partition = initial_parameter_domain(self.original, fixed_slice_bytes=primary.slice_bytes,
+                                                          lease=lease).candidates
+                bindings = [(primary, tuple(resolve_parameters(self.original, choice) for choice in same_partition
+                                            if choice.channels != primary.channels))]
             try:
-                for ordinal, choice in enumerate(domain.candidates):
+                for ordinal, (choice, variants) in enumerate(bindings):
                     lease.check()
                     inputs = resolve_parameters(self.original, choice)
-                    stream = iter(self._initial_parameter_candidates(inputs, self.lowering(inputs, lease), lease))
+                    stream = iter(self._initial_parameter_candidates(inputs, self.lowering(inputs, lease), lease,
+                                                                     variants))
                     active[ordinal] = stream, inputs
                     pending.append(ordinal)
                 while pending:
@@ -207,7 +249,7 @@ class PrimaryWorkflow:
                     ordinal = pending.popleft()
                     stream, inputs = active[ordinal]
                     try:
-                        bundle, origin = next(stream)
+                        bundle, origin, inputs = next(stream)
                         lease.check()
                     except StopIteration:
                         lease.check()
@@ -232,13 +274,16 @@ class PrimaryWorkflow:
     def calibration(self, inputs, *, only_modes=None):
         with self.stage('online') as lease:
             probe_inputs = _channel_cap(inputs, self.original.solver.max_channels)
-            probes = ProbeContext(probe_inputs, load_topology(probe_inputs), lease, run_context=self.context,
-                                  native_driver=self.services.probe_driver)
+            topology = load_topology(probe_inputs)
+            if self.original.request_config['sketch']['calibration']['equivalence_classes']:
+                if self.probe_classes is None:
+                    from vericcl.verification.online.equivalence import ProbeClasses
+                    self.probe_classes = ProbeClasses(probe_inputs, topology)
+            probes = ProbeContext(probe_inputs, topology, lease, run_context=self.context,
+                                  native_driver=self.services.probe_driver, classes=self.probe_classes)
             jobs = None
             if only_modes is not None:
-                jobs = [_mode(probes, mode[0].kind if len(mode) == 1 and mode[0].kind in {'copy', 'reduce'}
-                              else 'link' if len(mode) == 1 else 'shared', mode, size)
-                        for mode in only_modes for size in payload_sizes(probes)]
+                jobs = mode_jobs(probes, only_modes)
             result = run_calibration(probes, self.model, initial=self.initial_model, driver=self.services.probe_driver, jobs=jobs)
             self.model = result.model
             self.calibrated = True
@@ -252,7 +297,7 @@ class PrimaryWorkflow:
     def _native(self):
         if self.services.native_driver is None:
             try:
-                from vericcl.execution.native import NativeScheduleDriver
+                from vericcl.live.native import NativeScheduleDriver
             except ImportError as error:
                 raise SemanticError('native full-schedule execution driver is unavailable') from error
             self.services.native_driver = NativeScheduleDriver(self.context, self.original)
@@ -282,16 +327,23 @@ class PrimaryWorkflow:
                                 trace_status=trace.status, trace_issues=list(trace.issues))
                 self.context.write_json('reports/trace-' + uuid.uuid4().hex + '.json', plain(trace))
                 causal = analyze_trace_causality(new, trace, lease=lease)
-                relative = self.context.relative_artifact('reports/trace-causality-' + (trace.capture_id or uuid.uuid4().hex) + '.json')
+                relative = 'reports/trace-causality-' + (trace.capture_id or uuid.uuid4().hex) + '.json'
                 path = self.context.write_json(relative, causal)
                 evidence['trace_causality'] = {'path': relative, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                     'xml_sha256': new.xml_sha256, 'capture_id': trace.capture_id}
                 if old is not None and trace.global_complete:
                     ledger = StatisticalLedger(self.context.artifact('statistics/attempts.jsonl'), task_id=self.context.task_id,
                         task_alpha=settings['task_alpha'], single_attempt_cap=settings['single_attempt_alpha_cap'], run_context=self.context)
+                    def side(identity):
+                        return (new, inputs) if identity == new.xml_sha256 else (old, self.best_inputs)
+                    # One native process group measures each round's planned
+                    # launch order (startup and communicator setup paid once).
+                    batch = None if not hasattr(driver, 'measure_sequence') else (
+                        lambda items: driver.measure_sequence([(*side(identity), launch) for identity, launch in items],
+                                                              lease=lease))
                     acceptance = AcceptanceContext(True,
-                        driver=lambda identity, launch: driver.measure(new if identity == new.xml_sha256 else old,
-                            inputs if identity == new.xml_sha256 else self.best_inputs, launch),
+                        driver=lambda identity, launch: driver.measure(*side(identity), launch),
+                        batch_driver=batch,
                         seed=settings['seed'], minimum_gain=settings['min_relative_gain'], pair_count=settings['pairs'],
                         lease=lease, warmup=settings['warmup_iterations'], timed=settings['timed_iterations'],
                         max_rounds=settings['max_rounds'], max_cv=settings['max_cv'])
@@ -458,9 +510,49 @@ class PrimaryWorkflow:
     def _refine_candidate_model(self, bundle, inputs):
         if not self.original.request_config['sketch']['calibration']['enabled'] or bundle.executable is None:
             return
-        if inputs.hyperparameters.slice_size_bytes != self.best_inputs.hyperparameters.slice_size_bytes:
+        if (inputs.hyperparameters.slice_size_bytes != self.best_inputs.hyperparameters.slice_size_bytes
+                and not self.original.request_config['sketch']['calibration']['equivalence_classes']):
             self.calibration(inputs)
             return
+        modes = self._candidate_modes(bundle)
+        if modes:
+            self.calibration(inputs, only_modes=tuple(sorted(modes)))
+
+    def _initial_calibration(self):
+        """Calibrate the components the best-predicted candidates need (plan.md 9.2).
+
+        Candidates are ranked by their initial-model prediction; the modes of
+        the top ``candidate_limit`` per slice size are measured, one job per
+        equivalence class. Without equivalence classes the full planned
+        campaign of the first usable candidate's parameters is run.
+        """
+        settings = self.original.request_config['sketch']['calibration']
+        usable = [item for item in self.candidates if item[0].xml_text is not None]
+        if not usable:
+            return
+        if not settings['equivalence_classes']:
+            self.calibration(usable[0][1])
+            return
+        ranked = sorted(usable, key=lambda item: (item[0].prediction is None or item[0].prediction.t_pred_us is None,
+            Fraction(*item[0].prediction.exact_completion_ratio) if item[0].prediction is not None
+            and item[0].prediction.exact_completion_ratio is not None else Fraction(0)))
+        by_size = {}
+        for bundle, inputs, _ in ranked:
+            if bundle.executable is None:
+                continue
+            chosen = by_size.setdefault(inputs.hyperparameters.slice_size_bytes, [inputs, []])
+            if len(chosen[1]) < settings['candidate_limit']:
+                chosen[1].append(bundle)
+        for inputs, bundles in by_size.values():
+            modes = set()
+            for bundle in bundles:
+                modes.update(self._candidate_modes(bundle))
+            if modes:
+                self.calibration(inputs, only_modes=tuple(sorted(modes)))
+        if not by_size:
+            self.calibration(usable[0][1])
+
+    def _candidate_modes(self, bundle):
         modes = set()
         for mode in (() if bundle.prediction is None else bundle.prediction.unmeasured_modes):
             flows = []
@@ -478,26 +570,17 @@ class PrimaryWorkflow:
             kind = 'send' if parts[0] == 'link' else parts[0]
             src = int(parts[1]); dst = int(parts[2]) if len(parts) == 3 else src
             modes.add((ProbeFlow(kind, src, dst),))
-        if modes:
-            self.calibration(inputs, only_modes=tuple(sorted(modes)))
+        return modes
 
-    def compare(self, bundle, inputs, record):
-        # Plan section 11.4: a model update invalidates old comparisons. A
-        # proposal generated before calibration replaced the model (for
-        # example the second proposal of one resynthesis batch) is reevaluated
-        # under the current model instead of being dropped as model_mismatch.
-        def stale(item):
-            return item.prediction is not None and item.prediction.model_version != self.model.version
-        if bundle.xml_text is not None and (stale(bundle) or stale(self.best)):
-            with self.stage('offline') as lease:
-                if stale(self.best):
-                    self.best = self.reassess(self.best, self.best_inputs, lease)
-                    self.best_record = self.store(self.best, self.best_inputs, 'incumbent_model_reassessment')
-                    if self.best.can_execute:
-                        self.publish_best('model_reassessment')
-                if stale(bundle):
-                    bundle = self.reassess(bundle, inputs, lease)
-                    record = self.store(bundle, inputs, 'candidate_model_reassessment')
+    def compare(self, bundle, inputs, record, *, calibrate=True):
+        """Model gate, candidate-mode calibration, then the paired measurement.
+
+        ``calibrate=False`` keeps the current model for the gate: a refinement
+        has the incumbent's flows, whose pieces the first campaign measured
+        (its payload ladder includes S/f); finer pieces only create new
+        concurrency combinations, and measuring all of them would cost far
+        more than the paired measurement that decides acceptance anyway.
+        """
         preliminary = accept_candidate(self.best, bundle, {})
         can_calibrate_missing = (self.original.request_config['sketch']['calibration']['enabled'] and
             all(bundle.checks[key].status.value == 'valid' for key in ('semantic', 'storage', 'endpoint', 'deadlock', 'xml', 'launch')) and
@@ -505,7 +588,8 @@ class PrimaryWorkflow:
         if not preliminary.accepted and not can_calibrate_missing:
             emit_event(self.context, 'candidate_decision', {'xml_sha256': bundle.xml_sha256, **plain(preliminary)})
             return False
-        self._refine_candidate_model(bundle, inputs)
+        if calibrate:
+            self._refine_candidate_model(bundle, inputs)
         if self.best.prediction.model_version != self.model.version or bundle.prediction.model_version != self.model.version:
             with self.stage('offline') as lease:
                 self.best = self.reassess(self.best, self.best_inputs, lease)
@@ -540,6 +624,13 @@ class PrimaryWorkflow:
         return False
 
     def _expansion_requests(self):
+        # Cheapest first: the incumbent's own routes in finer slices (no
+        # synthesis), then new structures, then complete resyntheses at other S.
+        size = self.best_inputs.hyperparameters.slice_size_bytes
+        element = self.original.size_accounting['element_bytes']
+        for factor in self.original.request_config['sketch']['repair'].get('refinement_factors', (2, 4, 8)):
+            if size and size % (factor * element) == 0:
+                yield ResynthesisRequest('refinement', 'pipeline the incumbent routes in finer slices', size // factor)
         yield ResynthesisRequest('structure', reason='finite strategy generation exhausted; expand initial structures')
         size = self.original.hyperparameters.total_size_bytes
         element = self.original.size_accounting['element_bytes']
@@ -607,10 +698,24 @@ class PrimaryWorkflow:
                             for item in stream:
                                 proposals.append((item.candidate, item.context.inputs,
                                                   self.store(item.candidate, item.context.inputs, 'structure_repair')))
+                        except BudgetExhausted:
+                            # Checked candidates found before the repair
+                            # allowance ended still go to their (separately
+                            # budgeted) comparison.
+                            if not proposals:
+                                raise
+                            self.failures.append('structure repair stopped at its budget with %d candidates' % len(proposals))
                         finally:
                             stream.close()
                     else:
-                        result = solve_repair(self.best, build_domain(None, action), action, repair)
+                        if action.family == 'reallocation':
+                            from vericcl.tuning.allocation import solve_reallocation
+                            result = solve_reallocation(self.best, action, repair)
+                        elif action.family == 'bottleneck':
+                            from vericcl.tuning.bottleneck import solve_bottleneck
+                            result = solve_bottleneck(self.best, action, self.analysis._hotspot_report, repair)
+                        else:
+                            result = solve_repair(self.best, build_domain(None, action), action, repair)
                         emit_event(self.context, 'repair_finished', {'status': result.status, 'domain': plain(result.domain),
                             'attempts': result.attempts, 'solver_evidence': result.solver_evidence})
                         if result.candidate is not None:
@@ -634,38 +739,73 @@ class PrimaryWorkflow:
                 emit_event(self.context, 'repair_failed', {'strategy_id': action.strategy_id, 'message': str(error)})
         if not improved and batch.status == 'candidates_exhausted':
             emit_event(self.context, 'search_expanded', {'reason': 'finite candidates exhausted without a full-space proof'})
-            for branch in self._expansion_requests():
-                key = branch.kind + ':' + str(branch.slice_bytes)
-                if key in self.expanded:
-                    continue
-                with self.stage('repair') as lease:
-                    if branch.kind == 'partition' and not self.partition_benefit(branch, lease):
-                        self.expanded.add(key)
+            # An accepted refinement makes its own pieces the next incumbent;
+            # its further refinements (no synthesis) follow in this round.
+            restart, refined = True, False
+            while restart:
+                restart = False
+                for branch in self._expansion_requests():
+                    key = branch.kind + ':' + str(branch.slice_bytes)
+                    if key in self.expanded:
                         continue
-                    repair = RepairContext(self.lowering(self.best_inputs, lease), request_inputs=self.original)
-                    stream = resynthesize_branch(self.best, branch, repair)
-                    proposals = []
-                    try:
-                        for item in stream:
-                            proposals.append((item.candidate, item.context.inputs,
-                                              self.store(item.candidate, item.context.inputs, 'expanded_resynthesis')))
-                    except SemanticError as error:
-                        if isinstance(error, (BudgetExhausted, SolverUnavailableError)):
-                            raise
-                        self.failures.append('resynthesis: ' + str(error))
-                    finally:
-                        stream.close()
-                    self.expanded.add(key)
-                for proposal in proposals:
-                    if self.compare(*proposal):
-                        improved = True
+                    with self.stage('repair') as lease:
+                        if branch.kind == 'partition' and not self.partition_benefit(branch, lease):
+                            self.expanded.add(key)
+                            continue
+                        repair = RepairContext(self.lowering(self.best_inputs, lease), request_inputs=self.original)
+                        stream = resynthesize_branch(self.best, branch, repair)
+                        proposals = []
+                        try:
+                            for item in stream:
+                                proposals.append((item.candidate, item.context.inputs,
+                                                  self.store(item.candidate, item.context.inputs, 'expanded_resynthesis')))
+                        except BudgetExhausted:
+                            # Keep the checked candidates already produced: their
+                            # measured comparison has its own online budget.
+                            if not proposals:
+                                raise
+                            self.failures.append('resynthesis stopped at its budget with %d candidates' % len(proposals))
+                        except SemanticError as error:
+                            if isinstance(error, (BudgetExhausted, SolverUnavailableError)):
+                                raise
+                            self.failures.append('resynthesis: ' + str(error))
+                        finally:
+                            stream.close()
+                        self.expanded.add(key)
+                    for proposal in proposals:
+                        if self.compare(*proposal, calibrate=branch.kind != 'refinement'):
+                            improved = True
+                            break
+                    # One structural/S branch per outer round (the cursor
+                    # persists); refinements need no synthesis, so all of them
+                    # may run in one round, and an accepted one restarts the
+                    # refinements from the new incumbent.
+                    if improved and branch.kind == 'refinement':
+                        refined, restart, improved = True, True, False
                         break
-                # One structural/S branch per outer round; the cursor persists.
-                break
+                    if improved or branch.kind != 'refinement':
+                        break
+            improved = improved or refined
         self.phase = 'tuning'
         self.checkpoint()
 
+    def timing_report(self):
+        """Budget accounting plus the plan's distinct phase totals (plan.md 13.1)."""
+        snapshot = self.budgets.snapshot()
+        consumed = snapshot['consumed']
+        return snapshot | {'phases': {
+            'initial_synthesis_s': consumed.get('initial', 0.), 'online_measurement_s': consumed.get('online', 0.),
+            'verification_s': consumed.get('offline', 0.), 'repair_s': consumed.get('repair', 0.),
+            'total_wall_s': snapshot['elapsed_wall_s'], 'tuning_rounds': snapshot['started_rounds']}}
+
     def run(self):
+        self._timing_extra = {}
+        try:
+            return self._run()
+        finally:
+            self.context.write_json('reports/timing.json', self.timing_report() | self._timing_extra, replace=True)
+
+    def _run(self):
         if not self.restored:
             self.context.write_json('effective-request.json', plain(self.original.request_config))
             self.context.write_json('value-sources.json', plain(self.original.value_sources))
@@ -732,9 +872,7 @@ class PrimaryWorkflow:
                     return RunResult(False, 'incomplete', stop_reason='no_initial_candidate',
                         failure_category='offline', optional_failures=tuple(self.failures))
                 if self.original.request_config['sketch']['calibration']['enabled'] and not self.calibrated:
-                    usable = next((item for item in self.candidates if item[0].xml_text is not None), None)
-                    if usable:
-                        self.calibration(usable[1])
+                    self._initial_calibration()
                 qualified = self.baseline()
                 if not qualified and self.recover_capacity_baseline():
                     qualified = self.baseline()
@@ -777,9 +915,9 @@ class PrimaryWorkflow:
             if not path.is_absolute():
                 path = self.context.root.parent.parent / path
             save_schedule(path, self.best, self.best_inputs)
-        self.context.write_json('reports/timing.json', self.budgets.snapshot() | {
+        self._timing_extra = {
             't_pred_us': self.best.prediction.t_pred_us, 'model_version': self.model.version,
-            'measurement_ledger': self.context.relative_artifact('statistics/attempts.jsonl') if self.original.request_config['sketch']['trace_and_measure']['enabled'] else None}, replace=True)
+            'measurement_ledger': 'statistics/attempts.jsonl' if self.original.request_config['sketch']['trace_and_measure']['enabled'] else None}
         return RunResult(True, 'completed', checks={key: value.status.value for key, value in self.best.checks.items()
                         if key != 'compatibility' or value.status.value != 'not_run'},
             model_coverage=self.best.prediction.model_coverage, acceptance='accepted', stop_reason=stop,

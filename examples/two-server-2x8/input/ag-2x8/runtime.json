@@ -1,0 +1,109 @@
+{
+ "protocol": "Simple",
+ "tb_layout": "separate",
+ "device_memory_budget_bytes": 16106127360,
+ "scratch_bytes_per_rank": 536870912,
+ "rank_map": [
+  {
+   "rank": 0,
+   "host": "host-a",
+   "device": 0
+  },
+  {
+   "rank": 1,
+   "host": "host-a",
+   "device": 1
+  },
+  {
+   "rank": 2,
+   "host": "host-a",
+   "device": 2
+  },
+  {
+   "rank": 3,
+   "host": "host-a",
+   "device": 3
+  },
+  {
+   "rank": 4,
+   "host": "host-a",
+   "device": 4
+  },
+  {
+   "rank": 5,
+   "host": "host-a",
+   "device": 5
+  },
+  {
+   "rank": 6,
+   "host": "host-a",
+   "device": 6
+  },
+  {
+   "rank": 7,
+   "host": "host-a",
+   "device": 7
+  },
+  {
+   "rank": 8,
+   "host": "host-b",
+   "device": 0
+  },
+  {
+   "rank": 9,
+   "host": "host-b",
+   "device": 1
+  },
+  {
+   "rank": 10,
+   "host": "host-b",
+   "device": 2
+  },
+  {
+   "rank": 11,
+   "host": "host-b",
+   "device": 3
+  },
+  {
+   "rank": 12,
+   "host": "host-b",
+   "device": 4
+  },
+  {
+   "rank": 13,
+   "host": "host-b",
+   "device": 5
+  },
+  {
+   "rank": 14,
+   "host": "host-b",
+   "device": 6
+  },
+  {
+   "rank": 15,
+   "host": "host-b",
+   "device": 7
+  }
+ ],
+ "paths": {
+  "cuda_home": "/usr/local/cuda-12.8",
+  "mpi_bin": "/opt/openmpi/bin",
+  "vericcl_driver": "/opt/vericcl-runtime/bin/vericcl-probe",
+  "vericcl_native": "/opt/vericcl-runtime/bin/vericcl-native"
+ },
+ "environment": {
+  "LD_LIBRARY_PATH": "/opt/vericcl-runtime/lib:/opt/openmpi/lib:/usr/local/cuda-12.8/lib64",
+  "NCCL_BUFFSIZE": "16777216",
+  "NCCL_PROTO": "Simple",
+  "NCCL_IB_HCA": "mlx5_0",
+  "NCCL_SOCKET_IFNAME": "eth0",
+  "OMPI_MCA_pml": "ob1",
+  "OMPI_MCA_btl": "self,vader,tcp",
+  "OMPI_MCA_btl_tcp_if_include": "192.0.2.0/24",
+  "OMPI_MCA_oob_tcp_if_include": "192.0.2.0/24"
+ },
+ "control": {
+  "bind_address": "host-a",
+  "port": 39517
+ }
+}

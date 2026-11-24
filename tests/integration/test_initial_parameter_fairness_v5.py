@@ -51,13 +51,20 @@ def test_first_candidate_of_each_parameter_precedes_deeper_enumeration(tmp_path,
             closed.append(channel)
     saved = install_stream(monkeypatch, workflow, generate)
     workflow.initial_candidates()
-    assert [row[1] for row in saved] == [(1, 0), (2, 0), (1, 1), (2, 1), (1, 2), (2, 2)]
-    assert sorted(closed) == [1, 2]
+    if method == 'hierarchy':
+        # One hierarchy synthesis at the largest channel count; the other
+        # counts are same-partition variants evaluated inside that stream.
+        assert [row[1] for row in saved] == [(2, 0), (2, 1), (2, 2)]
+        assert closed == [2]
+    else:
+        assert [row[1] for row in saved] == [(1, 0), (2, 0), (1, 1), (2, 1), (1, 2), (2, 2)]
+        assert sorted(closed) == [1, 2]
     assert not workflow.context.active_jobs and workflow.budgets.cpu_in_use == 0
 
 
 def test_parent_cancel_closes_other_already_started_parameter_streams(tmp_path, monkeypatch):
-    workflow = workflow_fixture(tmp_path, 'hierarchy')
+    # constructive_trees runs one stream per channel count.
+    workflow = workflow_fixture(tmp_path, 'constructive_trees')
     closed = []
     def generate(channel):
         try:
@@ -144,3 +151,18 @@ def test_real_byte_bans_making_large_slice_unroutable_do_not_hide_smaller_partit
     # This deliberately tiny TB limit checks reachability, not admission or gain.
     assert not result.contract_met and result.stop_reason == 'no_qualified_baseline'
     assert not workflow.context.active_jobs and workflow.budgets.cpu_in_use == 0
+
+
+def test_hierarchy_binds_channel_variants_to_one_partition(tmp_path, monkeypatch):
+    from vericcl import workflow_v5
+    workflow = workflow_fixture(tmp_path, 'hierarchy')
+    seen = {}
+    def fake(inputs, topology, model, context):
+        seen['primary'] = (inputs.solver.max_channels, inputs.hyperparameters.slice_size_bytes)
+        seen['variants'] = sorted((v.solver.max_channels, v.hyperparameters.slice_size_bytes) for v in context.variants)
+        return iter(())
+    monkeypatch.setattr(workflow_v5, 'plan_hierarchy', fake)
+    workflow.initial_candidates()
+    channels, slice_bytes = seen['primary']
+    assert channels == 2
+    assert seen['variants'] == [(1, slice_bytes)]

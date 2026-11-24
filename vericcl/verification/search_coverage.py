@@ -6,7 +6,11 @@ import json
 from vericcl.errors import SemanticError
 
 
-REPAIR_FAMILIES = ('path', 'allocation', 'order', 'channel', 'joint', 'internal_root', 'structure', 'partition')
+# reallocation = repair type 2 (cross-path data-volume allocation), bottleneck =
+# repair type 3 (scoped owner reroute + local MILP); correctness repair (type 1)
+# runs inside candidate admission and is not a search family.
+REPAIR_FAMILIES = ('reallocation', 'bottleneck', 'path', 'allocation', 'order', 'channel', 'joint',
+                   'internal_root', 'structure', 'partition')
 
 
 def digest(value):

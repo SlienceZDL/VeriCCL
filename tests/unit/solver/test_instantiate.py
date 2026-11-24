@@ -556,11 +556,7 @@ def test_gateway_allgather_duplicate_final_versions_require_one_exact_dependency
         original,
         transfer_id=duplicate_id,
         atoms=tuple(
-            replace(
-                atom,
-                st_time=duplicate_start,
-                ed_time=duplicate_start + duration,
-            )
+            atom.with_times(duplicate_start, duplicate_start + duration)
             for atom in original.atoms
         ),
         st_time=duplicate_start,

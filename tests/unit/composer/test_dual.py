@@ -7,6 +7,7 @@ from vericcl.errors import SemanticError
 from vericcl.planner.dual import extract_dual_trees
 from vericcl.planner.model import StageInterface
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import (
     CollectiveKind,
     CollectiveSpec,
@@ -138,11 +139,11 @@ def test_non_routing_dual_matches_the_legacy_schedule_object_and_metadata():
                 stage_id=0,
                 member_slice_ids=frozenset({1}),
                 atoms=(
-                    Atom(
+                    Atom.build(
                         slice_id=1,
                         slice_size_bytes=1024,
                         path=(
-                            PathStage(0, "REDUCE", (Symbol(1, 0, 0.0),)),
+                            PathStage(0, "REDUCE", (symbolic_step(1, 0, 0.0),)),
                         ),
                         st_time=0.0,
                         ed_time=2.0,
@@ -161,11 +162,11 @@ def test_non_routing_dual_matches_the_legacy_schedule_object_and_metadata():
                 stage_id=0,
                 member_slice_ids=frozenset({2}),
                 atoms=(
-                    Atom(
+                    Atom.build(
                         slice_id=2,
                         slice_size_bytes=1024,
                         path=(
-                            PathStage(0, "REDUCE", (Symbol(2, 0, 0.0),)),
+                            PathStage(0, "REDUCE", (symbolic_step(2, 0, 0.0),)),
                         ),
                         st_time=0.0,
                         ed_time=2.0,

@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 from vericcl.semantics.atom import PathStage, Schedule, Symbol
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import CollectiveKind
 from vericcl.topology.model import (
     DirectedLink,
@@ -118,7 +119,7 @@ def shared_prefix_case():
         stage = PathStage(
             0,
             "SEND",
-            wait_stage.symbols + (Symbol(3, leaf, 6.0),),
+            wait_stage.symbols + (symbolic_step(3, leaf, 6.0),),
         )
         branches.append(
             _transfer(
@@ -184,7 +185,7 @@ def impact_case():
     )
     transfers = []
     for transfer_id, src, dst, channel, member, start, end, predecessors in definitions:
-        stage = PathStage(0, "SEND", (Symbol(src, dst, start),))
+        stage = PathStage(0, "SEND", (symbolic_step(src, dst, start),))
         transfers.append(
             _transfer(
                 transfer_id,

@@ -31,7 +31,6 @@ from vericcl.solver.template_search import (
     search_route_models,
 )
 from vericcl.solver.templates import build_solver_templates
-from vericcl.workflow import _global_schedule
 
 from tests.unit.solver.test_global_scheduler import (
     _multi_resource_topology,
@@ -270,89 +269,6 @@ def test_template_candidate_sidecar_ignores_route_model_wall_time():
     assert second.metrics.solve_time_s == 0.0
     assert first_text == second_text
 
-
-def test_workflow_reuses_template_global_schedule_without_recomposition(
-    monkeypatch,
-):
-    request = _request(
-        objective=ObjectiveMode.LATENCY,
-        constructive=True,
-        milp=False,
-        force_resolve=True,
-    )
-    problems = tuple(
-        build_solver_problem(node, request.inputs, request.topology)
-        for node in request.plan.nodes
-    )
-    real_compose_routes = compose_routes
-    calls = []
-
-    def recording_compose_routes(*args, **kwargs):
-        calls.append((args, kwargs))
-        return real_compose_routes(*args, **kwargs)
-
-    monkeypatch.setattr(
-        "vericcl.composer.compose_routes",
-        recording_compose_routes,
-    )
-    monkeypatch.setattr(
-        "vericcl.workflow.compose_routes",
-        recording_compose_routes,
-    )
-
-    result = search_route_models(
-        request,
-        problems,
-        ObjectiveMode.LATENCY,
-        deadline=time.monotonic() + 100.0,
-    )
-    candidate = result.candidates[0]
-    schedule = _global_schedule(
-        request.plan,
-        candidate,
-        request.topology,
-    )
-
-    assert len(calls) == 1
-    assert schedule is candidate.global_schedule
-
-
-def test_workflow_rejects_carried_schedule_for_changed_node_schedule():
-    request = _request(
-        objective=ObjectiveMode.LATENCY,
-        constructive=True,
-        milp=False,
-        force_resolve=True,
-    )
-    problems = tuple(
-        build_solver_problem(node, request.inputs, request.topology)
-        for node in request.plan.nodes
-    )
-    result = search_route_models(
-        request,
-        problems,
-        ObjectiveMode.LATENCY,
-        deadline=time.monotonic() + 100.0,
-    )
-    candidate = result.candidates[0]
-    node_id = next(iter(candidate.node_schedules))
-    node_schedule = candidate.node_schedules[node_id]
-    tampered = replace(
-        candidate,
-        node_schedules={
-            **candidate.node_schedules,
-            node_id: replace(
-                node_schedule,
-                metadata={
-                    **node_schedule.metadata,
-                    "backend": "changed-route-backend",
-                },
-            ),
-        },
-    )
-
-    with pytest.raises(SemanticError, match="identity"):
-        _global_schedule(request.plan, tampered, request.topology)
 
 
 def test_parallel_route_workers_own_distinct_scip_models(monkeypatch):

@@ -11,7 +11,6 @@ from vericcl.solver.demands import (
     TransferDemand,
     routing_unit_key,
 )
-from vericcl.topology.isomorphism import exact_domain_signature
 from vericcl.topology.model import LinkKey, PerformanceCurve, Topology
 
 
@@ -21,9 +20,6 @@ _CHAIN_KINDS = frozenset(
         CollectiveKind.SCATTER,
         CollectiveKind.ALL_TO_ALL,
     }
-)
-_CANONICALIZATION_LIMIT = (
-    "domain isomorphism canonicalization limit exceeded"
 )
 
 
@@ -131,6 +127,9 @@ class SolverTemplate:
     representative: RoutingUnit
     members: Tuple[TemplateMember, ...]
     exact_signature: str
+    # True when the representative was solved for an earlier plan (template
+    # library); then none of this plan's units is the representative itself.
+    library_representative: bool = False
 
     def __post_init__(self) -> None:
         _identifier(self.template_id, "solver_template.template_id")
@@ -146,10 +145,13 @@ class SolverTemplate:
             raise SemanticError(
                 "solver_template.members must contain TemplateMember values"
             )
-        unit_ids = tuple(member.unit_id for member in members)
-        if len(unit_ids) != len(set(unit_ids)):
+        # Unit IDs are unique within a plan node; instantiation identifies a
+        # member by (node, unit), so that pair must be unique in a template.
+        unit_keys = tuple((member.node_id, member.unit_id) for member in members)
+        if len(unit_keys) != len(set(unit_keys)):
             raise SemanticError("solver template unit IDs must be unique")
-        if self.representative.unit_id not in set(unit_ids):
+        unit_ids = {member.unit_id for member in members}
+        if not self.library_representative and self.representative.unit_id not in unit_ids:
             raise SemanticError("solver template omits its representative")
         object.__setattr__(self, "members", members)
 
@@ -285,7 +287,33 @@ def _curve_payload(curve: PerformanceCurve) -> tuple:
     )
 
 
+_PAYLOAD_CACHE: Dict[tuple, tuple] = {}
+
+
+def _cached_payload(kind, topology, scope, rank_map, compute):
+    # Pure functions of (topology, group or node resources, rank map); units
+    # and their automorphism candidates recompute them very often.
+    key = (kind, id(topology), scope, tuple(sorted(rank_map.items())))
+    cached = _PAYLOAD_CACHE.get(key)
+    if cached is not None and cached[0] is topology:
+        return cached[1]
+    value = compute()
+    if len(_PAYLOAD_CACHE) > 65536:
+        _PAYLOAD_CACHE.clear()
+    _PAYLOAD_CACHE[key] = (topology, value)
+    return value
+
+
 def _domain_link_payload(
+    topology: Topology,
+    group: Tuple[int, ...],
+    rank_map: Mapping[int, int],
+) -> tuple:
+    return _cached_payload('links', topology, tuple(group), rank_map,
+                           lambda: _domain_link_payload_uncached(topology, group, rank_map))
+
+
+def _domain_link_payload_uncached(
     topology: Topology,
     group: Tuple[int, ...],
     rank_map: Mapping[int, int],
@@ -306,6 +334,16 @@ def _domain_link_payload(
 
 
 def _resource_payload(
+    topology: Topology,
+    node: PlanNode,
+    rank_map: Mapping[int, int],
+) -> tuple:
+    return _cached_payload('resources', topology,
+                           (tuple(node.communication_group), tuple(sorted(node.shared_resource_ids))), rank_map,
+                           lambda: _resource_payload_uncached(topology, node, rank_map))
+
+
+def _resource_payload_uncached(
     topology: Topology,
     node: PlanNode,
     rank_map: Mapping[int, int],
@@ -340,6 +378,66 @@ def _resource_payload(
             )
         )
     return tuple(sorted(values))
+
+
+_AUTOMORPHISMS: Dict[tuple, tuple] = {}
+_MAX_AUTOMORPHISMS = 16
+
+
+def _domain_automorphisms(topology: Topology, group: Tuple[int, ...]) -> tuple:
+    """Position permutations of ``group`` that preserve its domain.
+
+    ``p[i]`` is the image position of ``group[i]``; the identity comes first.
+    A permutation must preserve every link attribute the route MILP reads
+    (channels, performance, shared-resource capacity and performance). These
+    are only candidate maps: template membership is still decided by the
+    explicit payload check, so a missing or extra candidate never affects
+    soundness, only how many units share a template (SyCCL likewise reuses
+    the symmetry of its sketch expansion instead of a general search).
+    """
+    key = (id(topology), group)
+    cached = _AUTOMORPHISMS.get(key)
+    if cached is not None and cached[0] is topology:
+        return cached[1]
+    identity = tuple(range(len(group)))
+    result = [identity]
+    if 2 <= len(group) <= 16:
+        import networkx as nx
+        from networkx.algorithms.isomorphism import DiGraphMatcher
+        index = {rank: position for position, rank in enumerate(group)}
+        graph = nx.DiGraph()
+        graph.add_nodes_from(identity)
+        for link, edge in topology.links.items():
+            if link.src_rank in index and link.dst_rank in index:
+                resources = tuple(sorted(
+                    (topology.shared_resources[name].max_channels,
+                     _curve_payload(topology.shared_resources[name].performance))
+                    for name in edge.resource_ids if name in topology.shared_resources))
+                graph.add_edge(index[link.src_rank], index[link.dst_rank],
+                               label=(edge.max_channels, _curve_payload(edge.performance), resources))
+        matcher = DiGraphMatcher(graph, graph, edge_match=lambda left, right: left['label'] == right['label'])
+        for mapping in matcher.isomorphisms_iter():
+            permutation = tuple(mapping[position] for position in identity)
+            if permutation != identity:
+                result.append(permutation)
+            if len(result) >= _MAX_AUTOMORPHISMS:
+                break
+    if len(_AUTOMORPHISMS) > 4096:
+        _AUTOMORPHISMS.clear()
+    _AUTOMORPHISMS[key] = (topology, tuple(result))
+    return tuple(result)
+
+
+def _canonical_rank_map(
+    representative_group: Tuple[int, ...],
+    representative_permutation: tuple,
+    member_group: Tuple[int, ...],
+    member_permutation: tuple,
+) -> Optional[Dict[int, int]]:
+    if len(representative_group) != len(member_group):
+        return None
+    inverse = {position: member_group[index] for index, position in enumerate(member_permutation)}
+    return {rank: inverse[representative_permutation[index]] for index, rank in enumerate(representative_group)}
 
 
 def _mapped_collective(
@@ -621,22 +719,16 @@ def _unit_payload(
     )
 
 
-def _safe_domain_signature(
-    topology: Topology,
-    group: Tuple[int, ...],
-    cache: Dict[tuple, Optional[str]],
-) -> Optional[str]:
-    key = (topology.isomorphism_signature, group)
-    if key in cache:
-        return cache[key]
-    try:
-        signature = exact_domain_signature(topology, group)
-    except SemanticError as error:
-        if str(error) != _CANONICALIZATION_LIMIT:
-            raise
-        signature = None
-    cache[key] = signature
-    return signature
+# Equivalence is decided by the explicit rank/contributor/position maps:
+# a member joins a template only when every input the route MILP reads
+# (domain links with channels and performance, the shared resources on
+# those links with capacity, performance and domain members, the demands
+# with their candidate paths and restrictions) is equal under the map.
+# That is a constructive isomorphism of the subproblem, so a separate
+# canonical signature of the whole domain context adds no soundness.  The
+# old pure-Python canonical search cost ~4 s per 8-rank domain and 69 s of
+# a 2x8 synthesis; SyCCL likewise reuses its expansion mapping (shift test)
+# instead of searching for isomorphisms.
 
 
 def _demand_paths_are_legal(demand: TransferDemand) -> bool:
@@ -699,29 +791,16 @@ def _template_member(
     representative_problem: SolverProblem,
     member: RoutingUnit,
     member_problem: SolverProblem,
-    signature_cache: Dict[tuple, Optional[str]],
+    rank_map: Optional[Dict[int, int]] = None,
 ) -> Optional[TemplateMember]:
-    rank_map = _rank_map(representative, member)
+    # A candidate rank map (from domain automorphisms) is only a proposal;
+    # every check below holds it to exact equality of the MILP inputs.
+    if rank_map is None:
+        rank_map = _rank_map(representative, member)
     position_map = _position_map(representative, member)
     if rank_map is None or position_map is None:
         return None
     if not _basic_roles_match(representative, member, rank_map):
-        return None
-    representative_signature = _safe_domain_signature(
-        representative_problem.topology,
-        representative.node.communication_group,
-        signature_cache,
-    )
-    member_signature = _safe_domain_signature(
-        member_problem.topology,
-        member.node.communication_group,
-        signature_cache,
-    )
-    if (
-        representative_signature is None
-        or member_signature is None
-        or representative_signature != member_signature
-    ):
         return None
     if _domain_link_payload(
         representative_problem.topology,
@@ -788,10 +867,61 @@ def _exact_signature(
     unit: RoutingUnit,
     problem: SolverProblem,
     planning_mode: PlanningMode,
-    signature_cache: Dict[tuple, Optional[str]],
 ) -> str:
+    return _signature_digest(_signature_payload(unit, problem, planning_mode))
+
+
+def _signature_digest(payload: tuple) -> str:
+    mode, domain_links, resources, unit = payload
+    return sha256_json({"planning_mode": mode, "domain_links": domain_links,
+                        "resources": resources, "unit": unit})
+
+
+def _bucket_key(payload: tuple) -> object:
+    """The payload itself when hashable (no JSON/SHA per unit), else its digest."""
+    try:
+        hash(payload)
+    except TypeError:
+        return _signature_digest(payload)
+    return payload
+
+
+def _canonical_signature(
+    unit: RoutingUnit,
+    problem: SolverProblem,
+    planning_mode: PlanningMode,
+    reuse: bool,
+) -> Tuple[tuple, tuple]:
+    """(payload, permutation): the smallest payload over the domain's
+    automorphisms, so units related by a symmetry of their domain share a
+    bucket; the permutation maps the unit onto that canonical labeling."""
     group = unit.node.communication_group
-    rank_map = {rank: index for index, rank in enumerate(group)}
+    permutations = _domain_automorphisms(problem.topology, group) if reuse else (tuple(range(len(group))),)
+    best = None
+    for permutation in permutations:
+        payload = _signature_payload(unit, problem, planning_mode, permutation)
+        if best is None:
+            best = (payload, permutation)
+            continue
+        try:
+            smaller = payload < best[0]
+        except TypeError:  # mixed element types: fall back to the text order
+            smaller = repr(payload) < repr(best[0])
+        if smaller:
+            best = (payload, permutation)
+    return best
+
+
+def _signature_payload(
+    unit: RoutingUnit,
+    problem: SolverProblem,
+    planning_mode: PlanningMode,
+    permutation: Optional[tuple] = None,
+) -> tuple:
+    group = unit.node.communication_group
+    if permutation is None:
+        permutation = tuple(range(len(group)))
+    rank_map = {rank: permutation[index] for index, rank in enumerate(group)}
     positions = _unit_positions(unit)
     position_map = {value: index for index, value in enumerate(positions)}
     contributors = sorted(_unit_contributors(unit))
@@ -821,43 +951,31 @@ def _exact_signature(
         contributor: index
         for index, (_, contributor) in enumerate(sorted(contributor_keys))
     }
-    domain_signature = _safe_domain_signature(
-        problem.topology,
-        group,
-        signature_cache,
+    # Everything the route MILP reads, under the group's index map: two units
+    # with this payload have identical models up to relabeling.
+    return (
+        planning_mode.value,
+        _domain_link_payload(problem.topology, group, rank_map),
+        _resource_payload(problem.topology, unit.node, rank_map),
+        _unit_payload(unit, problem, rank_map, contributor_map, position_map),
     )
-    payload = {
-        "planning_mode": planning_mode.value,
-        "domain_signature": domain_signature,
-        "domain_links": _domain_link_payload(
-            problem.topology,
-            group,
-            rank_map,
-        ),
-        "resources": _resource_payload(
-            problem.topology,
-            unit.node,
-            rank_map,
-        ),
-        "unit": _unit_payload(
-            unit,
-            problem,
-            rank_map,
-            contributor_map,
-            position_map,
-        ),
-    }
-    if domain_signature is None:
-        payload["unproved_unit_id"] = unit.unit_id
-        payload["unproved_topology"] = problem.topology.isomorphism_signature
-    return sha256_json(payload)
 
 
 def build_solver_templates(
     problems: Tuple[SolverProblem, ...],
     planning_mode: PlanningMode,
     *, reuse: bool = True,
+    library: Optional[Dict[str, list]] = None,
 ) -> Tuple[SolverTemplate, ...]:
+    """Group routing units whose route models are equal up to relabeling.
+
+    Units are bucketed by their exact signature (everything the route MILP
+    reads, under the group's index map) and joined to a class only after the
+    explicit-map check in ``_template_member`` succeeds.  ``library`` (a dict
+    the caller keeps across calls, e.g. across hierarchy plans) holds earlier
+    representatives: a unit matching one joins a template with that
+    representative and template ID, so a pattern solved for it is reused.
+    """
     if not isinstance(planning_mode, PlanningMode):
         raise SemanticError("planning_mode must be a PlanningMode")
     try:
@@ -871,45 +989,95 @@ def build_solver_templates(
         for problem in problems
         for unit in split_routing_units(problem)
     )
-    signature_cache: Dict[tuple, Optional[str]] = {}
     classes = []
+    by_signature: Dict[object, list] = {}
+    used_ids = set()
+    if library is not None:
+        used_ids.update(entry["template_id"] for entries in library.values() for entry in entries)
+    def candidate(entry, unit, permutation):
+        return _canonical_rank_map(entry["representative"].node.communication_group, entry["permutation"],
+                                   unit.node.communication_group, permutation)
+
     for unit, problem in units:
-        for template_class in classes if reuse else ():
-            member = _template_member(
-                template_class["representative"],
-                template_class["problem"],
-                unit,
-                problem,
-                signature_cache,
-            )
-            if member is not None:
-                template_class["members"].append(member)
-                break
-        else:
-            classes.append(
-                {
-                    "representative": unit,
-                    "problem": problem,
-                    "members": [_identity_member(unit)],
-                }
-            )
+        payload, permutation = _canonical_signature(unit, problem, planning_mode, reuse)
+        signature = _bucket_key(payload)
+        joined = False
+        if reuse:
+            for template_class in by_signature.get(signature, ()):
+                member = _template_member(
+                    template_class["representative"],
+                    template_class["problem"],
+                    unit,
+                    problem,
+                    candidate(template_class, unit, permutation),
+                )
+                if member is not None:
+                    template_class["members"].append(member)
+                    joined = True
+                    break
+            if not joined and library is not None:
+                for entry in library.get(signature, ()):
+                    member = _template_member(
+                        entry["representative"], entry["problem"], unit, problem,
+                        candidate(entry, unit, permutation),
+                    )
+                    if member is not None:
+                        template_class = {
+                            "representative": entry["representative"],
+                            "problem": entry["problem"],
+                            "permutation": entry["permutation"],
+                            "members": [member],
+                            "payload": payload,
+                            "digest": entry["digest"],
+                            "template_id": entry["template_id"],
+                        }
+                        classes.append(template_class)
+                        by_signature.setdefault(signature, []).append(template_class)
+                        joined = True
+                        break
+        if not joined:
+            template_class = {
+                "representative": unit,
+                "problem": problem,
+                "permutation": permutation,
+                "members": [_identity_member(unit)],
+                "payload": payload,
+                "key": signature,
+                "digest": None,
+                "template_id": None,
+            }
+            classes.append(template_class)
+            if reuse:
+                by_signature.setdefault(signature, []).append(template_class)
     templates = []
     for index, template_class in enumerate(classes):
-        exact_signature = _exact_signature(
-            template_class["representative"],
-            template_class["problem"],
-            planning_mode,
-            signature_cache,
-        )
+        if template_class["digest"] is None:
+            # Only new representatives pay for the canonical JSON digest.
+            template_class["digest"] = _signature_digest(template_class["payload"])
+        exact_signature = template_class["digest"]
+        template_id = template_class["template_id"]
+        if template_id is None:
+            ordinal = index
+            template_id = "template-{:08d}-{}".format(ordinal, exact_signature[:16])
+            while template_id in used_ids:
+                ordinal += len(classes)
+                template_id = "template-{:08d}-{}".format(ordinal, exact_signature[:16])
+            used_ids.add(template_id)
+            if library is not None:
+                library.setdefault(template_class["key"], []).append({
+                    "representative": template_class["representative"],
+                    "problem": template_class["problem"],
+                    "permutation": template_class["permutation"],
+                    "template_id": template_id,
+                    "digest": exact_signature,
+                })
         templates.append(
             SolverTemplate(
-                template_id="template-{:08d}-{}".format(
-                    index,
-                    exact_signature[:16],
-                ),
+                template_id=template_id,
                 representative=template_class["representative"],
                 members=tuple(template_class["members"]),
                 exact_signature=exact_signature,
+                library_representative=template_class["template_id"] is not None,
             )
         )
     if sum(len(template.members) for template in templates) != len(units):

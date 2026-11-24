@@ -6,6 +6,7 @@ import pytest
 
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.solver import global_scheduler
 from vericcl.solver.global_scheduler import (
     GlobalSchedulingError,
@@ -39,13 +40,13 @@ def _transfer(
         PathStage(
             stage_id,
             kind,
-            tuple(Symbol(src, dst, ready) for src, dst, ready in symbols),
+            tuple(symbolic_step(src, dst, ready) for src, dst, ready in symbols),
         )
         for stage_id, kind, symbols in path
     )
     current = stages[-1]
     symbol = current.symbols[-1]
-    atom = Atom(
+    atom = Atom.build(
         slice_id=slice_id,
         slice_size_bytes=1024,
         path=stages,

@@ -17,6 +17,7 @@ from vericcl.input.models import (
     StrategyConfig,
 )
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 from vericcl.topology.model import LinkKey, Topology
 from vericcl.verification.online.calibration import (
@@ -132,9 +133,9 @@ def _schedule(
         stage = PathStage(
             stage_id=0,
             operator="SEND",
-            symbols=(Symbol(0, 1, 0.0),),
+            symbols=(symbolic_step(0, 1, 0.0),),
         )
-        atom = Atom(
+        atom = Atom.build(
             slice_id=logical,
             slice_size_bytes=request.slice_size_bytes,
             path=(stage,),

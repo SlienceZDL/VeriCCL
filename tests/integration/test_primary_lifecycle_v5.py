@@ -26,8 +26,8 @@ def test_primary_initial_synthesis_persists_checked_best_and_zero_round_stop(tmp
     inputs, context = request(tmp_path)
     result = run_primary(inputs, context)
     assert result.contract_met and result.stop_reason == 'maximum_rounds'
-    assert (context.artifact('best/accepted.json')).is_file()
-    assert (context.artifact('checkpoints/latest.json')).is_file()
+    assert (context.root / 'best/accepted.json').is_file()
+    assert (context.root / 'checkpoints/latest.json').is_file()
     assert result.model_coverage != 'unknown'
 
 
@@ -47,10 +47,10 @@ def test_same_xml_is_reassessed_after_first_calibration_before_baseline(tmp_path
     monkeypatch.setattr(workflow_v5, 'run_calibration', calibrate)
     result = workflow_v5.run_primary(inputs, context)
     import json
-    accepted = json.loads((context.artifact('best/accepted.json')).read_text())
+    accepted = json.loads((context.root / 'best/accepted.json').read_text())
     assert result.contract_met and accepted['model_version'] == versions[1] != versions[0]
     from vericcl.execution.events import read_events
-    reevaluated = [item for item in read_events(context.artifact('events.jsonl')).events if item['kind'] == 'candidate_reassessed']
+    reevaluated = [item for item in read_events(context.root / 'events.jsonl').events if item['kind'] == 'candidate_reassessed']
     assert reevaluated and all(item['data']['xml_unchanged'] for item in reevaluated)
 
 
@@ -91,7 +91,7 @@ def test_finite_exhaustion_expands_and_stops_only_at_round_limit(tmp_path, monke
     monkeypatch.setattr(workflow_v5, 'analyze', lambda *args: AnalysisBatch('candidates_exhausted', (), (), {}, {}))
     result = workflow_v5.run_primary(inputs, context)
     assert result.contract_met and result.stop_reason == 'maximum_rounds'
-    assert any(event['kind'] == 'search_expanded' for event in read_events(context.artifact('events.jsonl')).events)
+    assert any(event['kind'] == 'search_expanded' for event in read_events(context.root / 'events.jsonl').events)
 
 
 def test_failed_local_strategy_does_not_cancel_other_actions(tmp_path, monkeypatch):
@@ -133,7 +133,7 @@ def test_time_limit_keeps_already_qualified_incumbent(tmp_path, monkeypatch):
     monkeypatch.setattr(workflow_v5.PrimaryWorkflow, 'tuning', expired)
     result = workflow_v5.run_primary(inputs, context)
     assert result.contract_met and result.stop_reason == 'time_limit'
-    assert (context.artifact('best/accepted.json')).is_file()
+    assert (context.root / 'best/accepted.json').is_file()
 
 
 def test_analysis_backend_failure_does_not_report_successful_round_end(tmp_path, monkeypatch):
@@ -161,6 +161,7 @@ def test_no_initial_candidate_preserves_the_failure_reason(tmp_path, monkeypatch
 
 
 def test_real_owned_scip_repair_adopts_lower_complete_time(tmp_path, monkeypatch):
+    monkeypatch.setenv('VERICCL_ISOLATE_MODEL_VARS', '0')  # exercise the owned-subprocess path
     from tests.scip.test_joint_repair_v5 import repair_fixture
     from vericcl import workflow_v5
     from vericcl.verification.bottlenecks import AnalysisBatch, StrategyRecord
@@ -176,6 +177,31 @@ def test_real_owned_scip_repair_adopts_lower_complete_time(tmp_path, monkeypatch
     strategy = StrategyRecord('allocation', ids, paths=tuple((key, (0, 2, 1)) for key in ids))
     monkeypatch.setattr(workflow_v5, 'analyze', lambda *args: AnalysisBatch('opportunities', (), (strategy,), {}, {}))
     result = workflow_v5.run_primary(workflow_v5.PrimaryRequest(inputs, cost_model=repair.lowering.model), context)
-    accepted = json.loads((context.artifact('best/accepted.json')).read_text())
+    accepted = json.loads((context.root / 'best/accepted.json').read_text())
     assert result.contract_met and accepted['t_pred_us'] < bundle.prediction.t_pred_us
-    assert list((context.artifact('jobs')).glob('scip-*/identity.json'))
+    assert list((context.root / 'jobs').glob('scip-*/identity.json'))
+
+
+def test_expansion_candidates_found_before_the_budget_ends_are_compared(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from vericcl import workflow_v5
+    from vericcl.execution.budget import BudgetExhausted
+    from vericcl.verification.bottlenecks import AnalysisBatch
+    inputs, context = request(tmp_path, rounds=1)
+    monkeypatch.setattr(workflow_v5, 'analyze', lambda *args: AnalysisBatch('candidates_exhausted', (), (), {}, {}))
+    compared, kinds = [], []
+    def stream(best, branch, repair):
+        kinds.append(branch.kind)
+        yield SimpleNamespace(candidate=best, context=SimpleNamespace(inputs=repair.lowering.inputs))
+        raise BudgetExhausted('repair allowance ended during resynthesis')
+    monkeypatch.setattr(workflow_v5, 'resynthesize_branch', stream)
+    original = workflow_v5.PrimaryWorkflow.compare
+    def compare(self, bundle, inputs, record, **options):
+        compared.append(bundle.xml_sha256)
+        return original(self, bundle, inputs, record, **options)
+    monkeypatch.setattr(workflow_v5.PrimaryWorkflow, 'compare', compare)
+    result = workflow_v5.run_primary(inputs, context)
+    # Refinements (no synthesis) all run in the round; the first synthesizing
+    # branch ends it. Each branch's candidate is compared despite the budget.
+    assert kinds and kinds[-1] == 'structure' and set(kinds[:-1]) <= {'refinement'}
+    assert result.contract_met and len(compared) == len(kinds)

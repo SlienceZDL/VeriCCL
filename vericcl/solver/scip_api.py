@@ -12,6 +12,19 @@ from vericcl.errors import SemanticError, SolverUnavailableError
 from vericcl.execution.budget import StandaloneLease
 
 
+DEFAULT_ISOLATION_VARIABLES = 20000
+
+
+def isolation_threshold():
+    """Variable count above which a model is solved in an owned subprocess."""
+    import os
+    value = os.environ.get('VERICCL_ISOLATE_MODEL_VARS')
+    try:
+        return DEFAULT_ISOLATION_VARIABLES if value is None else max(0, int(value))
+    except ValueError:
+        return DEFAULT_ISOLATION_VARIABLES
+
+
 @dataclass(frozen=True)
 class ScipSolveResult:
     status: str
@@ -149,6 +162,23 @@ class ScipAdapter:
         return dict(model.configuration)
 
     @staticmethod
+    def screening(model):
+        """Settings for screening models that only rank alternatives.
+
+        Fast presolve and no cutting planes: on a 16-rank 2x8 route model the
+        default spent 2.2 s in presolve (probing) and ~1.6 s separating, and
+        reached the same optimum in 0.27 s without them. The gap limit is
+        unchanged, so the result is still certified within it.
+        """
+        from pyscipopt import SCIP_PARAMSETTING
+        try:
+            model.engine.setPresolve(SCIP_PARAMSETTING.FAST)
+            model.engine.setSeparating(SCIP_PARAMSETTING.OFF)
+        except Exception as error:
+            raise SolverUnavailableError('SCIP screening settings are unsupported: ' + str(error)) from error
+        model.configuration = dict(getattr(model, 'configuration', {}), screening=True)
+
+    @staticmethod
     def indicator(model, binary, active, constraint, *, name=''):
         # SCIP indicators accept one-sided inequalities. Equality is a pair of
         # native indicator constraints, never an arbitrary big-M relaxation.
@@ -200,7 +230,10 @@ class ScipAdapter:
         cls.require()
         from vericcl.solver.worker_scope import current_solver_scope, solve_owned
         scope = current_solver_scope()
-        if scope is not None:
+        # Small models are solved in-process: a fresh worker process plus file
+        # round-trip costs ~0.2 s, far more than solving them. Only models above
+        # the size threshold get process isolation for hard-deadline control.
+        if scope is not None and model.engine.getNVars() > isolation_threshold():
             return solve_owned(model, lease, scope)
         model.result = None
         started = time.monotonic()

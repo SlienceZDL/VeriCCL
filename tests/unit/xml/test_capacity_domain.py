@@ -88,8 +88,10 @@ def test_initial_domain_uses_default_channels_and_one_legal_slice_per_channel(tm
     from vericcl.planner.parameters import initial_parameter_domain
     inputs = config(tmp_path)
     domain = initial_parameter_domain(inputs)
-    assert [candidate.channels for candidate in domain.candidates] == list(range(1, 8))
-    assert domain.candidates[0].slice_bytes == 16
+    assert [candidate.channels for candidate in domain.candidates] == list(range(1, 9))
+    # Coarsest partition giving every channel at least one chunk per rank.
+    assert domain.candidates[0].slice_bytes == 4096
+    assert [c.slice_count for c in domain.candidates] == [1, 2, 4, 4, 8, 8, 8, 8]
     assert all(4096 % candidate.slice_bytes == 0 for candidate in domain.candidates)
     assert all(candidate.requires_structure_check for candidate in domain.candidates)
     assert not domain.complete_runtime_validation
@@ -98,7 +100,7 @@ def test_initial_domain_uses_default_channels_and_one_legal_slice_per_channel(tm
 def test_explicit_channel_extension_and_non_power_of_two_slices(tmp_path):
     from vericcl.planner.parameters import initial_parameter_domain
     domain = initial_parameter_domain(config(tmp_path, size=1200, steps=16, channels=8))
-    assert domain.candidates[0].slice_bytes == 80
+    assert domain.candidates[0].slice_bytes == 1200
     assert domain.candidates[-1].channels == 8
 
 
@@ -107,7 +109,7 @@ def test_explicit_slice_is_retained_or_adjusted_only_for_capacity(tmp_path):
     retained = initial_parameter_domain(config(tmp_path, slice_size=1024))
     assert all(candidate.slice_bytes == 1024 for candidate in retained.candidates)
     adjusted = initial_parameter_domain(config(tmp_path, slice_size=4))
-    assert adjusted.candidates[0].slice_bytes == 16
+    assert adjusted.candidates[0].slice_bytes == 4096
     assert adjusted.candidates[0].adjustment_reason == 'initial_slice_capacity'
     fixed = initial_parameter_domain(config(tmp_path, slice_size=4), fixed_slice_bytes=4)
     assert any(item.channels == 1 and item.proven for item in fixed.exclusions)
@@ -145,10 +147,10 @@ def test_bound_attempt_records_effective_partition_without_mutating_request(tmp_
     original = config(tmp_path)
     candidate = initial_parameter_domain(original).candidates[0]
     bound = resolve_parameters(original, candidate)
-    assert bound.hyperparameters.slice_size_bytes == 16
-    assert bound.request_config['sketch']['hyperparameters']['slice_size_bytes'] == 16
+    assert bound.hyperparameters.slice_size_bytes == 4096
+    assert bound.request_config['sketch']['hyperparameters']['slice_size_bytes'] == 4096
     assert bound.request_config['sketch']['solver']['max_channels'] == 1
-    assert bound.size_accounting['slices_per_rank'] == 256
+    assert bound.size_accounting['slices_per_rank'] == 1
     assert bound.value_sources['sketch.hyperparameters.slice_size_bytes']['kind'] == 'parameter_selection'
     assert original.request_config['sketch']['hyperparameters']['slice_size_bytes'] is None
     assert bound.input_sha256 == original.input_sha256
@@ -224,7 +226,7 @@ def test_initial_slice_domain_includes_fixed_xml_parser_space(tmp_path):
     inputs = config(tmp_path, operator='allgather', ranks=16, size=4194304,
                     slice_size=16384, channels=2)
     domain = initial_parameter_domain(inputs)
-    assert [candidate.slice_bytes for candidate in domain.candidates] == [32768, 32768]
+    assert [candidate.slice_bytes for candidate in domain.candidates] == [4194304, 2097152]
     assert all(dict(candidate.bounds)['xml_nodes_rank_0'] == 254 for candidate in domain.candidates)
     fixed = initial_parameter_domain(inputs, fixed_slice_bytes=16384)
     assert not fixed.candidates
@@ -236,4 +238,4 @@ def test_one_rank_outofplace_copy_uses_xml_parser_space(tmp_path):
     inputs = config(tmp_path, operator='allreduce', ranks=1, size=65536, slice_size=4, channels=1)
     domain = initial_parameter_domain(inputs)
     assert dict(domain.candidates[0].bounds)['xml_nodes_rank_0'] == 4092
-    assert domain.candidates[0].slice_bytes == 32
+    assert domain.candidates[0].slice_bytes == 65536

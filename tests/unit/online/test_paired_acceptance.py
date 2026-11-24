@@ -162,3 +162,26 @@ def test_sampling_configuration_rejects_unbounded_retry_and_relaxed_alpha(tmp_pa
     with pytest.raises(SemanticError):
         book.reserve('a', 'b', seed=1, pair_count=21)
     assert not book.attempts()
+
+
+def test_batch_driver_measures_each_round_in_planned_order(tmp_path):
+    sequential, batches = [], []
+    def driver(candidate, request):
+        sequential.append((candidate, request.launch_id))
+        return sample(100 if candidate == 'old' else 90, request)
+    def batch(items):
+        batches.append([(candidate, request.launch_id) for candidate, request in items])
+        return [sample(100 if candidate == 'old' else 90, request) for candidate, request in items]
+    first = compare_measured('old', 'new', ledger(tmp_path / 'a'), AcceptanceContext(True, driver, seed=7, allow_test_samples=True))
+    second = compare_measured('old', 'new', ledger(tmp_path / 'b'),
+                              AcceptanceContext(True, driver=None, batch_driver=batch, seed=7, allow_test_samples=True))
+    assert len(batches) == 1 and batches[0] == sequential
+    assert (first.accepted, first.wins, first.p_value) == (second.accepted, second.wins, second.p_value)
+
+
+def test_batch_driver_sample_count_mismatch_fails_the_attempt(tmp_path):
+    def batch(items):
+        return [sample(100, request) for _, request in items[:-1]]
+    result = compare_measured('old', 'new', ledger(tmp_path),
+                              AcceptanceContext(True, batch_driver=batch, seed=3, allow_test_samples=True))
+    assert result.status == 'measurement_failed' and not result.accepted

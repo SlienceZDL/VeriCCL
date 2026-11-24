@@ -1,0 +1,9 @@
+{
+ "strategies": {
+  "batching": false,
+  "objective_mode": "auto",
+  "shortest_paths": false,
+  "symmetry": false
+ },
+ "synthesis_method": "constructive_trees"
+}

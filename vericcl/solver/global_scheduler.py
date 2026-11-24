@@ -7,6 +7,7 @@ from typing import Mapping, Tuple
 from vericcl.composer.timing import _retime, _semantic_predecessors
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.solver.scheduling import fixed_topology_transfer_duration_us
 from vericcl.topology.model import LaneKey, LinkKey, Topology
 
@@ -168,7 +169,7 @@ def _zero_ready_path(atom: Atom) -> Tuple[PathStage, ...]:
             stage.stage_id,
             stage.operator,
             tuple(
-                Symbol(symbol.src_rank, symbol.dst_rank, 0.0)
+                symbolic_step(symbol.src_rank, symbol.dst_rank, 0.0)
                 for symbol in stage.symbols
             ),
         )
@@ -181,7 +182,7 @@ def _assigned_transfer(
     assignment: _Assignment,
 ) -> Transfer:
     atoms = tuple(
-        Atom(
+        Atom.build(
             slice_id=atom.slice_id,
             slice_size_bytes=atom.slice_size_bytes,
             path=_zero_ready_path(atom),

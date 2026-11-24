@@ -22,7 +22,6 @@ from vericcl.verification.online.pipeline import (
     OnlineContext,
     OnlineStageStatus,
     TraceCollectionResult,
-    attach_online_result_to_tuning_context,
     run_online_validation,
 )
 from vericcl.verification.online.runner import (
@@ -37,7 +36,6 @@ from vericcl.verification.online.trace_format import (
     encode_raw_trace,
 )
 from vericcl.xml.lower import lower_to_xml
-from vericcl.tuning.engine import TuningContext
 
 from tests.unit.xml.helpers import resolved, two_rank_allreduce_schedule
 
@@ -883,61 +881,6 @@ def test_complete_trace_waits_are_forwarded_as_tuning_evidence(tmp_path):
     assert result.tuning_evidence.wait_us_by_transfer
     assert result.tuning_evidence.bottleneck_priorities
 
-
-def test_valid_online_result_is_attached_to_candidate_tuning_context(tmp_path):
-    online_context = _context(tmp_path)
-    result = run_online_validation(online_context)
-    tuning_context = TuningContext(
-        inputs=online_context.inputs,
-        topology=load_topology(online_context.inputs),
-        initial_schedule=online_context.schedule,
-    )
-
-    updated = attach_online_result_to_tuning_context(
-        tuning_context,
-        "candidate-initial",
-        result,
-    )
-
-    assert updated.online_validation is True
-    assert updated.online_performance[
-        "candidate-initial"
-    ].median_time_us == pytest.approx(10.0)
-    assert (
-        updated.online_trace_evidence["candidate-initial"]
-        is result.tuning_evidence
-    )
-
-    invalid = run_online_validation(
-        _context(
-            tmp_path / "invalid",
-            trace_collector=_collector(complete=False),
-        )
-    )
-    with pytest.raises(SemanticError, match="not eligible"):
-        attach_online_result_to_tuning_context(
-            tuning_context,
-            "candidate-invalid",
-            invalid,
-        )
-    with pytest.raises(SemanticError, match="TuningContext"):
-        attach_online_result_to_tuning_context(
-            object(),
-            "candidate-invalid",
-            result,
-        )
-    with pytest.raises(SemanticError, match="candidate_id"):
-        attach_online_result_to_tuning_context(
-            tuning_context,
-            "",
-            result,
-        )
-    with pytest.raises(SemanticError, match="OnlineValidationResult"):
-        attach_online_result_to_tuning_context(
-            tuning_context,
-            "candidate-invalid",
-            object(),
-        )
 
 
 def test_calibration_plan_rejects_incomplete_or_inconsistent_contract():

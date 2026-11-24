@@ -4,6 +4,7 @@ from typing import Dict, FrozenSet, List, Mapping, Tuple
 from vericcl.errors import ConstructionInfeasibleError, SemanticError
 from vericcl.input.models import ObjectiveMode, ResolvedInput
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.solver.demands import (
     SolverProblem,
     TransferDemand,
@@ -310,7 +311,7 @@ def _transfer(
 ) -> Transfer:
     path = _tree_path_drafts(draft, drafts_by_edge, parents)
     symbols = tuple(
-        Symbol(
+        symbolic_step(
             src_rank=item.src_rank,
             dst_rank=item.dst_rank,
             ready_time=item.semantic_ready_time,
@@ -318,7 +319,7 @@ def _transfer(
         for item in path
     )
     atoms = tuple(
-        Atom(
+        Atom.build(
             slice_id=slice_id,
             slice_size_bytes=slice_size_bytes,
             path=(

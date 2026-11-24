@@ -19,7 +19,20 @@ venv/
 /examples/*
 !/examples/quickstart/
 !/examples/nccl-tests-build/
+!/examples/v100-experiments/
 /examples/**/output/
 /examples/**/tmp/
 /examples/**/rebuildable-cache/
 /.deps/
+/native/build/
+/vericcl/native/*.so
+/vericcl/native/*.so.tmp
+
+# Public two-server input example
+!examples/two-server-2x8/
+!examples/two-server-2x8/input/
+!examples/two-server-2x8/input/*.py
+!examples/two-server-2x8/input/*.sh
+!examples/two-server-2x8/input/ag-2x8/
+!examples/two-server-2x8/input/ag-2x8/*.json
+examples/two-server-2x8/baseline/

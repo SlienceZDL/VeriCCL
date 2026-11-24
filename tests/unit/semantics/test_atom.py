@@ -5,6 +5,7 @@ import pytest
 from vericcl.errors import SemanticError
 from vericcl.input.models import ForbiddenTransfer
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 
 
 pytestmark = pytest.mark.phase01
@@ -14,13 +15,13 @@ def make_atom(
     *,
     slice_id=0,
     size_bytes=1024,
-    symbols=(Symbol(0, 1, 0.0),),
+    symbols=(symbolic_step(0, 1, 0.0),),
     operator="SEND",
     stage_id=0,
     st_time=0.0,
     ed_time=2.0,
 ):
-    return Atom(
+    return Atom.build(
         slice_id=slice_id,
         slice_size_bytes=size_bytes,
         path=(PathStage(stage_id, operator, symbols),),
@@ -47,7 +48,7 @@ def make_transfer(
         atoms = tuple(
             make_atom(
                 slice_id=slice_id,
-                symbols=(Symbol(src_rank, dst_rank, st_time),),
+                symbols=(symbolic_step(src_rank, dst_rank, st_time),),
                 operator=kind,
                 stage_id=stage_id,
                 st_time=st_time,
@@ -72,7 +73,7 @@ def make_transfer(
 
 def test_atom_path_ends_at_current_rank():
     atom = make_atom(
-        symbols=(Symbol(0, 1, 0.0), Symbol(1, 2, 4.0)),
+        symbols=(symbolic_step(0, 1, 0.0), symbolic_step(1, 2, 4.0)),
         st_time=4.0,
         ed_time=6.0,
     )
@@ -83,7 +84,7 @@ def test_atom_path_ends_at_current_rank():
 def test_atom_path_must_start_at_slice_source():
     atom = make_atom(
         slice_id=4,
-        symbols=(Symbol(0, 1, 0.0),),
+        symbols=(symbolic_step(0, 1, 0.0),),
     )
 
     with pytest.raises(SemanticError, match="source rank"):
@@ -92,12 +93,12 @@ def test_atom_path_must_start_at_slice_source():
 
 def test_atom_path_must_be_a_contiguous_chain():
     with pytest.raises(SemanticError, match="contiguous"):
-        make_atom(symbols=(Symbol(0, 1, 0.0), Symbol(2, 3, 1.0)))
+        make_atom(symbols=(symbolic_step(0, 1, 0.0), symbolic_step(2, 3, 1.0)))
 
 
 def test_atom_start_must_follow_current_ready_time():
     with pytest.raises(SemanticError, match="ready_time"):
-        make_atom(symbols=(Symbol(0, 1, 3.0),), st_time=2.0, ed_time=4.0)
+        make_atom(symbols=(symbolic_step(0, 1, 3.0),), st_time=2.0, ed_time=4.0)
 
 
 def test_shared_transfer_counts_physical_bytes_once():
@@ -114,7 +115,7 @@ def test_transfer_requires_one_atom_per_member_slice():
 
 
 def test_transfer_atom_must_end_with_physical_operation():
-    atom = make_atom(symbols=(Symbol(0, 2, 0.0),))
+    atom = make_atom(symbols=(symbolic_step(0, 2, 0.0),))
 
     with pytest.raises(SemanticError, match="physical operation"):
         make_transfer(atoms=(atom,), src_rank=0, dst_rank=1)
@@ -195,15 +196,15 @@ def test_schedule_rejects_slice_id_outside_global_range():
 )
 def test_symbol_rejects_invalid_fields(args, match):
     with pytest.raises(SemanticError, match=match):
-        Symbol(*args)
+        symbolic_step(*args)
 
 
 def test_path_stage_validates_operator_symbols_and_count():
-    stage = PathStage(0, "SEND", (Symbol(0, 1, 0.0),))
+    stage = PathStage(0, "SEND", (symbolic_step(0, 1, 0.0),))
 
     assert stage.operation_count == 1
     with pytest.raises(SemanticError, match="operator"):
-        PathStage(0, "COPY", (Symbol(0, 1, 0.0),))
+        PathStage(0, "COPY", (symbolic_step(0, 1, 0.0),))
     with pytest.raises(SemanticError, match="must not be empty"):
         PathStage(0, "SEND", ())
     with pytest.raises(SemanticError, match="Symbol"):
@@ -212,22 +213,22 @@ def test_path_stage_validates_operator_symbols_and_count():
 
 def test_atom_rejects_invalid_path_and_time_fields():
     with pytest.raises(SemanticError, match="must not be empty"):
-        Atom(0, 1, (), 0.0, 1.0)
+        Atom.build(0, 1, (), 0.0, 1.0)
     with pytest.raises(SemanticError, match="PathStage"):
-        Atom(0, 1, (object(),), 0.0, 1.0)
+        Atom.build(0, 1, (object(),), 0.0, 1.0)
     with pytest.raises(SemanticError, match="must not exceed"):
         make_atom(st_time=2.0, ed_time=1.0)
 
 
 def test_atom_rejects_non_increasing_stages_and_ready_times():
-    first = PathStage(0, "SEND", (Symbol(0, 1, 2.0),))
-    repeated = PathStage(0, "SEND", (Symbol(1, 2, 3.0),))
-    earlier = PathStage(1, "SEND", (Symbol(1, 2, 1.0),))
+    first = PathStage(0, "SEND", (symbolic_step(0, 1, 2.0),))
+    repeated = PathStage(0, "SEND", (symbolic_step(1, 2, 3.0),))
+    earlier = PathStage(1, "SEND", (symbolic_step(1, 2, 1.0),))
 
     with pytest.raises(SemanticError, match="stage IDs"):
-        Atom(0, 1, (first, repeated), 3.0, 4.0)
+        Atom.build(0, 1, (first, repeated), 3.0, 4.0)
     with pytest.raises(SemanticError, match="non-decreasing"):
-        Atom(0, 1, (first, earlier), 3.0, 4.0)
+        Atom.build(0, 1, (first, earlier), 3.0, 4.0)
 
 
 def test_atom_path_prefix_rejects_invalid_geometry_and_destination():
@@ -265,7 +266,8 @@ def test_transfer_rejects_mismatched_atom_sizes_and_times():
             member_slice_ids=frozenset({0, 4}),
             atoms=(first, second),
         )
-    with pytest.raises(SemanticError, match="time intervals"):
+    # Atoms carry their own t = (st, ed); they may not start before the transfer.
+    with pytest.raises(SemanticError, match="cannot start before its physical transfer"):
         make_transfer(atoms=(first,), st_time=1.0, ed_time=2.0)
 
 
@@ -349,14 +351,14 @@ def test_stage_suffix_accepts_one_declared_root_per_member_atom():
     atoms = (
         make_atom(
             slice_id=1,
-            symbols=(Symbol(1, 0, 2.0),),
+            symbols=(symbolic_step(1, 0, 2.0),),
             operator="REDUCE",
             st_time=2.0,
             ed_time=4.0,
         ),
         make_atom(
             slice_id=2,
-            symbols=(Symbol(2, 1, 0.0), Symbol(1, 0, 2.0)),
+            symbols=(symbolic_step(2, 1, 0.0), symbolic_step(1, 0, 2.0)),
             operator="REDUCE",
             st_time=2.0,
             ed_time=4.0,
@@ -386,3 +388,38 @@ def test_stage_suffix_accepts_one_declared_root_per_member_atom():
     )
 
     assert schedule.metadata["path_roots"]["transfer-0"][2] == 2
+
+
+def test_atom_is_slice_path_time_vectors_built_by_symbolic_execution():
+    from vericcl.semantics.atom import PathDAG, SliceVec, TimeVec
+    from vericcl.symbolic.terms import SymValue
+    first, second = symbolic_step(0, 1, 1.0), symbolic_step(1, 2, 3.0)
+    atom = Atom.build(slice_id=0, slice_size_bytes=64,
+                      path=(PathStage(0, "SEND", (first,)), PathStage(1, "SEND", (second,))),
+                      st_time=3.0, ed_time=5.0)
+    assert isinstance(atom.s, SliceVec) and (atom.s.slice_id, atom.s.slice_size, atom.s.stage) == (0, 64, 1)
+    assert isinstance(atom.pd, PathDAG) and atom.pd.roots == {0} and atom.pd.current_rank == 2
+    assert [(s.src_rank, s.dst_rank, s.stage_id) for s in atom.pd.symbols] == [(0, 1, 0), (1, 2, 1)]
+    assert isinstance(atom.t, TimeVec) and isinstance(atom.t.st_time, SymValue)
+    # ready(hop 2) is symbolically max(ready(hop 1), decided arrival of hop 2)
+    hop2 = atom.pd.symbols[1].ready_term
+    assert hop2.op == "max" and hop2.label == "previous,decided"
+    assert atom.pd.symbols[0].ready_term in hop2.args
+    # legacy views are derived from s, pd and t
+    assert atom.slice_id == 0 and atom.stage_num == 2 and float(atom.st_time) == 3.0
+    assert atom.current_symbol.dst_rank == 2
+
+
+def test_symbols_cannot_be_constructed_outside_symbolic_execution():
+    with pytest.raises(SemanticError, match="symbolic execution"):
+        Symbol(0, 1, 0.0)
+
+
+def test_rebuild_and_with_times_reexecute_the_path():
+    atom = make_atom()
+    moved = atom.with_times(1.0, 3.0)
+    assert (float(moved.st_time), float(moved.ed_time)) == (1.0, 3.0)
+    assert moved.pd.symbols == atom.pd.symbols
+    assert atom.rebuild(slice_id=4).slice_id == 4
+    with pytest.raises(SemanticError):
+        atom.rebuild(stage=3)

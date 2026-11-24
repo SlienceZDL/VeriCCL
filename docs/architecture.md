@@ -23,20 +23,20 @@ Online measurements, omitted from the diagram, are controlled by input switches.
 
 | Stage | Main code | Inputs and outputs |
 |---|---|---|
-| Public commands | `vericcl/cli/main.py`, `cli/lifecycle.py` | Four files, paths, and explicit overrides → run context and exit code |
-| Inputs and migration | `vericcl/input/schema.py`, `migration.py` | Original JSON → effective configuration, sources of defaults, and strict external contract |
-| Topology and original data | `vericcl/topology/`, `semantics/ranges.py`, `semantics/versions.py` | Ranks, links, resources, and original byte ranges → valid transfers and state versions |
-| Parameter domain | `vericcl/planner/parameters.py`, `xml/capacity.py` | M, data type, collective, and runtime limits → S/C candidates and required lower bounds |
-| Hierarchical solving | `vericcl/planner/group_search.py`, `solver/milp.py` | Groups, logical stages, and semantic contracts → coarse/fine candidates and subproblem reuse |
-| Batch routing | `vericcl/solver/trees/packing.py`, `batch.py`, `timing.py` | Demands and capacity → integer slice routes, followed by timing for the fixed routes |
-| Runtime lowering | `vericcl/xml/v5_buffers.py`, `v5_program.py`, `v5_lower.py` | Network operations → states/buffers, TBs/XML, independent checks, and a complete event graph |
-| Performance model | `vericcl/performance/initial.py`, `model.py`, `simulation.py` | Initial/updated α, β, and shared rates → T_pred, critical events, and missing coverage |
-| Calibration | `vericcl/verification/online/probe_jobs.py`, `remote.py`, `campaign.py`, `component_fitting.py` | Independent primitive jobs → raw samples, qualified components, and model differences |
-| Bottlenecks and proofs | `vericcl/verification/bottlenecks.py`, `flow_index.py`, `proof_check.py`, `global_bound.py` | Current complete event graph → causal scope, strategy batches, unresolved obligations, or reviewable proofs |
-| Local repair | `vericcl/tuning/strategies.py`, `event_columns.py`, `resynthesis.py` | Explicit domain and suggestions → joint local solution or fully resynthesized candidate |
-| Run records | `vericcl/execution/context.py`, `layout.py`, `publication.py` | Unified run.json, top-level results, process history, and archive |
-| Main loop | `vericcl/workflow_v5.py`, `workflow_state.py` | All stage results → incumbent, checkpoints, budgets, and stop reason |
-| Runtime | `runtime/execution/`, `runtime/probes/`, `runtime/msccl-trace/` | Checked manifest/XML → actual GPU execution, counters, traces, and release receipts |
+| CLI | `vericcl/cli/main.py`, `cli/lifecycle.py`, `cli/live.py` | Four inputs, paths, and explicit overrides -> run context and exit status |
+| Input and migration | `vericcl/input/schema.py`, `migration.py` | Original JSON -> effective request, value origins, and external contract |
+| Topology and data | `vericcl/topology/`, `semantics/ranges.py`, `semantics/versions.py` | Ranks, links, resources, and original byte ranges -> valid transfers and state versions |
+| Parameter domain | `vericcl/planner/parameters.py`, `xml/capacity.py` | M, datatype, collective, and runtime limits -> S/C candidates and lower bounds |
+| Hierarchy | `vericcl/planner/group_search.py`, `solver/milp.py` | Groups, logical stages, and semantics -> coarse/fine candidates and subproblem reuse |
+| Batch routing | `vericcl/solver/trees/packing.py`, `batch.py`, `timing.py` | Demand and capacity -> integer-slice routes, then timing for fixed routes |
+| Runtime lowering | `vericcl/xml/v5_buffers.py`, `v5_program.py`, `v5_lower.py` | Network operations -> buffers, TBs, XML, independent checks, and full event graph |
+| Performance model | `vericcl/performance/initial.py`, `model.py`, `simulation.py` | Initial or updated alpha, beta, and shared rates -> T_pred, critical events, and coverage gaps |
+| Calibration | `vericcl/verification/online/probe_jobs.py`, `remote.py`, `campaign.py`, `component_fitting.py` | Independent probes -> raw samples, qualified components, and model differences |
+| Bottlenecks and proofs | `vericcl/verification/bottlenecks.py`, `flow_index.py`, `proof_check.py`, `global_bound.py` | Full event graph -> causal region, strategy batches, outstanding obligations, or checkable certificates |
+| Local repair | `vericcl/tuning/strategies.py`, `event_columns.py`, `resynthesis.py` | Explicit region and suggestions -> joint local solution or full resynthesis candidate |
+| Main loop | `vericcl/workflow_v5.py`, `workflow_state.py` | Stage results -> incumbent, checkpoints, budgets, and stop reason |
+| Runtime | `runtime/live/`, `runtime/probes/`, `runtime/msccl-trace/` | Checked manifest/XML -> GPU execution, counters, traces, and release receipts |
+| Resident tuning | `vericcl/live/controller.py`, `adaptive.py`, `tuning.py`, `external.py` | Request telemetry and explicit faults -> background task, prepared version, and coordinated switch |
 
 ## Data and storage correctness
 
@@ -52,6 +52,8 @@ The initial model uses the explicit topology and initial local copy/reduce costs
 
 Event simulation updates the active mode and remaining bytes when a transfer starts or ends. Fixed startup cost is charged once; concurrency changes affect only the rate for the remaining transfer. Qualified measured modes use their rate vectors, while unmeasured modes retain explicitly marked bandwidth-sharing estimates. Version and coverage records include model parameters, applicable sizes, sources, measurement times, and exact identities.
 
+Probes execute consecutive steps on the same TB (`calibration.chain_steps`) and fit average time per step. This captures overlap between consecutive operations. Cross-host probes use wall time per iteration to include network work staged through host memory when GPUDirect RDMA is unavailable.
+
 The complete T_pred is the latest completion time across all required work. Floating-point avg divides the output after native summation. The event graph adds a final operation on each valid output rank, after that rank's XML work finishes. Its current cost uses the copy model for the same payload as a memory-access estimate. This final operation remains marked as estimated even when copy has been measured. If no component covers that size, the missing cost is reported rather than set to zero.
 
 Candidates are compared with the incumbent reevaluated under the same current model. Given a known feasible T_pred, later solver branches can be pruned when a valid lower bound reaches it. A large observed duration alone does not justify pruning without a valid lower bound. SCIP's numerical optimality applies to the constructed model; routes, orderings, or structural branches not yet generated remain outside that proof.
@@ -60,7 +62,21 @@ Candidates are compared with the incumbent reevaluated under the same current mo
 
 The repair domain follows the identified causes and may include related flows from multiple chunks, competing transfers, and dependencies. Data assignments, paths, communication resources, and relative order outside the domain remain fixed; timing is propagated again under the constraints. Suggestions are first converted into valid constraints. Local SCIP then jointly selects integer assignments, paths/channels, and valid orderings. The implementation expands event candidate columns progressively and checks a full physical replay after each optimization batch.
 
-An S branch affects the entire partition, so legality and expected gains are checked before initial synthesis is rerun using the current round's repair budget. Hierarchical structure changes also require full synthesis. Exhausting a finite candidate set expands the search or leaves unresolved obligations. Termination requires reviewable no-improvement evidence over the full legal space, a time limit, or a round limit. The current global certificate establishes equality between a directed-cut lower bound and the exact T_pred. Narrower certificates based on enumerating fixed decisions state their scope explicitly.
+A change to S affects the partition globally, so legality and expected benefit are checked before resynthesis within the current repair budget. Hierarchy changes also use full synthesis. Search expansion first tries subdivision: `refine_network` in `tuning/resynthesis.py` splits each slice into 2, 4, or 8 pieces while preserving routes, channels, and TB order. Each piece remains within its original byte range. The resulting candidate passes full lowering and checks, then the configured model and measured-gain criteria. An accepted result can be refined again. Exhausting a finite candidate set expands the search or leaves an outstanding obligation. Termination records a time or round limit, or a checkable no-improvement certificate for the declared search space. The current global certificate requires the directed-cut lower bound to equal exact T_pred; fixed-decision enumeration certificates state their narrower scope.
+
+## Full symbolic mode (`sketch.symbolic.enabled`)
+
+This mode is off by default. When enabled, lowering checks, offline analysis, and bottleneck repair use `vericcl/symbolic_full/`:
+
+| Module | Role |
+|---|---|
+| `xmlprog.py` | Independently parses XML without using objects from lowering. |
+| `executor.py` | Models each XML step as a progress node with TB, flag, send/receive, and FIFO dependencies. Connection capacity follows message size and `NCCL_STEPS`/`MSCCL_CHUNKSTEPS`. A BDD over (node, iteration) represents K loops; layer removal yields execution order or a remaining wait cycle. Buffer versions record contributor BDDs, paths, and time expressions. Transfers create Symbols; writes create {s, pd, t} atoms. Loop iterations access disjoint subranges through gridOffset, so one iteration determines data semantics. |
+| `checks.py` | Checks coverage by reachability, exact output contributions, ordered RAW/WAR/WAW accesses, forbidden bytes, gateways, progress at selected sizes, connection sequences, and agreement between XML and schedule transfers. |
+| `hotspots.py`, `order.py` | Combines counters with BDD sets for congestion, idle links, data holders, allowed paths, backward reachability, and alternatives. Identifies related operations and suggests TB reordering where Inverted holds and Necessary does not. |
+| `repair.py` | Builds the related-operation region and detour choices. BDD filtering removes invalid or conflicting combinations before applying atom constraints and local MILP. |
+
+Symbolic results are cached by XML and request. Model updates rebind alpha, beta, and simulator-derived contention factors without repeating symbolic execution.
 
 ## Timing and run ownership
 
@@ -68,16 +84,18 @@ The budget manager tracks initial synthesis, online verification, offline verifi
 
 Subprocesses are identified by PID, process group, start time, and boot ID. A log write failure stops new work while retaining the incumbent and failure records. Process exit, completed stdout collection, and GPU release are recorded separately. Unresolved GPU ownership from previous runs remains recorded when a new command starts.
 
-## Execution and resource release
+## Resident versions and recovery
 
-Native execution loads XML for one fixed schedule, checks each rank's task and data semantics, then prepares communicators and buffers. The run context retains this schedule for warmup, sampling, and tracing. A repaired schedule becomes the input to the next independent verification run.
+A resident group has fixed rank membership and a CPU coordinator. Versions are stored immutably by XML content. The runtime prepares a separate communicator and resources, then uses READY, COMMIT, and START to adopt the version at a request boundary. Messages carry group, request, attempt, and version identities; retries resend the recorded decision. One background tuning task handles coalesced events, with explicit faults taking priority.
 
-A CPU control channel coordinates preparation, launch, and completion acknowledgments across ranks. GPU events record full invocation times, while detailed traces record the execution of individual XML primitives. Independent calibration probes measure link and computation costs for subsequent offline model evaluation.
+Recovery first signals cancellation while retaining resources, confirms that GPU work has stopped, and aborts the communicator. After every rank confirms STOPPED, it restores protected input, rebuilds a valid version, and replays the entire request. The default allows two additional retries within one fixed recovery deadline. A timeout alone does not identify a failed link. If membership, a valid route, or confirmed termination is missing, recovery retains the buffers and records an unresolved state.
 
-At the end of a run, GPU completion, buffer release, and subprocess exit are confirmed separately. Full receipts are saved in process/jobs/, and resource states in process/live/. A resumed run continues from the saved checkpoint with its original identity, budgets, and statistical IDs.
+The caller supplies external in-band telemetry. Set `live.external_telemetry_path` to an absolute path owned by the execution user, and append to the same regular file. Each record is at most 64 KiB, uses a timezone-aware timestamp, and expires after 60 seconds by default. An event_id identifies one immutable record. Use task_id from the current `run.json` as group_id.
 
-## Manual constraints and outputs
+```json
+{"schema_version":1,"event_id":"health-0001","group_id":"current-task-id","source":"external_health","observed_at":"2026-01-01T00:00:00Z","kind":"link_failed","links":[[0,1]],"metrics":{}}
+```
 
-Manual stages use atom.manual.nodes. Each node's atoms specifies three variable sets: slice_ids, src_ranks, and dst_ranks. The stage_id is inherited from the node. Before solving, all combinations of the three sets are combined with existing forbidden_transfers to form directed-edge constraints. Constraints bind to original data ranges, and alternative paths still undergo the other semantic, group-boundary, and resource checks. With manual.enabled=false, these variable groups are excluded from automatic synthesis.
+Replace the illustrative identity and timestamp with current values. source may be external_inband, external_health, or explicit fault_injection. For `cost_update`, metrics keys such as `link:0:1` or `rrc:0:1` must provide alpha_us, beta_us_per_byte, min_bytes, and max_bytes; the edge must appear in links. A service ratio measured at one size scales the existing model and remains an estimate, rather than an independent alpha/beta fit.
 
-The run directory's run.json summarizes the command, original input index, effective configuration, value sources, data sizes, and results. The final XML, schedule description, and corresponding model are exported as schedule.xml, schedule.json, and model.json. Candidates from each round, model versions, and checkpoints are saved in process/. At completion, details.zip archives the process records, while process/ remains available for inspection and recovery.
+The C API executes native schedules; the Python controller handles automatic analysis and background solving. Applications using only the C API supply verified versions themselves or through an external controller. Detailed traces contain XML primitive events. CUDA event duration covers the complete native call, including final scaling for floating-point avg.

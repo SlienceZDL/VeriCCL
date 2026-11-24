@@ -1,6 +1,6 @@
 """CLI orchestration; application work starts after snapshots and input validation."""
 from datetime import datetime, timezone
-from dataclasses import fields, replace
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -36,17 +36,13 @@ def _execute(request, context, **kwargs):
         raise
     except BaseException as error:
         if isinstance(error, KeyboardInterrupt):
-            category, execution, stop = 'cancelled', 'cancelled', 'cancelled'
+            category, execution = 'cancelled', 'cancelled'
         elif isinstance(error, SolverUnavailableError):
-            category, execution, stop = 'backend', 'failed', 'exception'
-        elif isinstance(error, InputValidationError):
-            # Contract errors detected after the run directory exists (for
-            # example manual-plan state contracts) are input errors, exit 2.
-            category, execution, stop = 'input', 'failed', 'input_error'
+            category, execution = 'backend', 'failed'
         else:
-            category, execution, stop = 'internal', 'failed', 'exception'
+            category, execution = 'internal', 'failed'
         emit_event(context, 'execution_exception', {'message': str(error), 'traceback': traceback.format_exc()})
-        result = RunResult(False, execution, stop_reason=stop, failure_category=category,
+        result = RunResult(False, execution, stop_reason='exception', failure_category=category,
                            optional_failures=(str(error),))
     finalized = finalize_run(context, result)
     print('VeriCCL: status=%s, stop_reason=%s, model_coverage=%s, exit_code=%d, directory=%s' %
@@ -73,6 +69,24 @@ def new_run(args):
         snapshots.update({'schedule.xml': args.xml, 'sidecar.json': args.sidecar})
         if args.model is not None:
             snapshots['model.json'] = args.model
+    if args.command == 'solve' and inputs.request_config['sketch'].get('size_bands'):
+        # One standard solve per size band, then one MSCCL_XML_FILES bundle.
+        from vericcl.bands import run_bands, size_bands
+        size_bands(inputs)
+        args.run_id_resolved = run_id
+        args.initial_model = model
+        overrides = _overrides(args.overrides)
+
+        def create(run):
+            created = RunContext.create(args.project_root, args.case, run, input_files=snapshots,
+                                        environment=dict(inputs.request_config['runtime']['environment']))
+            created.write_json('invocation.json', {'argv': getattr(args, 'invocation_argv', []),
+                'cwd': str(Path.cwd().resolve()), 'command': args.command})
+            return created
+
+        def load(band_files, band_overrides):
+            return load_request(band_files, band_overrides, override_input=True, purpose='solve')
+        return run_bands(args, files, overrides, inputs, execute=_execute, create_context=create, load=load)
     context = RunContext.create(args.project_root, args.case, run_id, input_files=snapshots,
                                 environment=dict(inputs.request_config['runtime']['environment']))
     context.write_json('invocation.json', {'argv': getattr(args, 'invocation_argv', []),
@@ -82,12 +96,11 @@ def new_run(args):
 
 
 def inspect_run(args):
-    from vericcl.execution.layout import artifact_path
     root = args.run.resolve()
     metadata = json.loads((root / 'run.json').read_text())
     result = {'run': str(root), 'task_id': metadata['task_id']}
     for name, relative in (('summary', 'run-summary.json'), ('best', 'best/accepted.json'), ('checkpoint', 'checkpoints/latest.json')):
-        path = artifact_path(root, relative)
+        path = root / relative
         if path.exists():
             if not path.resolve().is_relative_to(root):
                 raise InputValidationError('inspect artifact escapes run boundary')
@@ -102,26 +115,21 @@ def resume_run(args):
         summary = context.artifact('run-summary.json')
         if summary.is_file():
             result = json.loads(summary.read_text())
-            if context.layout_version >= 2:
-                from vericcl.execution.publication import publication_complete
-                if not publication_complete(context):
-                    context.resumed = True
-                    outcome = RunResult(**{field.name: result[field.name] for field in fields(RunResult)
-                                           if field.name in result})
-                    finalized = finalize_run(context, outcome)
-                    if not finalized.complete:
-                        print('VeriCCL: result finalization needs recovery, exit_code=%d, directory=%s, reason=%s' %
-                              (finalized.exit_code, context.root, '; '.join(finalized.errors)))
-                        return finalized.exit_code
             print('VeriCCL: task already finished; preserving the original result. stop_reason=%s, directory=%s' % (result['stop_reason'], context.root))
             return int(result['exit_code'])
     inputs = checkpoint_inputs(context, state)
     original_config = state.get('extra', {}).get('original_config')
+    original_files = state.get('extra', {}).get('original_files')
     purpose = state.get('extra', {}).get('purpose', 'solve')
-    if original_config:
+    if original_files:
+        for relative in original_files.values():
+            if hashlib.sha256(context.artifact(relative).read_bytes()).hexdigest() != state['checksums'].get(relative):
+                raise ValueError('checkpoint original request document changed: ' + relative)
+        inputs = load_request({name: context.artifact(relative) for name, relative in original_files.items()}, purpose=purpose)
+    elif original_config:
         prefix = 'tmp/resume-original-' + uuid.uuid4().hex
         files = {name: context.write_json(prefix + '/' + name + '.json', value) for name, value in original_config.items()}
-        inputs = replace(load_request(files, purpose=purpose), input_sha256=state['input_sha256'])
+        inputs = load_request(files, purpose=purpose)
     context.resumed = True
     return _execute(PrimaryRequest(inputs, purpose=purpose, tune=state.get('extra', {}).get('tune', False)),
                     context, restored=state, budgets=budgets)

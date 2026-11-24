@@ -12,13 +12,13 @@ import threading
 import uuid
 
 from vericcl.artifacts.layout import resolve_case_paths
-from vericcl.artifacts.atomic import atomic_write_bytes
+from vericcl.artifacts.writer import atomic_write_bytes, fsync_paths
 from vericcl.execution.security import ENVIRONMENT_ALLOWLIST, Redactor
 from vericcl.execution.status import ExitCode, FinalizationResult, RunResult
-from vericcl.execution.layout import PROCESS_DIRECTORIES, METADATA_SECTIONS, artifact_path, layout_version
 
 
-DIRECTORIES = PROCESS_DIRECTORIES
+DIRECTORIES = ("input_snapshot", "models", "candidates", "jobs", "live", "statistics",
+               "checkpoints", "reports", "best", "tmp", "rebuildable-cache")
 
 
 class StorageFailure(RuntimeError):
@@ -26,9 +26,8 @@ class StorageFailure(RuntimeError):
 
 
 class RunContext:
-    def __init__(self, root: Path, *, task_id: str, run_id: str, redactor: Redactor, version=None):
-        self.root = Path(root).resolve()
-        self.layout_version = layout_version(self.root) if version is None else version
+    def __init__(self, root: Path, *, task_id: str, run_id: str, redactor: Redactor):
+        self.root = root
         self.task_id = task_id
         self.run_id = run_id
         self.redactor = redactor
@@ -38,8 +37,6 @@ class RunContext:
         self.storage_error = None
         self.finalized = False
         self.active_jobs = set()
-        # Proven SCIP outcomes of byte-identical owned models in this run.
-        self.solver_results = {}
 
     @classmethod
     def create(cls, project_root: Path, case_id: str, run_id: str, *, input_files=None,
@@ -59,16 +56,17 @@ class RunContext:
         if paths.run.exists() and (not paths.run.is_dir() or any(paths.run.iterdir())):
             raise FileExistsError("refusing a nonempty run directory: " + str(paths.run))
         paths.run.mkdir(exist_ok=True)
-        context = cls(paths.run, task_id=task_id or uuid.uuid4().hex, run_id=run_id, redactor=redactor, version=2)
-        context.initialize_directories()
-        context.write_json("run.json", {"schema_version": 2, "task_id": context.task_id,
-                           "run_id": run_id, "case_id": case_id, "root": str(context.root),
-                           "node": context.node, "environment": environment or {}})
+        context = cls(paths.run, task_id=task_id or uuid.uuid4().hex, run_id=run_id, redactor=redactor)
+        for name in DIRECTORIES:
+            context.artifact(name).mkdir()
         snapshot_hashes = {}
         for name, data in snapshots.items():
             context.write_bytes("input_snapshot/" + name, data)
             snapshot_hashes[name] = hashlib.sha256(data).hexdigest()
         context.write_json("input-snapshot.json", {"files": snapshot_hashes})
+        context.write_json("run.json", {"schema_version": 1, "task_id": context.task_id,
+                           "run_id": run_id, "case_id": case_id, "root": str(context.root),
+                           "node": context.node, "environment": environment or {}})
         from vericcl.execution.events import emit_event
         emit_event(context, "run_started")
         return context
@@ -84,37 +82,34 @@ class RunContext:
         raise StorageFailure(self.storage_error) from error
 
     def artifact(self, relative) -> Path:
-        return artifact_path(self.root, relative, version=self.layout_version)
-
-    def relative_artifact(self, relative) -> str:
-        return str(self.artifact(relative).relative_to(self.root))
-
-    def initialize_directories(self):
-        if self.layout_version >= 2:
-            self.artifact('process').mkdir(exist_ok=True)
-        for name in DIRECTORIES:
-            self.artifact(name).mkdir(exist_ok=True)
+        path = Path(relative)
+        if path.is_absolute() or not path.parts or ".." in path.parts or "\\" in str(relative):
+            raise ValueError("artifact path violates run boundary")
+        target = self.root / path
+        if not target.resolve().is_relative_to(self.root):
+            raise ValueError("artifact symlink violates run boundary")
+        return target
 
     def write_bytes(self, relative, data: bytes, *, replace=False) -> Path:
         with self.lock:
             self.ensure_writable()
             path = self.artifact(relative)
-            if replace and path.is_relative_to(self.artifact('input_snapshot')):
+            if replace and Path(relative).parts[0] == "input_snapshot":
                 raise ValueError("input snapshot is immutable")
+            # Working records are published atomically but not forced to disk
+            # one by one: on a rotating disk each fsync costs ~20 ms and
+            # dominated short solves.  A killed process still never leaves a
+            # partial file; power loss is covered by the finalization barrier
+            # and by checkpoint fallback in restore_checkpoint.
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 if not replace:
-                    atomic_write_bytes(path, data)
+                    atomic_write_bytes(path, data, durable=False)
                 else:
                     temporary = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp")
                     try:
-                        atomic_write_bytes(temporary, data)
+                        atomic_write_bytes(temporary, data, durable=False)
                         os.replace(temporary, path)
-                        descriptor = os.open(path.parent, os.O_RDONLY)
-                        try:
-                            os.fsync(descriptor)
-                        finally:
-                            os.close(descriptor)
                     finally:
                         temporary.unlink(missing_ok=True)
             except FileExistsError:
@@ -123,73 +118,22 @@ class RunContext:
                 self.fail_storage(error)
             return path
 
-    def write_scratch_bytes(self, relative, data: bytes) -> Path:
-        """Publish rebuildable task scratch below ``tmp/`` without fsync.
-
-        ``tmp/`` holds regenerable data whose lifetime is managed by the
-        current task (for example owned SCIP worker requests); recovery never
-        reads it. Publication is still atomic and no-replace, so a reader never
-        observes a partial file, but durability against power loss is not paid
-        for on the solver's critical path.
-        """
-        path = self.artifact(relative)
-        if not path.is_relative_to(self.artifact('tmp')):
-            raise ValueError("scratch writes are limited to the task tmp directory")
-        return self.write_unsynced_bytes(relative, data)
-
-    def write_unsynced_bytes(self, relative, data: bytes) -> Path:
-        """Atomic no-replace publication without fsync, for redundant records.
-
-        Only for files whose content is also durably recorded elsewhere (for
-        example owned CPU solver job records, whose request, identity and
-        result are part of durable events) or that recovery never reads.
-        """
+    def make_durable(self, relatives):
+        """Force the named existing run files (and their directories) to disk."""
         with self.lock:
-            self.ensure_writable()
-            path = self.artifact(relative)
-            if path.is_relative_to(self.artifact('input_snapshot')):
-                raise ValueError("input snapshot writes must be durable")
+            paths = []
+            for relative in relatives:
+                path = self.artifact(relative)
+                if path.is_file() and path not in paths:
+                    paths.append(path)
             try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if os.path.lexists(path):
-                    raise FileExistsError("artifact already exists: {}".format(path))
-                temporary = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp")
-                try:
-                    with temporary.open("xb") as stream:
-                        stream.write(data)
-                    os.link(temporary, path)
-                finally:
-                    temporary.unlink(missing_ok=True)
-            except FileExistsError:
-                raise
+                fsync_paths(paths)
             except OSError as error:
                 self.fail_storage(error)
-            return path
-
-    def write_scratch_json(self, relative, value) -> Path:
-        text = json.dumps(self.redactor.value(value), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
-        return self.write_scratch_bytes(relative, text.encode("utf-8"))
-
-    def encode_json(self, value) -> bytes:
-        """The exact bytes write_json stores for an ordinary artifact."""
-        text = json.dumps(self.redactor.value(value), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
-        return text.encode("utf-8")
 
     def write_json(self, relative, value, *, replace=False) -> Path:
-        if self.layout_version >= 2 and str(relative) in METADATA_SECTIONS:
-            return self.update_metadata(METADATA_SECTIONS[str(relative)], value, replace=replace)
-        if self.layout_version >= 2 and str(relative) == 'run.json':
-            value = {'schema_version': 2, 'task_id': self.task_id, 'run_id': self.run_id,
-                     'root': str(self.root), **value}
-        return self.write_bytes(relative, self.encode_json(value), replace=replace)
-
-    def update_metadata(self, section, value, *, replace=False):
-        with self.lock:
-            metadata = json.loads(self.artifact('run.json').read_text())
-            if section in metadata and not replace:
-                raise FileExistsError('run metadata section already exists: ' + section)
-            metadata[section] = value
-            return self.write_json('run.json', metadata, replace=True)
+        text = json.dumps(self.redactor.value(value), indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+        return self.write_bytes(relative, text.encode("utf-8"), replace=replace)
 
     def cleanup_rebuildable(self):
         with self.lock:
@@ -206,15 +150,41 @@ class RunContext:
                         child.unlink()
 
 
+def _published_files(context: RunContext):
+    """The result a finished run hands over: summary, accepted XML/sidecar/model, timing,
+    the last checkpoint and the event log.  Only these pay for an fsync."""
+    files = ["run.json", "run-summary.json", "reports/summary.md", "reports/timing.json",
+             "events.jsonl", "best/accepted.json", "checkpoints/latest.json"]
+    for relative, keys in (("best/accepted.json", None), ("checkpoints/latest.json", ("state",))):
+        try:
+            record = json.loads(context.artifact(relative).read_text())
+        except (OSError, ValueError):
+            continue
+        if keys is None:
+            candidate = record.get("candidate") or {}
+            files.extend(candidate.get(key) for key in ("record", "xml", "sidecar"))
+            if record.get("model_version"):
+                files.append("models/" + record["model_version"] + ".json")
+        else:
+            files.extend(record.get(key) for key in keys)
+    return [item for item in files if isinstance(item, str)]
+
+
 def finalize_run(context: RunContext, result: RunResult) -> FinalizationResult:
     from vericcl.execution.events import emit_event
     if context.active_jobs:
         return FinalizationResult(int(ExitCode.STORAGE), False, ("owned jobs remain unresolved",))
     payload = asdict(result)
     payload.update(schema_version=1, task_id=context.task_id, run_id=context.run_id, exit_code=result.exit_code)
+    timing = context.root / 'reports' / 'timing.json'
+    if timing.is_file():
+        try:
+            phases = json.loads(timing.read_text()).get('phases')
+        except (OSError, ValueError):
+            phases = None
+        if phases is not None:
+            payload['timing'] = phases
     try:
-        if context.layout_version >= 2:
-            context.update_metadata('publication', {'complete': False}, replace=True)
         if getattr(context, 'resumed', False):
             for relative in ('run-summary.json', 'reports/summary.md'):
                 previous = context.artifact(relative)
@@ -226,9 +196,7 @@ def finalize_run(context: RunContext, result: RunResult) -> FinalizationResult:
                 + "\n\nStop reason: " + result.stop_reason + "\n\nExit code: " + str(result.exit_code) + "\n")
         context.write_bytes("reports/summary.md", context.redactor.text(text).encode("utf-8"), replace=getattr(context, "resumed", False))
         emit_event(context, "run_finalized", payload)
-        if context.layout_version >= 2:
-            from vericcl.execution.publication import publish_results
-            publish_results(context, payload, text)
+        context.make_durable(_published_files(context))
         context.finalized = True
         return FinalizationResult(result.exit_code, True)
     except (StorageFailure, OSError) as error:

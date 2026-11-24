@@ -6,6 +6,8 @@ import pytest
 from tests.unit.online.test_probe_jobs import probe_context
 from vericcl.execution.context import RunContext
 
+pytestmark = pytest.mark.usefixtures('home_is_tmp')
+
 
 def test_remote_cleanup_distinguishes_process_exit_from_gpu_release(tmp_path):
     from vericcl.verification.online.remote import _cleanup

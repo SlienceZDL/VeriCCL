@@ -1,0 +1,63 @@
+{
+ "collective": {
+  "operator": "allgather",
+  "datatype": "float32",
+  "inplace": true
+ },
+ "hyperparameters": {
+  "total_size_bytes": 16777216,
+  "slice_size_bytes": 4194304
+ },
+ "solver": {
+  "backend": "scip",
+  "cpu_budget": 8,
+  "max_channels": 8,
+  "channel_candidates": [
+   4
+  ],
+  "max_parallel_models": 1,
+  "max_threads_per_model": 8,
+  "per_model_timeout_s": 120,
+  "solver_seed": 0
+ },
+ "budgets": {
+  "cleanup_reserve_s": 2,
+  "max_initial_synthesis_s": 300,
+  "max_run_wall_s": 10800,
+  "max_tuning_rounds": 6,
+  "max_repair_per_round_s": 180,
+  "max_repair_total_s": 900,
+  "max_offline_validation_per_round_s": 180,
+  "max_offline_validation_total_s": 720,
+  "max_online_validation_per_round_s": 3600,
+  "max_online_validation_total_s": 7200
+ },
+ "tolerances": {
+  "absolute": 1e-05,
+  "relative": 1e-05
+ },
+ "calibration": {
+  "enabled": true,
+  "equivalence_classes": true,
+  "max_relative_fit_error": 0.1,
+  "job_timeout_s": 1200,
+  "launches": 10
+ },
+ "trace_and_measure": {
+  "enabled": true,
+  "job_timeout_s": 1200,
+  "trace_capacity_bytes": 3538984
+ },
+ "runtime_compatibility": {
+  "enabled": true
+ },
+ "history": {
+  "calibration_reuse": true,
+  "calibration_index": "calibration-cache/index.json",
+  "calibration_max_age_s": 604800,
+  "schedule_reuse": false,
+  "schedule_index": "schedule-history/index.json",
+  "relative_bandwidth_tolerance": 0.5,
+  "max_schedule_candidates": 4
+ }
+}

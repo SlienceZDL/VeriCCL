@@ -17,6 +17,7 @@ from vericcl.planner.model import (
     StageInterface,
 )
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import (
     CollectiveKind,
     CollectiveSpec,
@@ -120,14 +121,14 @@ def _node_schedule(node_id, stage_id, src_rank, dst_rank):
         transfer_id = "{}-t{}".format(node_id, slice_id)
         st_time = float(2 * slice_id)
         ed_time = st_time + 2.0
-        atom = Atom(
+        atom = Atom.build(
             slice_id=slice_id,
             slice_size_bytes=1024,
             path=(
                 PathStage(
                     stage_id,
                     "SEND",
-                    (Symbol(src_rank, dst_rank, 0.0),),
+                    (symbolic_step(src_rank, dst_rank, 0.0),),
                 ),
             ),
             st_time=st_time,

@@ -5,6 +5,7 @@ import pytest
 
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Symbol
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import CollectiveKind
 from vericcl.verification.constraints import (
     verify_schedule_constraints,
@@ -58,13 +59,13 @@ def test_absent_directed_link_is_rejected():
 def test_start_before_predecessor_ready_time_is_rejected():
     schedule = two_rank_allreduce_schedule()
     send = schedule.transfers[1]
-    send_stage = PathStage(1, "SEND", (Symbol(0, 1, 0.5),))
-    reduce_stage = PathStage(0, "REDUCE", (Symbol(1, 0, 0.0),))
+    send_stage = PathStage(1, "SEND", (symbolic_step(0, 1, 0.5),))
+    reduce_stage = PathStage(0, "REDUCE", (symbolic_step(1, 0, 0.0),))
     early = replace(
         send,
         atoms=(
-            Atom(0, 1024, (send_stage,), 0.5, 1.5),
-            Atom(1, 1024, (reduce_stage, send_stage), 0.5, 1.5),
+            Atom.build(0, 1024, (send_stage,), 0.5, 1.5),
+            Atom.build(1, 1024, (reduce_stage, send_stage), 0.5, 1.5),
         ),
         st_time=0.5,
         ed_time=1.5,
@@ -86,13 +87,13 @@ def test_path_ready_time_must_follow_previous_physical_operation():
         0,
         "SEND",
         (
-            Symbol(0, 1, 0.0),
-            Symbol(1, 2, 0.5),
+            symbolic_step(0, 1, 0.0),
+            symbolic_step(1, 2, 0.5),
         ),
     )
     invalid_second = replace(
         second,
-        atoms=(Atom(0, 1024, (path,), 1.0, 2.0),),
+        atoms=(Atom.build(0, 1024, (path,), 1.0, 2.0),),
         predecessor_ids=frozenset(),
     )
     invalid = replace(
@@ -113,10 +114,10 @@ def test_path_ready_time_must_follow_previous_physical_operation():
 def test_same_lane_overlap_is_rejected():
     schedule = two_send_same_lane_schedule()
     second = schedule.transfers[1]
-    stage = PathStage(0, "SEND", (Symbol(0, 1, 0.0),))
+    stage = PathStage(0, "SEND", (symbolic_step(0, 1, 0.0),))
     overlapping = replace(
         second,
-        atoms=(Atom(1, 1024, (stage,), 0.5, 1.5),),
+        atoms=(Atom.build(1, 1024, (stage,), 0.5, 1.5),),
         st_time=0.5,
         ed_time=1.5,
     )
@@ -148,11 +149,11 @@ def test_opposite_directed_lanes_can_overlap_on_the_same_channel():
 def test_distinct_channels_can_overlap_on_the_same_directed_link():
     schedule = two_send_same_lane_schedule()
     second = schedule.transfers[1]
-    stage = PathStage(0, "SEND", (Symbol(0, 1, 0.0),))
+    stage = PathStage(0, "SEND", (symbolic_step(0, 1, 0.0),))
     parallel = replace(
         second,
         channel=1,
-        atoms=(Atom(1, 1024, (stage,), 0.0, 1.0),),
+        atoms=(Atom.build(1, 1024, (stage,), 0.0, 1.0),),
         st_time=0.0,
         ed_time=1.0,
     )

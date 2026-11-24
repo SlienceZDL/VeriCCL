@@ -27,7 +27,14 @@ def plain(value):
                             else plain(getattr(value, field.name))) for field in fields(value)}
     if isinstance(value, Mapping):
         return {str(key): plain(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list, set, frozenset)):
+    if isinstance(value, (set, frozenset)):
+        # Sets have no order; sort them so records do not depend on the hash seed.
+        items = [plain(item) for item in value]
+        try:
+            return sorted(items)
+        except TypeError:
+            return sorted(items, key=repr)
+    if isinstance(value, (tuple, list)):
         return [plain(item) for item in value]
     if isinstance(value, Path):
         return str(value)
@@ -51,11 +58,25 @@ def build_budgets(inputs, *, purpose='solve'):
         max_tuning_rounds=config.get('max_tuning_rounds', 0), max_run_wall_s=config.get('max_run_wall_s'))
 
 
+_PREDICTION_SUMMARY = ('model_version', 't_pred_us', 'output_ready_us', 'model_coverage', 'exact_completion_ratio',
+                       'missing_components', 'unmeasured_modes', 'unavailable_operations')
+
+
 def persist_candidate(context, bundle, inputs, *, origin, ordinal=None):
-    name = context.relative_artifact('candidates/' + (ordinal or uuid.uuid4().hex))
+    name = 'candidates/' + (ordinal or uuid.uuid4().hex)
+    prediction = None
+    if bundle.prediction is not None:
+        # The per-operation timeline (start/end times, events, segments) is
+        # megabytes for a 16-GPU schedule. It is written once, next to the
+        # candidate; the record that checkpoints and the accepted result
+        # embed carries the summary and the reference.
+        detail = plain(bundle.prediction)
+        context.write_json(name + '/prediction.json', detail)
+        prediction = {key: detail.get(key) for key in _PREDICTION_SUMMARY if key in detail}
+        prediction['detail'] = name + '/prediction.json'
     record = {'record': name + '/candidate.json', 'origin': origin, 'xml_sha256': bundle.xml_sha256, 'can_execute': bundle.can_execute,
         'checks': {key: plain(value) for key, value in bundle.checks.items()},
-        'prediction': None if bundle.prediction is None else plain(bundle.prediction),
+        'prediction': prediction,
         'input_sha256': inputs.input_sha256, 'effective_config': plain(inputs.request_config)}
     if bundle.xml_text is not None:
         context.write_bytes(name + '/schedule.xml', bundle.xml_text.encode())
@@ -65,37 +86,45 @@ def persist_candidate(context, bundle, inputs, *, origin, ordinal=None):
     return record
 
 
-def _checkpoint_document(context, relative, value):
-    """Write an immutable checkpoint document once per distinct content.
+def _shared_document(context, key, owner, relative, build):
+    """An immutable checkpoint document written once per run.
 
-    Checkpoint files are never replaced or deleted, and every state records
-    and resume verifies the SHA-256 of each referenced file. A later
-    checkpoint whose input or model document is byte-identical therefore
-    references the earlier immutable copy instead of writing (and fsyncing)
-    another one; its own state.json is still new.
+    Checkpoints are frequent; the request documents and a model version do
+    not change between them. Each is written (and redacted, serialized and
+    hashed) once and later checkpoints reference the same file. ``owner`` is
+    the object the document was derived from; a different object under the
+    same key gets its own file.
     """
-    data = context.encode_json(value)
-    digest = hashlib.sha256(data).hexdigest()
-    shared = getattr(context, 'checkpoint_documents', None)
-    if shared is None:
-        shared = context.checkpoint_documents = {}
-    existing = shared.get(digest)
-    if existing is not None and context.artifact(existing).is_file():
-        return existing, digest
-    path = context.write_bytes(relative, data)
-    stored = str(path.relative_to(context.root))
-    shared[digest] = stored
-    return stored, digest
+    cache = context.__dict__.setdefault('_shared_checkpoint_documents', {})
+    entry = cache.get(key)
+    if entry is None or entry[0] is not owner:
+        path = context.write_json(relative, build())
+        entry = (owner, relative, hashlib.sha256(path.read_bytes()).hexdigest())
+        cache[key] = entry
+    return entry[1], entry[2]
 
 
-def save_checkpoint(context, inputs, budgets, model, bundle, *, phase, search=None, bundle_record=None, extra=None):
-    prefix = context.relative_artifact('checkpoints/' + uuid.uuid4().hex)
+def shared_input_documents(context, inputs):
     files, checksums = {}, {}
     for name, document in inputs.request_config.items():
         if name in {'topology', 'sketch', 'atom', 'runtime'}:
-            files[name], checksums_value = _checkpoint_document(context, prefix + '/' + name + '.json', plain(document))
-            checksums[files[name]] = checksums_value
-    model_relative, model_checksum = _checkpoint_document(context, prefix + '/model.json', model_json(model))
+            relative, checksum = _shared_document(context, ('input', name, id(document)), document,
+                'checkpoints/documents/%s/%s.json' % (uuid.uuid4().hex, name), lambda document=document: plain(document))
+            files[name] = relative
+            checksums[relative] = checksum
+    return files, checksums
+
+
+def save_checkpoint(context, inputs, budgets, model, bundle, *, phase, search=None, bundle_record=None, extra=None,
+                    original_inputs=None):
+    prefix = 'checkpoints/' + uuid.uuid4().hex
+    files, checksums = shared_input_documents(context, inputs)
+    if original_inputs is not None:
+        original_files, original_checksums = shared_input_documents(context, original_inputs)
+        checksums.update(original_checksums)
+        extra = dict(extra or {}, original_files=original_files)
+    model_relative, model_checksum = _shared_document(context, ('model', model.version), model,
+        'checkpoints/models/%s-%s.json' % (model.version, uuid.uuid4().hex[:8]), lambda: model_json(model))
     checksums[model_relative] = model_checksum
     if bundle is not None:
         bundle_record = bundle_record or persist_candidate(context, bundle, inputs, origin='checkpoint')
@@ -104,7 +133,7 @@ def save_checkpoint(context, inputs, budgets, model, bundle, *, phase, search=No
                 checksums[bundle_record[name]] = hashlib.sha256(context.artifact(bundle_record[name]).read_bytes()).hexdigest()
     initial_version = (extra or {}).get('initial_model_version')
     if initial_version:
-        initial_relative = context.relative_artifact('models/' + initial_version + '.json')
+        initial_relative = 'models/' + initial_version + '.json'
         checksums[initial_relative] = hashlib.sha256(context.artifact(initial_relative).read_bytes()).hexdigest()
     trace_reference = (extra or {}).get('best_trace')
     if trace_reference is not None:
@@ -152,6 +181,58 @@ def _resume_ownership(context):
             raise ValueError('resume has unresolved native GPU ownership')
 
 
+def _boot_id():
+    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+
+def _verified_state(context, relative, expected_sha256=None):
+    raw = context.artifact(relative).read_bytes()
+    if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError('checkpoint state checksum differs')
+    state = json.loads(raw)
+    if state['task_id'] != context.task_id or state['run_id'] != context.run_id:
+        raise ValueError('checkpoint task identity differs')
+    for artifact, checksum in state['checksums'].items():
+        if hashlib.sha256(context.artifact(artifact).read_bytes()).hexdigest() != checksum:
+            raise ValueError('checkpoint artifact checksum differs: ' + artifact)
+    return state
+
+
+def _select_checkpoint(context):
+    """The latest checkpoint, or after a reboot the newest one that still verifies.
+
+    Checkpoint files are not fsynced one by one.  Within one boot the page
+    cache holds every completed write, so any mismatch is damage and resume
+    refuses.  Only when every checkpoint predates the current boot can a power
+    loss have dropped unflushed writes; then the newest checkpoint whose own
+    files all verify is used and the fallback is reported in ``run_resumed``.
+    """
+    try:
+        latest = json.loads(context.artifact('checkpoints/latest.json').read_text())
+        return _verified_state(context, latest['state'], latest['sha256']), None
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        failure = error
+    readable = []
+    for path in context.artifact('checkpoints').glob('*/state.json'):
+        try:
+            state = json.loads(path.read_bytes())
+            readable.append((float(state['saved_wall']), str(path.relative_to(context.root)), state))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    boot = _boot_id()
+    if not readable or any(state.get('boot_id') == boot for _, _, state in readable):
+        raise failure
+    for _, relative, _ in sorted(readable, key=lambda item: item[0], reverse=True):
+        try:
+            state = _verified_state(context, relative)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        context.write_json('checkpoints/latest.json', {'state': relative,
+            'sha256': hashlib.sha256(context.artifact(relative).read_bytes()).hexdigest()}, replace=True)
+        return state, {'state': relative, 'reason': str(failure)}
+    raise failure
+
+
 def restore_checkpoint(root):
     root = Path(root).resolve()
     metadata = json.loads((root / 'run.json').read_text())
@@ -162,16 +243,7 @@ def restore_checkpoint(root):
     if expected != root or metadata['root'] != str(root):
         raise ValueError('resume path differs from the original case run boundary')
     context = RunContext(root, task_id=metadata['task_id'], run_id=metadata['run_id'], redactor=Redactor())
-    latest = json.loads(context.artifact('checkpoints/latest.json').read_text())
-    raw = context.artifact(latest['state']).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != latest['sha256']:
-        raise ValueError('checkpoint state checksum differs')
-    state = json.loads(raw)
-    if state['task_id'] != context.task_id or state['run_id'] != context.run_id:
-        raise ValueError('checkpoint task identity differs')
-    for relative, checksum in state['checksums'].items():
-        if hashlib.sha256(context.artifact(relative).read_bytes()).hexdigest() != checksum:
-            raise ValueError('checkpoint artifact checksum differs: ' + relative)
+    state, fallback = _select_checkpoint(context)
     _resume_ownership(context)
     scan = read_events(context.artifact('events.jsonl'))
     if any(event['task_id'] != context.task_id or event['run_id'] != context.run_id for event in scan.events):
@@ -200,5 +272,8 @@ def restore_checkpoint(root):
             round_consumed[item['stage']] = round_consumed.get(item['stage'], 0) + elapsed
     budgets.restore_usage(consumed, started_rounds=usage['started_rounds'],
         elapsed_wall_s=usage['elapsed_wall_s'] + downtime, model_work_s=model_work, round_consumed=round_consumed)
-    emit_event(context, 'run_resumed', {'phase': state['phase'], 'downtime_s': downtime, 'budgets': budgets.snapshot()})
+    resumed = {'phase': state['phase'], 'downtime_s': downtime, 'budgets': budgets.snapshot()}
+    if fallback is not None:
+        resumed['checkpoint_fallback'] = fallback
+    emit_event(context, 'run_resumed', resumed)
     return context, state, budgets

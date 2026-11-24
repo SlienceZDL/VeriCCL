@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from itertools import product, chain, islice
 from collections import defaultdict
 from contextlib import contextmanager
+import math
 import time
 
 from vericcl.errors import ConstructionInfeasibleError, InputValidationError, SemanticError
@@ -43,12 +44,33 @@ class HierarchyPlan:
     search_scope: str = 'topology_group_hierarchy'
 
 
+# SyCCL's filter (algo_solve.time_diff_threshold / num_used_algos_max):
+# fine-solve the coarse plans within 20% of the best, at most two.
+FINE_TIME_DIFF = 0.2
+FINE_MAX_PLANS = 2
+COARSE_MIP_GAP = 0.01
+
+
 @dataclass
 class HierarchyContext:
     lease: object
     reuse_subproblems: bool = True
-    # A bounded coarse batch limits working memory, not the candidate space.
+    # Kept for callers; coarse solving now covers the whole bounded grammar.
     coarse_batch_size: int = 4
+    # Optional score (lower is better, None = cannot be scored) used to rank
+    # coarse plans and to choose between a plan's fine and coarse schedule.
+    # The workflow passes T_pred from lowering + the cost model; without it
+    # the composer's communication estimate ranks plans.
+    rank: object = None
+    # Alternative bindings of the same request that differ only in the
+    # channel count (same slice partition). Plans are coarse-solved once at
+    # the stream's own binding; only the best plans are re-solved for these
+    # variants and the best (plan, channel count) pairs are fine-solved.
+    variants: tuple = ()
+    # plan.md step 3.3: the fine solve is skipped when the coarse result is
+    # proven (every route pattern within its requested gap). Measured on the
+    # 2x8 V100 topology it never improved T_pred and cost 130-320 s per plan.
+    fine_when_proven: bool = False
     records: list = field(default_factory=list)
 
     def __post_init__(self):
@@ -67,6 +89,8 @@ class HierarchyCandidate:
     stage: str
     full_search_proven: bool = False
     runtime_checked: bool = False
+    # The bound request (slice size, channel count) this schedule was solved for.
+    inputs: object = None
 
     @property
     def plan(self):
@@ -78,7 +102,44 @@ def _check(lease):
         lease.check()
 
 
+def _connected(topology, selection):
+    selected = set(selection)
+    reached = {selection[0]}
+    while True:
+        expanded = reached | {key.dst_rank for key in topology.links if key.src_rank in reached and key.dst_rank in selected}
+        expanded |= {key.src_rank for key in topology.links if key.dst_rank in reached and key.src_rank in selected}
+        if reached == expanded:
+            return reached == selected
+        reached = expanded
+
+
+def aligned_rails(topology, lease=None):
+    """Index-aligned rails (i-th rank of every group), as in rail-optimized fabrics.
+
+    For equally sized groups this gives one rail per local index (8 on 2x8)
+    instead of every gateway combination (8**groups). Returns () when the
+    groups differ in size or an aligned rail is not connected.
+    """
+    groups = defaultdict(list)
+    for rank, node in topology.node_membership.items():
+        groups[node].append(rank)
+    groups = tuple(tuple(sorted(ranks)) for _, ranks in sorted(groups.items()))
+    if len(groups) <= 1 or len({len(group) for group in groups}) != 1:
+        return ()
+    rails = []
+    for index in range(len(groups[0])):
+        _check(lease)
+        rail = tuple(group[index] for group in groups)
+        if not _connected(topology, rail):
+            return ()
+        rails.append(tuple(sorted(rail)))
+    return tuple(rails)
+
+
 def discover_rails(topology, lease=None):
+    aligned = aligned_rails(topology, lease)
+    if aligned:
+        return aligned
     groups = defaultdict(list)
     for rank, node in topology.node_membership.items():
         groups[node].append(rank)
@@ -257,7 +318,26 @@ def _enumerate_partition_plans(inputs, topology, *, lease=None):
             return None
         seen.add(key)
         return spec
+    tasks = _tasks(inputs)
+    n = inputs.hyperparameters.slice_count
+    rail_of_rank = {rank: index for index, rail in enumerate(rails) for rank in rail}
+
+    def source_aligned(rotation):
+        # Each task leaves its source host on the rail of its lowest source
+        # rank (rotated), so every slice crosses the inter-group fabric once
+        # and every rail/NIC carries the same load.
+        assignment = []
+        for index, (contributors, _) in enumerate(tasks):
+            source = min(contributors) // n
+            base = rail_of_rank.get(source, index)
+            assignment.append((base + rotation + (index if len(contributors) > 1 else 0)) % len(rails))
+        return tuple(assignment)
+
     if rails:
+        for rotation in range(min(2, len(rails))):
+            spec = build(source_aligned(rotation))
+            if spec is not None:
+                yield spec
         balanced = tuple(index % len(rails) for index in range(count))
         spec = build(balanced)
         if spec is not None:
@@ -274,16 +354,21 @@ def _enumerate_partition_plans(inputs, topology, *, lease=None):
         return
     if requested is not None and requested != (4 if inputs.collective.kind is CollectiveKind.ALL_REDUCE else 3):
         return
-    seeds = [tuple([rail] * count) for rail in range(len(rails))]
-    for assignment in chain(seeds, product(range(len(rails)), repeat=count)):
-        spec = build(tuple(assignment))
+    # Bounded symmetric menu (SyCCL-style) instead of the exponential
+    # product over rails**tasks: rotated balanced assignments, plus one
+    # alternative internal-root rotation for AllReduce. The grammar ends here;
+    # later improvement comes from verification-guided local repair.
+    for rotation in range(1, min(len(rails), 4)):
+        assignment = tuple((index + rotation) % len(rails) for index in range(count))
+        spec = build(assignment)
         if spec is not None:
             yield spec
-        if inputs.collective.kind is CollectiveKind.ALL_REDUCE:
-            for roots in product(*(rails[rail] for rail in assignment)):
-                spec = build(tuple(assignment), roots)
-                if spec is not None:
-                    yield spec
+    if inputs.collective.kind is CollectiveKind.ALL_REDUCE:
+        for assignment in (source_aligned(0), tuple(index % len(rails) for index in range(count))):
+            roots = tuple(rails[rail][(index + 1) % len(rails[rail])] for index, rail in enumerate(assignment))
+            spec = build(assignment, roots)
+            if spec is not None:
+                yield spec
 
 
 def candidate_partitions(inputs, topology, *, lease=None):
@@ -412,6 +497,14 @@ class CandidateStream:
         self.model_calls = 0
         self.fine_model_calls = 0
         self.template_hits = 0
+        # Run-wide reuse across plans (SyCCL merges the sub-demands of every
+        # sketch before solving): a unit equal under explicit maps to a
+        # template solved for an earlier plan reuses that coarse pattern.
+        self.library_hits = 0
+        self.fine_skipped = 0
+        self._library = {}
+        self._coarse_patterns = {}
+        self.coarse_candidates = []
         self.stop_reason = None
         self._used = False
 
@@ -449,27 +542,38 @@ class CandidateStream:
                     return lease.cancelled
             limited = LimitedLease(now + seconds)
             limited.hard_deadline = lease.deadline
-            configured = replace(inputs, solver=replace(inputs.solver, max_threads_per_model=threads))
+            solver = replace(inputs.solver, max_threads_per_model=threads)
+            if not fine:
+                # Coarse models only rank plans for the fine phase (SyCCL's
+                # filter step); proving them within 1e-4 cost ~4 s per
+                # 16-rank route model on 2x8.
+                solver = replace(solver, mip_gap=max(solver.mip_gap, COARSE_MIP_GAP),
+                                 require_proven_optimal=False)
+            configured = replace(inputs, solver=solver)
             yield configured, ModelBudget(seconds, now, now + seconds, limited)
         finally:
             if child is not None:
                 child.close(cleanup_confirmed=not getattr(limited, 'ownership_unresolved', False))
 
-    def _solve(self, spec, topology, *, fine):
+    def _solve(self, spec, topology, *, fine, inputs=None):
         from vericcl.solver.demands import build_solver_problem
         from vericcl.solver.templates import build_solver_templates
         from vericcl.solver.routing_milp import solve_route_milp
         from vericcl.solver.hierarchy_fine import solve_fine_pattern
         from vericcl.solver.instantiate import instantiate_route_patterns
         from vericcl.composer import compose_routes
-        inputs = self.inputs
+        inputs = self.inputs if inputs is None else inputs
         channels = inputs.solver.max_channels
         self.context.lease.check()
         problems = tuple(build_solver_problem(node, inputs, topology) for node in spec.plan.nodes)
         if any(problem.infeasible_demand_ids for problem in problems):
             self.context.records.append({'plan': plan_identity(spec.plan), 'status': 'unreachable_demand'})
             return None
-        templates = build_solver_templates(problems, spec.plan.planning_mode, reuse=self.context.reuse_subproblems)
+        # The fine phase solves per plan node (joint batch models), so only the
+        # coarse route templates are shared across plans.
+        library = self._library if self.context.reuse_subproblems and not fine else None
+        templates = build_solver_templates(problems, spec.plan.planning_mode,
+                                           reuse=self.context.reuse_subproblems, library=library)
         by_node = {problem.node.node_id: problem for problem in problems}
         patterns = {}
         batch_results = {}
@@ -479,6 +583,13 @@ class CandidateStream:
         try:
             for template in templates:
                 node_id = template.representative.node.node_id
+                # Route patterns depend on the channel count (link time is
+                # divided over the usable channels), templates do not.
+                cached = (template.template_id, channels)
+                if not fine and cached in self._coarse_patterns:
+                    patterns[template.template_id] = self._coarse_patterns[cached]
+                    self.library_hits += 1
+                    continue
                 if fine and inputs.strategies.batching and node_id in batch_results:
                     patterns[template.template_id] = solve_fine_pattern(template, by_node[node_id], channels,
                         objective, None, result=batch_results[node_id])
@@ -494,10 +605,14 @@ class CandidateStream:
                         pattern = solve_fine_pattern(template, problem, channels, objective, budget,
                                                      result=batch_results.get(node_id))
                     else:
-                        pattern = solve_route_milp(template, configured, topology, channels, objective, budget)
+                        pattern = solve_route_milp(template, configured, topology, channels, objective, budget,
+                                                   single_pass=True)
+                        if library is not None:
+                            self._coarse_patterns[cached] = pattern
                     patterns[template.template_id] = pattern
             self.context.lease.check()
-            instantiated = instantiate_route_patterns(spec.plan, templates, patterns, inputs, topology)
+            instantiated = instantiate_route_patterns(spec.plan, templates, patterns, inputs, topology,
+                                                      problems=by_node)
             if instantiated.failures:
                 raise ConstructionInfeasibleError(str(instantiated.failures))
             schedule = compose_routes(spec.plan, instantiated.node_schedules, topology, channels,
@@ -512,7 +627,7 @@ class CandidateStream:
         self.context.records.append({'plan': plan_identity(spec.plan), 'status': phase + '_candidate',
                                      'model_calls': self.model_calls, 'communication_time_us': estimate})
         return HierarchyCandidate(spec, schedule, templates, patterns, estimate,
-            'initial_topology' if self.model is None else self.model.version, phase)
+            'initial_topology' if self.model is None else self.model.version, phase, inputs=inputs)
 
     def _generate(self):
         from vericcl.solver.scip_api import ScipAdapter
@@ -521,27 +636,93 @@ class CandidateStream:
         if self.model is not None:
             from vericcl.performance.topology import project_topology
             topology = project_topology(topology, self.model, self.inputs.hyperparameters.slice_size_bytes)
-        plans = iter(enumerate_hierarchy_plans(self.inputs, topology, lease=self.context.lease))
-        while True:
-            batch = tuple(islice(plans, self.context.coarse_batch_size))
-            if not batch:
-                return
-            coarse = []
-            failed = []
-            for spec in batch:
-                candidate = self._solve(spec, topology, fine=False)
-                if candidate is not None:
-                    coarse.append(candidate)
-                    yield candidate
+        # SyCCL's order: coarse-solve every plan of the bounded grammar
+        # (shared templates make later plans cheap) and rank them. The best
+        # coarse schedule leaves the stream first, so a run always has a
+        # verified candidate even if the budget ends during the fine phase.
+        # The best plans are then re-solved for the other channel counts,
+        # and the best (plan, channel count) pairs within FINE_TIME_DIFF (at
+        # most FINE_MAX_PLANS) are fine-solved. Only schedules that improve on
+        # what already left the stream are yielded, so the expensive
+        # lowering/verification runs on few schedules.
+        coarse = self.coarse_candidates
+        for spec in enumerate_hierarchy_plans(self.inputs, topology, lease=self.context.lease):
+            candidate = self._solve(spec, topology, fine=False)
+            if candidate is not None:
+                coarse.append(candidate)
+        rank = self.context.rank
+        def score(item):
+            if rank is None:
+                return item.communication_time_us
+            value = rank(item)
+            return math.inf if value is None else float(value)
+        scored = sorted(((score(item), index, item) for index, item in enumerate(coarse)),
+                        key=lambda entry: entry[:2])
+        if not scored:
+            return
+        if not math.isfinite(scored[0][0]):
+            # Nothing could be scored by the final model: fall back to the
+            # composer estimate rather than dropping every plan.
+            scored = sorted(((item.communication_time_us, index, item) for index, item in enumerate(coarse)),
+                            key=lambda entry: entry[:2])
+            rank = None
+        def distinct_best(entries):
+            entries = sorted(entries, key=lambda entry: entry[:2])
+            limit = entries[0][0] * (1 + FINE_TIME_DIFF)
+            chosen = []
+            for value, _, item in entries:
+                if value > limit or len(chosen) >= FINE_MAX_PLANS:
+                    break
+                # Equal scores come from symmetric plan variants (rail
+                # rotations); spend the fine slots on distinct alternatives.
+                if any(abs(value - other) <= 1e-9 * max(1.0, abs(other)) for other, _ in chosen):
+                    continue
+                chosen.append((value, item))
+            return chosen
+        best_item = scored[0][2]
+        yield best_item
+        pool = list(scored)
+        if self.context.variants:
+            # Every channel count is tried for the best plan only; the other
+            # selected plans are re-solved at the count that served it best.
+            order = len(pool)
+            selected = distinct_best(scored)
+            leader = selected[0][1]
+            trials = [(score(candidate), candidate) for candidate in
+                      (self._solve(leader.plan_spec, topology, fine=False, inputs=variant)
+                       for variant in self.context.variants) if candidate is not None]
+            for value, candidate in trials:
+                pool.append((value, order, candidate))
+                order += 1
+            best_channels = min([(selected[0][0], leader)] + trials,
+                                key=lambda entry: entry[0])[1].inputs
+            for _, item in selected[1:]:
+                if best_channels is not None and best_channels is not item.inputs:
+                    candidate = self._solve(item.plan_spec, topology, fine=False, inputs=best_channels)
+                    if candidate is not None:
+                        pool.append((score(candidate), order, candidate))
+                        order += 1
+        # Each selected (plan, channel count) contributes its better schedule
+        # (fine or coarse under the same score): distinct top alternatives
+        # reach measurement, where hardware may order them differently.
+        for value, item in distinct_best(pool):
+            proven = all(getattr(pattern.metrics, 'within_requested_gap', False) for pattern in item.patterns.values())
+            if proven and not self.context.fine_when_proven:
+                self.fine_skipped += 1
+                if item is not best_item:
+                    yield item
+                continue
+            candidate = self._solve(item.plan_spec, topology, fine=True, inputs=item.inputs)
+            chosen = item
+            if candidate is not None:
+                if rank is None:
+                    chosen = candidate
                 else:
-                    failed.append(spec)
-            # The finite coarse batch only sets priority. It never certifies
-            # that a later candidate, or a route absent from coarse paths, loses.
-            ranked = [candidate.plan_spec for candidate in sorted(coarse, key=lambda item: item.communication_time_us)]
-            for spec in chain(ranked, failed):
-                candidate = self._solve(spec, topology, fine=True)
-                if candidate is not None:
-                    yield candidate
+                    refined = rank(candidate)
+                    if refined is not None and refined <= value:
+                        chosen = candidate
+            if chosen is not best_item:
+                yield chosen
 
 
 def plan_hierarchy(inputs, topology, model, context):

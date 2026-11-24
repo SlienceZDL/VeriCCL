@@ -5,6 +5,7 @@ from vericcl.errors import SemanticError
 from vericcl.planner.dual import DualTree, extract_dual_trees
 from vericcl.planner.model import StageInterface
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 from vericcl.topology.model import LaneKey
 
@@ -400,7 +401,7 @@ def _member_symbols(
                 parent,
             )
         ]
-        symbols.append(Symbol(rank, parent, timed.semantic_ready_time))
+        symbols.append(symbolic_step(rank, parent, timed.semantic_ready_time))
         rank = parent
     return tuple(symbols)
 
@@ -467,7 +468,7 @@ def reverse_allgather_schedule(
         draft = item.draft
         member_sources = _member_sources(draft.tree)
         atoms = tuple(
-            Atom(
+            Atom.build(
                 slice_id=member,
                 slice_size_bytes=ag_schedule.slice_size_bytes,
                 path=(

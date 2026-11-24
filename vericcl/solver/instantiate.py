@@ -1,13 +1,13 @@
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Dict, Mapping, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 from vericcl.composer.dual import reverse_allgather_schedule
 from vericcl.errors import SemanticError
 from vericcl.input.models import ResolvedInput
 from vericcl.planner.model import PlanDAG, PlanNode, StageInterface
 from vericcl.semantics.atom import Schedule
-from vericcl.solver.demands import TransferDemand, build_solver_problem
+from vericcl.solver.demands import SolverProblem, TransferDemand, build_solver_problem
 from vericcl.solver.lower_bounds import route_edge_duration_us
 from vericcl.solver.routing import RoutePattern
 from vericcl.solver.scheduling import (
@@ -468,7 +468,10 @@ def instantiate_route_patterns(
     patterns: Mapping[str, RoutePattern],
     inputs: ResolvedInput,
     topology: Topology,
+    *, problems: Optional[Mapping[str, SolverProblem]] = None,
 ) -> InstantiationResult:
+    """``problems`` may pass the plan's already built subproblems (keyed by
+    node ID) so they are not rebuilt; missing nodes are built here."""
     if not isinstance(plan, PlanDAG):
         raise SemanticError("plan must be a PlanDAG")
     if not isinstance(inputs, ResolvedInput):
@@ -501,8 +504,13 @@ def instantiate_route_patterns(
     if not set(patterns) <= set(template_ids):
         raise SemanticError("route pattern references an unknown template")
 
+    prebuilt = dict(problems or {})
     problems = {
-        node.node_id: build_solver_problem(node, inputs, topology)
+        node.node_id: (
+            prebuilt[node.node_id]
+            if node.node_id in prebuilt and prebuilt[node.node_id].node == node
+            else build_solver_problem(node, inputs, topology)
+        )
         for node in plan.nodes
     }
     units = {

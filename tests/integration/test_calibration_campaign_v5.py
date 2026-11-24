@@ -8,7 +8,7 @@ from vericcl.verification.online.probe_jobs import plan_probes
 
 def test_incremental_campaign_publishes_intra_before_independent_failed_jobs(tmp_path, monkeypatch):
     from vericcl.verification.online import campaign
-    context = probe_context(tmp_path, channels=1, ranks=2)
+    context = probe_context(tmp_path, channels=1, ranks=2, refinement_factors=[])
     jobs = [job for job in plan_probes(context) if job.category == 'link' and job.flows[0].kind == 'send'][:3]
     inter = [replace(job, job_id='inter-' + job.job_id, host_scope='inter') for job in jobs]
     shared = [replace(job, job_id='shared-' + job.job_id, category='shared') for job in jobs]
@@ -67,7 +67,7 @@ def test_link_component_is_published_before_local_copy_can_exhaust_parent_budget
 
 def test_parallel_channel_groups_retain_planner_order_instead_of_job_hash_order(tmp_path, monkeypatch):
     from vericcl.verification.online import campaign
-    context = probe_context(tmp_path, channels=2, ranks=2)
+    context = probe_context(tmp_path, channels=2, ranks=2, refinement_factors=[])
     jobs = [replace(job, job_id=('zz-single-' if len(job.flows) == 1 else 'aa-parallel-') + job.job_id)
             for job in plan_probes(context) if job.category == 'link'
             and job.flows[0].kind == 'send' and job.flows[0].src_rank == 0]

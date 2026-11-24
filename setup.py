@@ -24,7 +24,7 @@ def public_data_files():
     if len(entries) != len(set(entries)):
         raise ValueError('public file inventory contains duplicate paths')
     groups = {}
-    roots = {'runtime', 'third_party', 'tools', 'requirements-lock', 'docs', 'tests', 'examples'}
+    roots = {'runtime', 'third_party', 'tools', 'requirements-lock', 'docs', 'tests', 'examples', 'native'}
     for name in entries:
         path = Path(name)
         if (path.is_absolute() or '..' in path.parts or not path.parts

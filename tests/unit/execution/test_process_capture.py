@@ -65,7 +65,7 @@ def test_capped_output_is_drained_and_truncation_is_reported(tmp_path):
     assert result.status == "completed"
     assert result.stdout_path.stat().st_size <= 100
     assert result.stdout_bytes == 100000 and result.stdout_truncated
-    events = [json.loads(line) for line in (context.artifact("events.jsonl")).read_text().splitlines()]
+    events = [json.loads(line) for line in (context.root / "events.jsonl").read_text().splitlines()]
     assert any(e["kind"] == "output_truncated" for e in events)
 
 
@@ -119,19 +119,18 @@ def test_process_logs_are_valid_utf8_even_for_malformed_output(tmp_path):
 
 def test_runtime_compiler_uses_owned_process_logs_and_group_cleanup(tmp_path, monkeypatch):
     from runtime.build_runtime import _compile
-    from vericcl.execution.context import RunContext
     tools = tmp_path / "bin"
     tools.mkdir()
     make = tools / "make"
     make.write_text("#!/bin/sh\necho build-started\nsleep 5\n")
     make.chmod(0o755)
     monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
-    context = RunContext.create(tmp_path, "build-run", "r")
-    output = context.root
-    result = _compile(tmp_path, output, tmp_path, 70, 1, 1, context)
+    output = tmp_path / "build-run"
+    output.mkdir()
+    result = _compile(tmp_path, output, tmp_path, 70, 1, 1)
     assert result["status"] == "timeout" and not result["compiled"]
     assert result["cleanup_complete"]
-    assert list(context.artifact("jobs").glob("*/identity.json"))
+    assert list((output / "jobs").glob("*/identity.json"))
     assert "build-started" in Path(result["stdout_path"]).read_text()
 
 

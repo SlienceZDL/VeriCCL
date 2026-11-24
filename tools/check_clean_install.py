@@ -2,7 +2,6 @@
 import argparse
 import hashlib
 import json
-from vericcl.execution.layout import artifact_path
 import os
 from pathlib import Path
 import sys
@@ -43,10 +42,11 @@ def main(argv=None):
         run('install', [python, '-m', 'pip', 'install', '--no-deps', wheel])
         kit = environment / 'share/vericcl'
         required = ['README.md', 'requirements-lock/python312.txt', 'tools/generate_examples.py',
-                    'docs/input-schema.md', 'docs/input-schemas/sketch.json', 'tests/native/test_static_schedule.cc',
+                    'docs/input-schema.md', 'docs/input-schemas/sketch.json', 'tests/native/test_control_recovery.cc',
+                    'tools/native_live_smoke.py',
                     'examples/nccl-tests-build/input/build.py',
-                    'runtime/build_runtime.py', 'runtime/build_native.py', 'runtime/execution/buffer_guard.cc',
-                    'runtime/include/vericcl.h', 'runtime/msccl-trace/patches/0009-vericcl-live-trace-cycle.patch',
+                    'runtime/build_runtime.py', 'runtime/build_native.py', 'runtime/live/buffer_guard.cc',
+                    'runtime/include/vericcl.h', 'runtime/msccl-trace/patches/0010-vericcl-cached-occupancy-check.patch',
                     'third_party/msccl/src/init.cc', 'third_party/nlohmann/include/nlohmann/json.hpp',
                     'examples/quickstart/input/allreduce-hierarchy-outofplace/sketch.json']
         missing = [name for name in required if not (kit / name).is_file()]
@@ -76,10 +76,10 @@ def main(argv=None):
             common += ['--' + name, example / (name + '.json')]
         run('solve', [environment / 'bin/vericcl', 'solve', *common, '--run-id', 'solve'], seconds=45)
         output = cache / 'project/examples/installed-example/output/solve'
-        record = json.loads(artifact_path(output, 'best/accepted.json').read_text())['candidate']
+        record = json.loads((output / 'best/accepted.json').read_text())['candidate']
         run('verify', [environment / 'bin/vericcl', 'verify', *common, '--run-id', 'verify',
                        '--xml', output / record['xml'], '--sidecar', output / record['sidecar']], seconds=30)
-        context.write_json('reports/installed-solve.json', {'summary': json.loads(artifact_path(output, 'run-summary.json').read_text()),
+        context.write_json('reports/installed-solve.json', {'summary': json.loads((output / 'run-summary.json').read_text()),
             'candidate': record, 'wheel_sha256': hashlib.sha256(wheel.read_bytes()).hexdigest()})
         success = True
     except Exception as failure:

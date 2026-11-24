@@ -46,7 +46,8 @@ def test_failed_shared_measurement_cannot_erase_qualified_independent_link(tmp_p
     updates = fit_components(observations, FitPolicy(.01))
     assert 'link:0:1' in updates.services
     assert len(updates.profiles) == 1 and len(updates.profiles[0].mode) == 1
-    assert len(updates.issues) == 3
+    # One issue per failed shared-mode payload.
+    assert len(updates.issues) == sum(len(job.flows) == 2 for job in jobs)
 
 
 def test_measurement_identity_change_prevents_combining_payloads(tmp_path):

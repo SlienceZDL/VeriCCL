@@ -41,13 +41,13 @@ def test_campaign_stops_after_unresolved_primary_or_followup(tmp_path, monkeypat
     assert len(calls) == failing_call
     assert result.status == 'cleanup_unconfirmed'
     assert len(result.observations) + len(result.confirmations) == failing_call
-    state = json.loads(context.run_context.artifact('reports/calibration-resource-state.json').read_text())
+    state = json.loads((context.run_context.root / 'reports/calibration-resource-state.json').read_text())
     assert not state['safe_to_continue']
     assert state['active_jobs'] == (['unreconciled-launcher'] if active else [])
 
 
 def test_cleanup_stop_preserves_a_previously_published_link_component(tmp_path, monkeypatch):
-    context = probe_context(tmp_path, channels=1, ranks=2)
+    context = probe_context(tmp_path, channels=1, ranks=2, refinement_factors=[])
     jobs = [job for job in plan_probes(context) if job.category == 'link' and job.flows[0].kind == 'send']
     calls = []
 

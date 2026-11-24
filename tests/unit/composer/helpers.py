@@ -1,5 +1,6 @@
 from vericcl.planner.model import StageInterface
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import (
     CollectiveKind,
     CollectiveSpec,
@@ -33,13 +34,13 @@ def virtual_reduce_chain(rank_count):
         transfer_id = "virtual-t{:04d}".format(edge_index)
         members = frozenset(range(edge_index + 1, rank_count))
         symbols = tuple(
-            Symbol(rank, rank + 1, float(2 * rank))
+            symbolic_step(rank, rank + 1, float(2 * rank))
             for rank in range(edge_index + 1)
         )
         st_time = float(2 * edge_index)
         ed_time = st_time + 2.0
         atoms = tuple(
-            Atom(
+            Atom.build(
                 slice_id=slice_id,
                 slice_size_bytes=1024,
                 path=(PathStage(0, "SEND", symbols),),
@@ -99,14 +100,14 @@ def virtual_reduce_star(rank_count):
     for dst_rank in range(1, rank_count):
         transfer_id = "virtual-star-t{:04d}".format(dst_rank)
         members = frozenset({dst_rank})
-        atom = Atom(
+        atom = Atom.build(
             slice_id=dst_rank,
             slice_size_bytes=1024,
             path=(
                 PathStage(
                     0,
                     "SEND",
-                    (Symbol(0, dst_rank, 0.0),),
+                    (symbolic_step(0, dst_rank, 0.0),),
                 ),
             ),
             st_time=0.0,
@@ -159,10 +160,10 @@ def virtual_two_value_reduce():
         transfer_id = "virtual-value-t{:04d}".format(offset)
         st_time = float(2 * offset)
         ed_time = st_time + 2.0
-        atom = Atom(
+        atom = Atom.build(
             slice_id=member,
             slice_size_bytes=1024,
-            path=(PathStage(0, "SEND", (Symbol(0, 1, st_time),)),),
+            path=(PathStage(0, "SEND", (symbolic_step(0, 1, st_time),)),),
             st_time=st_time,
             ed_time=ed_time,
         )

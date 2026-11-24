@@ -174,9 +174,21 @@ def build_storage_plan(candidate, context):
         states[identifier] = value; by_position[op.dst_rank, logical].append(value)
         instructions.append(Instruction(op.operation_id, op.kind, tuple(read_ids), identifier, op.dst_rank,
             op.src_rank, op.channel, op.stage_id, op.participants, frozenset(dependencies), op.priority_time))
-    outputs, direct_outputs = {}, {}
     final_stage = max((op.stage_id for op in operations), default=0)
     final_priority = max((op.priority_time for op in operations), default=0.) + 1.
+    # Each produced value has at most one "home": the output slot of its rank
+    # that it either completes (exact final contributors) or, for reductions,
+    # accumulates towards (same logical position, subset of contributors).
+    # Values are written to their home directly whenever every earlier reader
+    # of that region is already ordered before the writer. This removes the
+    # scratch -> output copies that in-place schedules previously required.
+    reducing = inputs.collective.kind in {CollectiveKind.ALL_REDUCE, CollectiveKind.REDUCE_SCATTER, CollectiveKind.REDUCE}
+    exact_slot, position_slot = {}, {}
+    for slot, contributors in expected.items():
+        exact_slot[slot.rank, contributors] = slot
+        if reducing:
+            position_slot[slot.rank, min(contributors) % n] = (slot, contributors)
+    outputs, pending_outputs = {}, {}
     for slot, contributors in sorted(expected.items()):
         matches = [value for value in by_position[slot.rank, min(contributors) % n] if value.contributors == contributors]
         if not matches:
@@ -184,47 +196,34 @@ def build_storage_plan(candidate, context):
         value = matches[-1]
         target = Address(slot.rank, 'o', slot.offset)
         initial_address = addresses.get(value.state_id)
+        outputs[slot] = value.state_id
         if initial_address is not None and canonical_region(initial_address, inputs) == canonical_region(target, inputs):
-            outputs[slot] = value.state_id
             continue
-        if value.producer is not None and not inputs.collective.inplace:
-            direct_outputs[value.state_id] = target
-            outputs[slot] = value.state_id
+        pending_outputs[slot] = (value, target)
+    final_values = set(outputs.values())
+    # Only the value that completes an output owns that slot; a redundant
+    # earlier value with the same contributors stays in scratch. Partial
+    # reductions (strict contributor subsets) may accumulate in the slot.
+    homes = {}
+    for value in states.values():
+        if value.producer is None:
             continue
-        identifier = 'output-copy-r%d-o%d' % (slot.rank, slot.offset)
-        final_id = 'state-' + identifier
-        states[final_id] = Value(final_id, value.rank, value.logical_position, value.contributors, identifier)
-        addresses[final_id] = target
-        deps = frozenset({value.producer}) if value.producer else frozenset()
-        instructions.append(Instruction(identifier, 'copy', (value.state_id,), final_id, slot.rank, -1, -1,
-                                         final_stage, (slot.rank,), deps, final_priority))
-        outputs[slot] = final_id
-    # Every final in-place write waits for readers of overlapping original
-    # storage. Receiver scratch avoids cyclic send/receive overwrite hazards.
+        slot = exact_slot.get((value.rank, value.contributors))
+        if slot is not None and outputs.get(slot) != value.state_id:
+            slot = None
+        elif slot is None and reducing:
+            candidate = position_slot.get((value.rank, value.logical_position))
+            if candidate is not None and value.contributors < candidate[1]:
+                slot = candidate[0]
+        if slot is not None:
+            homes[value.state_id] = Address(slot.rank, 'o', slot.offset)
     readers = defaultdict(set)
     for op in instructions:
         for state_id in op.inputs:
             readers[state_id].add(op.operation_id)
-    # Every canonical region is one aligned slice, including in-place aliases.
-    # Only the identical physical coordinate can overlap an initial region.
-    initial_regions = defaultdict(list)
-    for state_id in initial:
-        region = canonical_region(addresses[state_id], inputs)
-        initial_regions[region.rank, region.buffer_id, region.offset].append((state_id, region))
-    protected = []
-    for op in instructions:
-        lease.check()
-        dependencies = set(op.dependencies)
-        if op.kind == 'copy':
-            target = canonical_region(addresses[op.output], inputs)
-            for state_id, region in initial_regions[target.rank, target.buffer_id, target.offset]:
-                if target.overlaps(region):
-                    dependencies.update(readers[state_id] - {op.operation_id})
-        protected.append(replace(op, dependencies=frozenset(dependencies)))
-    instructions = protected
     ordered, done, pending = [], set(), {op.operation_id: op for op in instructions}
     remaining_reads = {key: len(value) for key, value in readers.items()}
-    scratch_states = {key for key, value in states.items() if value.producer is not None and key not in direct_outputs and key not in addresses}
+    scratch_states = {key for key, value in states.items() if value.producer is not None and key not in homes and key not in addresses}
     scratch_capacity = inputs.request_config['runtime']['scratch_bytes_per_rank'] // size
     # With a tight budget, consume existing intermediates before opening more.
     tight = scratch_capacity < max(1, len(scratch_states))
@@ -247,14 +246,41 @@ def build_storage_plan(candidate, context):
             remaining_reads[key] -= 1
     position = {op.operation_id: i for i, op in enumerate(ordered)}
     ancestors, slots, reuse, final_instructions = {}, defaultdict(dict), [], []
+    # Values that have occupied each canonical data region, oldest first.
+    occupants = defaultdict(list)
+    for state_id in initial:
+        region = canonical_region(addresses[state_id], inputs)
+        occupants[region.rank, region.buffer_id, region.offset].append(state_id)
+
+    def place_home(op, dependencies):
+        home = homes.get(op.output)
+        if home is None:
+            return False
+        region = canonical_region(home, inputs)
+        history = occupants[region.rank, region.buffer_id, region.offset]
+        if history and history[-1] in final_values:
+            return False  # never overwrite a completed output
+        earlier = set()
+        for prior in history:
+            earlier.update(readers[prior])
+            if states[prior].producer is not None:
+                earlier.add(states[prior].producer)
+        earlier.discard(op.operation_id)
+        if any(position[key] > position[op.operation_id] for key in earlier):
+            return False
+        dependencies.update(earlier)  # all earlier in a topological order: no cycle
+        addresses[op.output] = home
+        history.append(op.output)
+        return True
+
     for op in ordered:
         lease.check()
         dependencies = set(op.dependencies)
         upstream = set(dependencies)
         for dep in dependencies:
             upstream.update(ancestors[dep])
-        if op.output in direct_outputs:
-            addresses[op.output] = direct_outputs[op.output]
+        if op.output not in addresses and place_home(op, dependencies):
+            pass
         elif op.output not in addresses:
             pool = slots[op.rank]
             available = []
@@ -281,6 +307,26 @@ def build_storage_plan(candidate, context):
             all_ancestors.update(ancestors[dep])
         ancestors[op.operation_id] = all_ancestors
         final_instructions.append(replace(op, dependencies=frozenset(dependencies)))
+    # Fallback: a final value that could not be written to its output slot
+    # (or an initial value in a different region) is copied there last.
+    for slot, (value, target) in sorted(pending_outputs.items()):
+        lease.check()
+        target_region = canonical_region(target, inputs)
+        if canonical_region(addresses[value.state_id], inputs) == target_region:
+            continue
+        identifier = 'output-copy-r%d-o%d' % (slot.rank, slot.offset)
+        final_id = 'state-' + identifier
+        states[final_id] = Value(final_id, value.rank, value.logical_position, value.contributors, identifier)
+        addresses[final_id] = target
+        deps = {value.producer} if value.producer else set()
+        for prior in occupants[target_region.rank, target_region.buffer_id, target_region.offset]:
+            deps.update(readers[prior])
+            if states[prior].producer is not None:
+                deps.add(states[prior].producer)
+        final_instructions.append(Instruction(identifier, 'copy', (value.state_id,), final_id, slot.rank, -1, -1,
+                                              final_stage, (slot.rank,), frozenset(deps), final_priority))
+        readers[value.state_id].add(identifier)
+        outputs[slot] = final_id
     output_slots = {rank: max((slot.offset + 1 for slot in expected if slot.rank == rank), default=0) for rank in range(ranks)}
     stage_count = inputs.atom_constraints.stage_num or max((op.stage_id for op in operations), default=0) + 1
     return StoragePlan(MappingProxyType(states), tuple(initial), tuple(final_instructions), MappingProxyType(addresses),

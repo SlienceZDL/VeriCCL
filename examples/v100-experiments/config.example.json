@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "experiment_root": "/opt/vericcl-experiments",
+  "repo_root": "/opt/vericcl-experiments/VeriCCL",
+  "manifest_path": "/opt/vericcl-experiments/VeriCCL/tests/fixtures/experiments-v5/v100-k16-manifest.json",
+  "baseline_source": "/opt/vericcl-baselines",
+  "remote_host": "worker-a",
+  "mpi_launcher": "/opt/openmpi-4.1.8/bin/mpirun",
+  "msccl_library_path": "/opt/vericcl-experiments/runtime/lib",
+  "nccl_tests_binary_directory": "/opt/vericcl-experiments/runtime/bin",
+  "clock_sync_binary": "/opt/vericcl-experiments/runtime/bin/vericcl_clock_sync",
+  "calibration_cache_path": "/opt/vericcl-experiments/calibration/cache.json",
+  "hostfiles": {
+    "8": "/opt/vericcl-experiments/hostfile-2x4",
+    "16": "/opt/vericcl-experiments/hostfile-2x8"
+  },
+  "max_clock_uncertainty_us": 50.0,
+  "environment": {
+    "NCCL_ALGO": "MSCCL,RING",
+    "NCCL_IB_DISABLE": "1",
+    "NCCL_PROTO": "Simple",
+    "NCCL_SOCKET_IFNAME": "eth0",
+    "VERICCL_CALIBRATION_LINK_CLASS": "inter_node",
+    "VERICCL_CUDA_VERSION": "12.8",
+    "VERICCL_FORCE_RECALIBRATE": "0",
+    "VERICCL_GPU_MODEL": "NVIDIA-V100",
+    "VERICCL_MPI_TCP_IF_INCLUDE": "192.0.2.0/24",
+    "VERICCL_MSCCL_VERSION": "vericcl-runtime-v0.1.0",
+    "VERICCL_NCCL_VERSION": "2.12.12",
+    "VERICCL_NIC_MODEL": "ethernet",
+    "VERICCL_ONLINE_INTER_NODE": "1"
+  },
+  "runtime_paths": {
+    "cuda_home": "/usr/local/cuda-12.8",
+    "vericcl_driver": "/opt/vericcl-experiments/runtime/bin/vericcl-probe",
+    "vericcl_native": "/opt/vericcl-experiments/runtime/bin/vericcl-native"
+  }
+}

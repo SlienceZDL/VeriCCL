@@ -53,6 +53,9 @@ class LaunchSample:
 class AcceptanceContext:
     enabled: bool = False
     driver: Callable | None = None
+    # Optional: measure one round's planned launches together, in order:
+    # batch_driver([(identity, LaunchRequest), ...]) -> [LaunchSample, ...].
+    batch_driver: Callable | None = None
     seed: int | None = None
     minimum_gain: float = 0.0
     pair_count: int = 20
@@ -118,26 +121,38 @@ def compare_measured(incumbent, candidate, ledger, context: AcceptanceContext) -
     base = dict(attempt_index=plan.attempt_index, alpha=plan.alpha, pair_count=plan.pair_count)
     runtime_identity, source = None, None
     try:
-        if not callable(context.driver):
+        if not callable(context.driver) and not callable(context.batch_driver):
             raise SemanticError('enabled measured acceptance requires a launch driver')
         for round_index, orders in enumerate(plan.orders, 1):
             groups = {'A': [], 'B': []}
-            for pair_index, order in enumerate(orders, 1):
-                for side in order:
+            planned = [(side, LaunchRequest(f'attempt-{plan.attempt_index}-round-{round_index}-pair-{pair_index}-{side}',
+                        plan.attempt_index, round_index, pair_index, side, plan.warmup, plan.timed, lease=context.lease))
+                       for pair_index, order in enumerate(orders, 1) for side in order]
+            batched = None
+            if callable(context.batch_driver):
+                if context.lease is not None:
+                    context.lease.check()
+                # The planned order is preserved inside the shared session.
+                batched = list(context.batch_driver([(incumbent if side == 'A' else candidate, request)
+                                                     for side, request in planned]))
+                if len(batched) != len(planned):
+                    raise SemanticError('batched measurement returned a different number of samples')
+            for position, (side, request) in enumerate(planned):
+                if batched is not None:
+                    value = batched[position]
+                else:
                     if context.lease is not None:
                         context.lease.check()
-                    request = LaunchRequest(f'attempt-{plan.attempt_index}-round-{round_index}-pair-{pair_index}-{side}',
-                        plan.attempt_index, round_index, pair_index, side, plan.warmup, plan.timed, lease=context.lease)
                     value = context.driver(incumbent if side == 'A' else candidate, request)
-                    # Preserve rejected native samples as well as qualified samples.
-                    ledger.append(plan, 'sample', dict(request={item.name: getattr(request, item.name) for item in fields(request) if item.name != 'lease'},
-                        sample=_evidence_value(asdict(value)) if isinstance(value, LaunchSample) else {'invalid_result_type': type(value).__name__}))
-                    _validate_sample(value, request, context)
-                    identity = (value.runtime_identity, value.driver_kind)
-                    if runtime_identity is not None and identity != runtime_identity:
-                        raise SemanticError('runtime identity changed during paired comparison')
-                    runtime_identity, source = identity, value.driver_kind
-                    groups[side].append(value.time_us)
+                # Preserve rejected native samples as well as qualified samples.
+                ledger.append(plan, 'sample', dict(request={item.name: getattr(request, item.name) for item in fields(request) if item.name != 'lease'},
+                    sample=_evidence_value(asdict(value)) if isinstance(value, LaunchSample) else {'invalid_result_type': type(value).__name__}))
+                _validate_sample(value, request, context)
+                identity = (value.runtime_identity, value.driver_kind)
+                if runtime_identity is not None and identity != runtime_identity:
+                    raise SemanticError('runtime identity changed during paired comparison')
+                runtime_identity, source = identity, value.driver_kind
+                groups[side].append(value.time_us)
             cvs = {side: _cv(values) for side, values in groups.items()}
             stable = all(value <= plan.max_cv for value in cvs.values())
             ledger.append(plan, 'round_finished', dict(round_index=round_index, coefficient_of_variation=cvs,

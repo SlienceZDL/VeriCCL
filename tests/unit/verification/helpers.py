@@ -2,6 +2,7 @@ from dataclasses import replace
 
 from vericcl.input.models import ForbiddenTransfer
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import (
     CollectiveKind,
     required_outputs,
@@ -87,9 +88,9 @@ def forbidden_shared_transfer_inputs():
 
 def duplicate_reduction_schedule():
     schedule = two_rank_allreduce_schedule()
-    reduce_stage = PathStage(0, "REDUCE", (Symbol(1, 0, 0.0),))
-    send_stage = PathStage(1, "SEND", (Symbol(0, 1, 1.0),))
-    duplicate_stage = PathStage(2, "REDUCE", (Symbol(1, 0, 2.0),))
+    reduce_stage = PathStage(0, "REDUCE", (symbolic_step(1, 0, 0.0),))
+    send_stage = PathStage(1, "SEND", (symbolic_step(0, 1, 1.0),))
+    duplicate_stage = PathStage(2, "REDUCE", (symbolic_step(1, 0, 2.0),))
     duplicate = Transfer(
         transfer_id="duplicate-reduce",
         kind="REDUCE",
@@ -99,14 +100,14 @@ def duplicate_reduction_schedule():
         stage_id=2,
         member_slice_ids=frozenset({0, 1}),
         atoms=(
-            Atom(
+            Atom.build(
                 0,
                 1024,
                 (send_stage, duplicate_stage),
                 2.0,
                 3.0,
             ),
-            Atom(
+            Atom.build(
                 1,
                 1024,
                 (reduce_stage, send_stage, duplicate_stage),
@@ -133,14 +134,14 @@ def inactive_reuse_schedule():
     transfers = []
     for dst_rank in (1, 2):
         transfer_id = "incomplete-send-{}".format(dst_rank)
-        atom = Atom(
+        atom = Atom.build(
             slice_id=0,
             slice_size_bytes=1024,
             path=(
                 PathStage(
                     0,
                     "SEND",
-                    (Symbol(0, dst_rank, 0.0),),
+                    (symbolic_step(0, dst_rank, 0.0),),
                 ),
             ),
             st_time=0.0,
@@ -192,7 +193,7 @@ def reduce_scatter_schedule():
         stage = PathStage(
             0,
             "REDUCE",
-            (Symbol(src_rank, dst_rank, 0.0),),
+            (symbolic_step(src_rank, dst_rank, 0.0),),
         )
         transfers.append(
             Transfer(
@@ -203,7 +204,7 @@ def reduce_scatter_schedule():
                 channel=0,
                 stage_id=0,
                 member_slice_ids=frozenset({member}),
-                atoms=(Atom(member, 1024, (stage,), 0.0, 1.0),),
+                atoms=(Atom.build(member, 1024, (stage,), 0.0, 1.0),),
                 st_time=0.0,
                 ed_time=1.0,
                 predecessor_ids=frozenset(),
@@ -257,7 +258,7 @@ def interleaved_concurrent_reduce_schedule():
         stage = PathStage(
             0,
             "REDUCE",
-            (Symbol(src_rank, 0, 0.0),),
+            (symbolic_step(src_rank, 0, 0.0),),
         )
         transfers.append(
             Transfer(
@@ -268,7 +269,7 @@ def interleaved_concurrent_reduce_schedule():
                 channel=channel,
                 stage_id=0,
                 member_slice_ids=frozenset({member}),
-                atoms=(Atom(member, 1024, (stage,), 0.0, 1.0),),
+                atoms=(Atom.build(member, 1024, (stage,), 0.0, 1.0),),
                 st_time=0.0,
                 ed_time=1.0,
                 predecessor_ids=frozenset(),

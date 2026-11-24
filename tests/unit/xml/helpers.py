@@ -3,6 +3,7 @@ from pathlib import Path
 
 from vericcl.input.loader import resolve_inputs
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import (
     CollectiveKind,
     CollectiveSpec,
@@ -79,7 +80,7 @@ def final_schedule(kind, *, ranks=2, slices=2, inplace=False, root=0):
 
 
 def _atom(slice_id, size, path, st_time, ed_time):
-    return Atom(
+    return Atom.build(
         slice_id=slice_id,
         slice_size_bytes=size,
         path=tuple(path),
@@ -133,12 +134,12 @@ def reduce_chain_schedule(*, slices=1, overlap=False):
         first_stage = PathStage(
             0,
             "REDUCE",
-            (Symbol(2, 1, first_start),),
+            (symbolic_step(2, 1, first_start),),
         )
         second_stage = PathStage(
             1,
             "REDUCE",
-            (Symbol(1, 0, second_start),),
+            (symbolic_step(1, 0, second_start),),
         )
         transfers.append(
             _transfer(
@@ -166,7 +167,7 @@ def reduce_chain_schedule(*, slices=1, overlap=False):
                         PathStage(
                             1,
                             "REDUCE",
-                            (Symbol(1, 0, second_start),),
+                            (symbolic_step(1, 0, second_start),),
                         ),
                     ),
                     member_rank_2: (first_stage, second_stage),
@@ -217,7 +218,7 @@ def concurrent_reduce_star_schedule():
         stage = PathStage(
             0,
             "REDUCE",
-            (Symbol(source, 0, 0.0),),
+            (symbolic_step(source, 0, 0.0),),
         )
         transfers.append(
             _transfer(
@@ -265,12 +266,12 @@ def send_relay_schedule():
     first_stage = PathStage(
         0,
         "SEND",
-        (Symbol(0, 1, 0.0),),
+        (symbolic_step(0, 1, 0.0),),
     )
     relay_stage = PathStage(
         0,
         "SEND",
-        (Symbol(0, 1, 0.0), Symbol(1, 2, 1.0)),
+        (symbolic_step(0, 1, 0.0), symbolic_step(1, 2, 1.0)),
     )
     first = _transfer(
         "relay-first",
@@ -339,7 +340,7 @@ def two_send_same_lane_schedule():
         stage = PathStage(
             0,
             "SEND",
-            (Symbol(0, 1, start),),
+            (symbolic_step(0, 1, start),),
         )
         transfers.append(
             _transfer(
@@ -398,12 +399,12 @@ def two_rank_allreduce_schedule():
     reduce_stage = PathStage(
         0,
         "REDUCE",
-        (Symbol(1, 0, 0.0),),
+        (symbolic_step(1, 0, 0.0),),
     )
     send_stage = PathStage(
         1,
         "SEND",
-        (Symbol(0, 1, 1.0),),
+        (symbolic_step(0, 1, 1.0),),
     )
     reduce_id = "allreduce-reduce"
     send_id = "allreduce-send"
@@ -476,7 +477,7 @@ def two_rank_allgather_schedule():
         stage = PathStage(
             0,
             "SEND",
-            (Symbol(source, destination, 0.0),),
+            (symbolic_step(source, destination, 0.0),),
         )
         transfers.append(
             _transfer(
@@ -542,7 +543,7 @@ def allreduce_star_schedule():
             send_stage = PathStage(
                 1,
                 "SEND",
-                (Symbol(0, destination, 1.0),),
+                (symbolic_step(0, destination, 1.0),),
             )
             if member == 0:
                 paths[member] = (send_stage,)
@@ -551,7 +552,7 @@ def allreduce_star_schedule():
                     PathStage(
                         0,
                         "REDUCE",
-                        (Symbol(member, 0, 0.0),),
+                        (symbolic_step(member, 0, 0.0),),
                     ),
                     send_stage,
                 )
@@ -614,7 +615,7 @@ def inplace_alltoall_overwrite_schedule():
         (1,),
         {
             1: (
-                PathStage(0, "SEND", (Symbol(0, 1, 0.0),)),
+                PathStage(0, "SEND", (symbolic_step(0, 1, 0.0),)),
             )
         },
         0.0,
@@ -629,7 +630,7 @@ def inplace_alltoall_overwrite_schedule():
         (2,),
         {
             2: (
-                PathStage(0, "SEND", (Symbol(1, 0, 0.0),)),
+                PathStage(0, "SEND", (symbolic_step(1, 0, 0.0),)),
             )
         },
         0.0,

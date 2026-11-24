@@ -1,4 +1,5 @@
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.topology.model import (
     DirectedLink,
     LinkKey,
@@ -68,9 +69,9 @@ def transfer(
     prior_symbols=(),
 ):
     symbols = tuple(prior_symbols) + (
-        Symbol(src_rank, dst_rank, st_time),
+        symbolic_step(src_rank, dst_rank, st_time),
     )
-    atom = Atom(
+    atom = Atom.build(
         slice_id=slice_id,
         slice_size_bytes=1024,
         path=(PathStage(0, kind, symbols),),
@@ -170,6 +171,6 @@ def relay_schedule():
         predecessors=("relay-first",),
         st_time=1.0,
         ed_time=2.0,
-        prior_symbols=(Symbol(0, 1, 0.0),),
+        prior_symbols=(symbolic_step(0, 1, 0.0),),
     )
     return schedule("relay", 3, 1, (first, second))

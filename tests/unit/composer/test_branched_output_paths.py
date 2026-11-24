@@ -4,6 +4,7 @@ import pytest
 from vericcl.composer.compose import _compose_schedules
 from vericcl.planner.model import PlanDAG, PlanEdge, PlanNode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 from vericcl.topology.model import LinkKey
 from tests.unit.composer.helpers import reduce_spec
@@ -25,7 +26,7 @@ def test_branched_reduction_passes_complete_paths_to_distribution(child_id, arri
 
     def transfer(name, stage, source, target, paths, start, predecessors=()):
         kind = 'REDUCE' if stage == 0 else 'SEND'
-        atoms = tuple(Atom(member, 1024, (PathStage(stage, kind, tuple(Symbol(*edge) for edge in path)),),
+        atoms = tuple(Atom.build(member, 1024, (PathStage(stage, kind, tuple(symbolic_step(*edge) for edge in path)),),
                            start, start + 1) for member, path in sorted(paths.items()))
         return Transfer(name, kind, source, target, 0, stage, frozenset(paths), atoms,
                         start, start + 1, frozenset(predecessors))

@@ -15,13 +15,12 @@ def test_cli_solve_inspect_and_verify_use_one_case_contract(tmp_path, capsys):
     request(tmp_path)
     assert main(arguments(tmp_path, 'solve', 'cli')) == 0
     root = tmp_path / 'examples/cli/output/r'
-    metadata = json.loads((root / 'run.json').read_text())
-    summary = metadata['result']
+    summary = json.loads((root / 'run-summary.json').read_text())
     assert summary['contract_met'] and summary['stop_reason'] == 'maximum_rounds'
-    invocation = metadata['invocation']
+    invocation = json.loads((root / 'invocation.json').read_text())
     assert invocation['argv'][1:] == ['-m', 'vericcl', *arguments(tmp_path, 'solve', 'cli')]
     assert main(['inspect', '--run', str(root)]) == 0
-    accepted = metadata['best']
+    accepted = json.loads((root / 'best/accepted.json').read_text())
     candidate = accepted['candidate']
     args = arguments(tmp_path, 'verify', 'check') + ['--xml', str(root / candidate['xml']),
                                                   '--sidecar', str(root / candidate['sidecar'])]
@@ -41,5 +40,5 @@ def test_cli_override_keeps_original_snapshot_and_records_effective_default(tmp_
     args = arguments(tmp_path, 'solve', 'override') + ['--set', 'sketch.collective.root=1']
     assert main(args) == 0  # root was omitted in the raw request
     root = tmp_path / 'examples/override/output/r'
-    assert 'root' not in json.loads((root / 'process/input_snapshot/sketch.json').read_text())['collective']
-    assert json.loads((root / 'run.json').read_text())['effective_request']['sketch']['collective']['root'] == 1
+    assert 'root' not in json.loads((root / 'input_snapshot/sketch.json').read_text())['collective']
+    assert json.loads((root / 'effective-request.json').read_text())['sketch']['collective']['root'] == 1

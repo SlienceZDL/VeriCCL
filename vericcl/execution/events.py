@@ -48,17 +48,14 @@ def emit_event(context, kind: str, data=None, *, rank=None) -> dict:
         encoded = (json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
         prefix = "" if rank is None else "rank-" + str(rank) + "."
         text = "{time_utc} {kind} {data}\n".format(**event).encode("utf-8")
+        # One unbuffered append per record keeps the log live for `inspect` and
+        # whole lines for readers; it is not fsynced per event (read_events
+        # tolerates a torn tail and finalization makes events.jsonl durable).
         try:
-            # events.jsonl is the authoritative, durable record used by resume.
-            # run.log is its human-readable mirror: written and flushed for
-            # every event, but not fsynced (it is never read for recovery).
-            for name, content, durable in ((prefix + "events.jsonl", encoded, True), (prefix + "run.log", text, False)):
+            for name, content in ((prefix + "events.jsonl", encoded), (prefix + "run.log", text)):
                 path = context.artifact(name)
-                with path.open("ab") as stream:
+                with path.open("ab", buffering=0) as stream:
                     stream.write(content)
-                    stream.flush()
-                    if durable:
-                        os.fsync(stream.fileno())
         except OSError as error:
             context.fail_storage(error)
         return event

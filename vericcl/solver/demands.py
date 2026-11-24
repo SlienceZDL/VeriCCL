@@ -32,6 +32,8 @@ def _identifier(value: object, field: str) -> str:
 
 
 def _integer(value: object, field: str, minimum: int = 0) -> int:
+    if type(value) is int and value >= minimum:  # hot path; bool is excluded by type
+        return value
     if isinstance(value, bool) or not isinstance(value, int):
         raise SemanticError("{} must be an integer".format(field))
     if value < minimum:
@@ -348,6 +350,10 @@ def _forbidden_virtual_edges(
     return frozenset(edges)
 
 
+_PATH_CACHE = {}
+_PATH_CACHE_LIMIT = 65536
+
+
 def _candidate_paths(
     *,
     node: PlanNode,
@@ -366,6 +372,22 @@ def _candidate_paths(
         reduction_dual,
     )
     links = viable_path_links(links, root, leaf)
+    # The ranked path search reads only these values (edge costs come from
+    # the topology's link curves at the slice size); plan nodes, plans and
+    # channel variants repeat the same searches many times.
+    key = (id(topology), inputs.hyperparameters.slice_size_bytes, reduction_dual, links, root, leaf,
+           bool(inputs.strategies.shortest_paths))
+    cached = _PATH_CACHE.get(key)
+    if cached is not None and cached[0] is topology:
+        return cached[1]
+    result = _search_candidate_paths(inputs, topology, links, root, leaf, reduction_dual)
+    if len(_PATH_CACHE) >= _PATH_CACHE_LIMIT:
+        _PATH_CACHE.clear()
+    _PATH_CACHE[key] = (topology, result)
+    return result
+
+
+def _search_candidate_paths(inputs, topology, links, root, leaf, reduction_dual):
 
     def edge_cost(src: int, dst: int) -> float:
         physical = LinkKey(dst, src) if reduction_dual else LinkKey(src, dst)

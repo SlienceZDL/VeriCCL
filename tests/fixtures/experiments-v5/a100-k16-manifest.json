@@ -1,0 +1,102 @@
+{
+ "atom": "tests/fixtures/experiments-v5/atom.json",
+ "cases": [
+  {
+   "collective_label": "ag",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ag-4m.json",
+   "size_label": "4m",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ag-4m.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ag",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ag-16m.json",
+   "size_label": "16m",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ag-16m.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ag",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ag-64m.json",
+   "size_label": "64m",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ag-64m.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ag",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ag-256m.json",
+   "size_label": "256m",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ag-256m.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ag",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ag-1g.json",
+   "size_label": "1g",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ag-1g.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ag",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ag-2g.json",
+   "size_label": "2g",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ag-2g.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ar",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ar-4m.json",
+   "size_label": "4m",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ar-4m.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ar",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ar-16m.json",
+   "size_label": "16m",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ar-16m.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ar",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ar-64m.json",
+   "size_label": "64m",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ar-64m.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ar",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ar-256m.json",
+   "size_label": "256m",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ar-256m.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ar",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ar-1g.json",
+   "size_label": "1g",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ar-1g.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  },
+  {
+   "collective_label": "ar",
+   "runtime": "tests/fixtures/experiments-v5/runtime/a100-n2g8/ar-2g.json",
+   "size_label": "2g",
+   "sketch": "tests/fixtures/experiments-v5/sketch/a100-n2g8/ar-2g.json",
+   "topology": "tests/fixtures/experiments-v5/topology/a100-n2g8.json",
+   "topology_name": "a100-n2g8"
+  }
+ ],
+ "schema_version": 2
+}

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import struct
 from typing import Iterable, Optional, Tuple
@@ -256,8 +256,7 @@ def parse_trace(path: Path, sidecar: TraceSidecar) -> Tuple[StepTraceRecord, ...
     if len(data) != expected_size:
         raise SemanticError("trace file length does not match its header")
 
-    result = []
-    identities = set()
+    raws = []
     for index in range(count):
         raw = _decode_record(data, header_size + index * record_size)
         if raw.rank != rank:
@@ -269,16 +268,11 @@ def parse_trace(path: Path, sidecar: TraceSidecar) -> Tuple[StepTraceRecord, ...
             raise SemanticError("trace peer differs from sidecar")
         if raw.channel != metadata.runtime_channel:
             raise SemanticError("trace channel differs from sidecar")
-        identity = (
-            raw.rank,
-            raw.tb_id,
-            raw.step_index,
-            raw.iteration,
-        )
-        if identity in identities:
-            raise SemanticError("trace contains a duplicate step record")
-        identities.add(identity)
-        result.append(StepTraceRecord(raw, metadata))
+        raws.append(raw)
+    merged, passes = merge_passes(raws)
+    if len(set(passes.values())) > 1:
+        raise SemanticError("trace step pass counts differ within one invocation")
+    result = [StepTraceRecord(raw, sidecar.entry(raw.rank, raw.tb_id, raw.step_index)) for raw in merged.values()]
     expected_steps = {
         (entry.tb_id, entry.step_index)
         for entry in sidecar.entries.values()
@@ -296,6 +290,29 @@ def parse_trace(path: Path, sidecar: TraceSidecar) -> Tuple[StepTraceRecord, ...
         if actual_steps != expected_steps:
             raise SemanticError("trace iteration is incomplete for its sidecar")
     return tuple(result)
+
+
+def merge_passes(raws):
+    """One record per (tb, step, invocation) from the interpreter's passes.
+
+    For messages larger than one pass of the program (nchunksperloop pieces
+    of NCCL_BUFFSIZE-bounded chunks), the MSCCL interpreter executes every
+    step once per pass within the same invocation, and the trace holds one
+    record per pass. A step's activity in the invocation spans its first
+    arrival to its last completion. Returns (merged records, pass counts).
+    """
+    groups = {}
+    for raw in raws:
+        groups.setdefault((raw.tb_id, raw.step_index, raw.iteration), []).append(raw)
+    merged = {}
+    for key, group in groups.items():
+        first = min(group, key=lambda item: item.tb_reach)
+        merged[key] = replace(first,
+            tb_reach=min(item.tb_reach for item in group),
+            dependency_done=min(item.dependency_done for item in group),
+            transfer_start=min(item.transfer_start for item in group),
+            transfer_end=max(item.transfer_end for item in group))
+    return merged, {key: len(group) for key, group in groups.items()}
 
 
 @dataclass(frozen=True)
@@ -320,22 +337,26 @@ def parse_partial_trace(path: Path, sidecar: TraceSidecar, *, expected_rank: int
     issues = []
     if overflow:
         issues.append(dict(rank=rank, reason='trace_overflow'))
-    records, duplicates = {}, set()
+    raws = []
     for index in range(count):
         try:
             raw = _decode_record(data, header_size + index * record_size)
             if raw.rank != rank:
                 raise SemanticError('record rank differs from header')
-            record = StepTraceRecord(raw, sidecar.entry(rank, raw.tb_id, raw.step_index))
-            key = (raw.tb_id, raw.step_index, raw.iteration)
-            if key in records:
-                duplicates.add(key)
-            records[key] = record
+            StepTraceRecord(raw, sidecar.entry(rank, raw.tb_id, raw.step_index))
+            raws.append(raw)
         except SemanticError as error:
             issues.append(dict(rank=rank, record_index=index, reason=str(error)))
-    for key in duplicates:
-        records.pop(key)
-        issues.append(dict(rank=rank, step=key[:2], iteration=key[2], reason='duplicate_step'))
+    merged, passes = merge_passes(raws)
+    if len(set(passes.values())) > 1:
+        # Every step runs once per pass; unequal counts mean lost records.
+        expected_passes = max(passes.values())
+        for key, value in sorted(passes.items()):
+            if value != expected_passes:
+                issues.append(dict(rank=rank, step=key[:2], iteration=key[2], reason='incomplete_passes',
+                                   passes=value, expected_passes=expected_passes))
+    records = {key: StepTraceRecord(raw, sidecar.entry(rank, raw.tb_id, raw.step_index))
+               for key, raw in merged.items() if passes[key] == max(passes.values())}
     expected = {(entry.tb_id, entry.step_index) for entry in sidecar.entries.values() if entry.rank == rank}
     actual = {(record.tb_id, record.step_index) for record in records.values()}
     missing = tuple(sorted(expected - actual))

@@ -5,6 +5,7 @@ import pytest
 from vericcl.topology.model import LaneKey
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import PathStage, Symbol
+from vericcl.semantics.atom import symbolic_step
 from vericcl.verification.bdd_backend import (
     BDDAnalysisResult,
     BDDBackendError,
@@ -178,7 +179,7 @@ def test_compatible_route_without_idle_window_is_removed_by_bdd_intersection():
         1,
         2,
         0,
-        {1: (PathStage(0, "SEND", (Symbol(1, 2, 0.0),)),)},
+        {1: (PathStage(0, "SEND", (symbolic_step(1, 2, 0.0),)),)},
         1.0,
         5.0,
     )
@@ -207,7 +208,7 @@ def test_compatible_route_without_idle_window_is_removed_by_bdd_intersection():
 def test_root_ready_delay_is_reported_when_alternative_flow_can_start_earlier():
     schedule = crossing_flows_with_ready_wait()
     first = schedule.transfers[0]
-    delayed_atom = replace(first.atoms[0], st_time=2.0, ed_time=3.0)
+    delayed_atom = first.atoms[0].with_times(2.0, 3.0)
     delayed = replace(
         first,
         atoms=(delayed_atom,),

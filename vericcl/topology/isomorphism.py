@@ -115,18 +115,14 @@ def _canonical_colored_graph(vertex_colors: tuple, edges: tuple, *, automorphism
             relative = {
                 vertex: index for index, vertex in enumerate(order)
             }
-            return canonical_json(
-                {
-                    "colors": [vertex_colors[vertex] for vertex in order],
-                    "edges": sorted(
-                        (
-                            relative[src],
-                            relative[dst],
-                            label,
-                        )
-                        for src, dst, label in edges
-                    ),
-                }
+            # Plain tuples compare exactly like their canonical JSON (same
+            # fields, same order) at a fraction of the serialization cost.
+            return (
+                tuple(vertex_colors[vertex] for vertex in order),
+                tuple(sorted(
+                    (relative[src], relative[dst], label)
+                    for src, dst, label in edges
+                )),
             )
         _, _, vertices = min(ambiguous)
         candidates = []
@@ -152,7 +148,8 @@ def _canonical_colored_graph(vertex_colors: tuple, edges: tuple, *, automorphism
             candidates.append(search(tuple(individualized), stabilizers))
         return min(candidates)
 
-    return sha256_json(search(initial, automorphisms))
+    colors, ordered_edges = search(initial, automorphisms)
+    return sha256_json(canonical_json({"colors": list(colors), "edges": [list(edge) for edge in ordered_edges]}))
 
 
 def _resource_incidence_signature(
@@ -290,9 +287,57 @@ def _resource_incidence_signature(
     return _canonical_colored_graph(tuple(vertex_colors), tuple(edges), automorphisms=automorphisms)
 
 
+_FINGERPRINTS = {}
+_SIGNATURES = {}
+_SIGNATURE_CACHE_LIMIT = 4096
+
+
+def topology_fingerprint(topology: Topology) -> str:
+    """Content hash of everything exact_domain_signature reads."""
+    cached = _FINGERPRINTS.get(id(topology))
+    if cached is not None and cached[0] is topology:
+        return cached[1]
+    value = sha256_json({
+        "ranks": topology.rank_count,
+        "membership": sorted(topology.node_membership.items()),
+        "gateways": sorted(topology.gateways),
+        "links": sorted(
+            (key.src_rank, key.dst_rank, edge.max_channels, _performance(edge.performance), sorted(edge.resource_ids))
+            for key, edge in topology.links.items()),
+        "resources": sorted(
+            (name, resource.max_channels, _performance(resource.performance),
+             sorted((m.src_rank, m.dst_rank) for m in resource.member_links))
+            for name, resource in topology.shared_resources.items()),
+    })
+    if len(_FINGERPRINTS) > _SIGNATURE_CACHE_LIMIT:
+        _FINGERPRINTS.clear()
+    _FINGERPRINTS[id(topology)] = (topology, value)
+    return value
+
+
 def exact_domain_signature(topology: Topology, ranks: tuple) -> str:
+    """Exact signature, memoized process-wide by topology content and group."""
     if not isinstance(topology, Topology):
         raise SemanticError("topology must be a Topology")
+    key = (topology_fingerprint(topology), _domain(topology, ranks), _MAX_CANONICAL_STATES)
+    if key in _SIGNATURES:
+        result = _SIGNATURES[key]
+        if isinstance(result, SemanticError):
+            raise result
+        return result
+    try:
+        result = _exact_domain_signature(topology, ranks)
+    except SemanticError as error:
+        result = error
+    if len(_SIGNATURES) > _SIGNATURE_CACHE_LIMIT:
+        _SIGNATURES.clear()
+    _SIGNATURES[key] = result
+    if isinstance(result, SemanticError):
+        raise result
+    return result
+
+
+def _exact_domain_signature(topology: Topology, ranks: tuple) -> str:
     domain = _domain(topology, ranks)
     relative_rank = {rank: index for index, rank in enumerate(domain)}
     domain_set = set(domain)

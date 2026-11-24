@@ -1,6 +1,6 @@
 """Collective semantics and immutable schedule state."""
 
-from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import Atom, PathDAG, PathStage, Schedule, SliceVec, Symbol, TimeVec, Transfer, symbolic_step
 from vericcl.semantics.checker import check_final_states
 from vericcl.semantics.collective import (
     CollectiveKind,
@@ -21,7 +21,7 @@ from vericcl.semantics.state import (
 __all__ = [
     "DataRange", "ConstraintSet", "bind_constraints", "BufferRegion", "StateVersion", "VersionLedger",
     "OutputBinding", "VersionOperation", "VersionSchedule",
-    "Atom",
+    "Atom", "PathDAG", "SliceVec", "TimeVec", "symbolic_step",
     "CollectiveKind",
     "CollectiveSpec",
     "OutputSlot",

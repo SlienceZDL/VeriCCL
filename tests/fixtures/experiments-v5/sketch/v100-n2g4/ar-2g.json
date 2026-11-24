@@ -1,0 +1,67 @@
+{
+ "budgets": {
+  "cleanup_reserve_s": 2,
+  "max_initial_synthesis_s": 10800,
+  "max_offline_validation_per_round_s": 10800,
+  "max_offline_validation_total_s": 10800,
+  "max_online_validation_per_round_s": 10800,
+  "max_online_validation_total_s": 10800,
+  "max_repair_per_round_s": 10800,
+  "max_repair_total_s": 10800,
+  "max_tuning_rounds": 20
+ },
+ "calibration": {
+  "enabled": true,
+  "job_timeout_s": 1200,
+  "max_relative_fit_error": 0.1
+ },
+ "collective": {
+  "datatype": "float32",
+  "inplace": true,
+  "operator": "allreduce",
+  "reduction_op": "sum"
+ },
+ "hyperparameters": {
+  "slice_size_bytes": 16777216,
+  "total_size_bytes": 2147483648
+ },
+ "solver": {
+  "backend": "scip",
+  "channel_candidates": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16
+  ],
+  "cpu_budget": 48,
+  "max_channels": 16,
+  "max_parallel_models": 4,
+  "max_threads_per_model": 12,
+  "mip_gap": 0.0001,
+  "per_model_timeout_s": 1800,
+  "require_proven_optimal": false,
+  "solver_seed": 0
+ },
+ "tolerances": {
+  "absolute": 1e-05,
+  "relative": 1e-05
+ },
+ "trace_and_measure": {
+  "enabled": true,
+  "job_timeout_s": 1200,
+  "min_relative_gain": 0.01,
+  "trace_capacity_bytes": 3538984
+ }
+}

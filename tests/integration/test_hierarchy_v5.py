@@ -90,7 +90,7 @@ def test_fine_phase_uses_joint_route_and_timing_models(tmp_path):
     from vericcl.execution.budget import StandaloneLease
     from vericcl.planner.group_search import HierarchyContext, plan_hierarchy
     inputs, topology = setup(tmp_path, 'broadcast', 2, stages=1)
-    stream = plan_hierarchy(inputs, topology, None, HierarchyContext(StandaloneLease.after(20)))
+    stream = plan_hierarchy(inputs, topology, None, HierarchyContext(StandaloneLease.after(20), fine_when_proven=True))
     candidates = list(stream)
     assert any(candidate.stage == 'fine' for candidate in candidates)
     assert stream.fine_model_calls > 0
@@ -116,14 +116,65 @@ def test_hierarchical_coarse_and_fine_schedules_preserve_full_semantics(tmp_path
     from vericcl.planner.group_search import HierarchyContext, plan_hierarchy
     from vericcl.verification.semantics import check_semantics
     inputs, topology = setup(tmp_path, operator, stages=4 if operator == 'allreduce' else 3)
-    stream = plan_hierarchy(inputs, topology, None, HierarchyContext(StandaloneLease.after(40), coarse_batch_size=1))
-    iterator = iter(stream)
-    candidates = list(itertools.islice(iterator, 2))
-    iterator.close()
-    assert {candidate.stage for candidate in candidates} == {'coarse', 'fine'}
-    for candidate in candidates:
+    stream = plan_hierarchy(inputs, topology, None, HierarchyContext(StandaloneLease.after(40), fine_when_proven=True))
+    candidates = list(stream)
+    assert candidates and any(candidate.stage == 'fine' for candidate in candidates)
+    assert stream.coarse_candidates and all(item.stage == 'coarse' for item in stream.coarse_candidates)
+    for candidate in candidates + stream.coarse_candidates[:1]:
         checked = check_semantics(candidate.schedule, inputs)
         assert checked.status.value == 'valid', (checked.code, checked.message, checked.evidence)
+
+
+def test_stream_fine_solves_only_the_best_coarse_plans(tmp_path):
+    # SyCCL's filter: every plan is coarse-solved first; only plans within
+    # FINE_TIME_DIFF of the best (at most FINE_MAX_PLANS) are fine-solved
+    # and leave the stream.
+    from vericcl.execution.budget import StandaloneLease
+    from vericcl.planner.group_search import (FINE_MAX_PLANS, FINE_TIME_DIFF,
+                                              HierarchyContext, plan_hierarchy, plan_identity)
+    inputs, topology = setup(tmp_path, 'allgather', stages=3)
+    stream = plan_hierarchy(inputs, topology, None, HierarchyContext(StandaloneLease.after(60)))
+    candidates = list(stream)
+    assert stream.stop_reason == 'initial_grammar_exhausted'
+    best = min(item.communication_time_us for item in stream.coarse_candidates)
+    assert 1 <= len(candidates) <= FINE_MAX_PLANS + 1
+    chosen = {plan_identity(item.plan) for item in candidates}
+    assert chosen <= {plan_identity(item.plan) for item in stream.coarse_candidates
+                      if item.communication_time_us <= best * (1 + FINE_TIME_DIFF)}
+
+
+def test_rank_callback_orders_plans_and_picks_the_better_of_fine_and_coarse(tmp_path):
+    # With a rank (the workflow passes T_pred), selection follows it rather
+    # than the composer estimate, and each selected plan yields whichever of
+    # its fine/coarse schedules ranks better.
+    from vericcl.execution.budget import StandaloneLease
+    from vericcl.planner.group_search import HierarchyContext, plan_hierarchy, plan_identity
+    inputs, topology = setup(tmp_path, 'allgather', stages=3)
+    probe = plan_hierarchy(inputs, topology, None, HierarchyContext(StandaloneLease.after(60)))
+    list(probe)
+    by_estimate = sorted(probe.coarse_candidates, key=lambda item: item.communication_time_us)
+    worst = plan_identity(by_estimate[-1].plan)
+    scores = {}
+    def rank(item):
+        # Invert the composer's order: the worst-estimated plan ranks best.
+        value = 1.0 if plan_identity(item.plan) == worst else 100.0 + item.communication_time_us
+        scores[id(item)] = value
+        return value
+    stream = plan_hierarchy(inputs, topology, None, HierarchyContext(StandaloneLease.after(60), rank=rank))
+    candidates = list(stream)
+    assert plan_identity(candidates[0].plan) == worst
+    assert all(scores[id(item)] <= 100.0 + max(c.communication_time_us for c in stream.coarse_candidates)
+               for item in candidates if id(item) in scores)
+
+
+def test_route_patterns_are_reused_across_plans(tmp_path):
+    from vericcl.execution.budget import StandaloneLease
+    from vericcl.planner.group_search import HierarchyContext, plan_hierarchy
+    inputs, topology = setup(tmp_path, 'allgather', stages=3)
+    shared = plan_hierarchy(inputs, topology, None, HierarchyContext(StandaloneLease.after(60)))
+    list(shared)
+    if len(shared.coarse_candidates) > 1:
+        assert shared.library_hits > 0
 
 
 def test_current_model_changes_representative_link_costs_without_changing_structure(tmp_path):

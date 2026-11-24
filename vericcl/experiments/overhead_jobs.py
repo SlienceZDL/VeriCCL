@@ -1,17 +1,29 @@
-"""Bounded repair and GPU overhead experiments with raw evidence retention."""
+"""Bounded v5 repair micro benchmarks and online overhead runs with raw evidence.
+
+``repair``      micro-benchmarks one v5 repair type on a built-in 3-rank case:
+                ``correctness`` (type 1), ``reallocation`` (type 2, cross-path
+                slice re-division), ``bottleneck`` (type 3, scheduling
+                bottleneck) or ``strategy`` (``solve_repair`` path strategy).
+``calibration`` one instrumented v5 ``purpose='calibrate'`` run (GPU probes).
+``online``      one instrumented v5 ``purpose='verify'`` run of an admitted
+                XML + sidecar with ``trace_and_measure`` enabled (GPU trace).
+``clock``       one raw clock-sync launch on the V100 experiment hosts.
+"""
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
-import importlib
+from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
 import statistics
+import tempfile
+import time
 
 from vericcl.experiments.overhead import (
-    PhaseTimer, digest, environment, instrument, json_value,
-    input_identity, outcome_summary, registrations, select_backend, write_json,
+    PhaseTimer, TimerSwitch, add_request_arguments, bundle_summary, digest, environment,
+    has_request, instrument, json_value, measure_primary, parse_overrides, registrations,
+    repeated, request_files, write_json,
 )
 
 
@@ -63,103 +75,233 @@ class LoggingExecutor:
         return result
 
 
-def micro_case(name):
-    """Small full-collective regressions; these are not GPU workloads."""
-    from vericcl.semantics.collective import CollectiveKind
-    from vericcl.topology.model import LaneKey
-    from vericcl.verification.bdd_flow import FlowReplacementHint
-    from vericcl.verification.flow_index import build_flow_index
-    from tests.unit.verification.helpers import inputs, topology
-    from tests.unit.xml.helpers import two_rank_allreduce_schedule, two_send_same_lane_schedule
+# ---------------------------------------------------------------------------
+# repair micro benchmarks
 
-    def retime(transfer, start, end):
-        return replace(transfer, st_time=start, ed_time=end, atoms=tuple(
-            replace(atom, st_time=start, ed_time=end) for atom in transfer.atoms))
+REPAIR_METHODS = ("correctness", "reallocation", "bottleneck", "strategy")
+MICRO_RANKS = 3
+SLOW_LINK = (0, 1)
 
-    if name == "allreduce":
-        schedule = two_rank_allreduce_schedule()
-        schedule = replace(schedule, transfers=(schedule.transfers[0],
-                           retime(schedule.transfers[1], 8.0, 9.0)))
-        data, transfer_id, path = inputs(), "allreduce-reduce", (1, 0)
-    elif name == "broadcast":
-        schedule = two_send_same_lane_schedule()
-        first, second = schedule.transfers
-        atom = second.atoms[0]
-        stage = atom.path[0]
-        second = replace(second, atoms=(replace(atom, path=(replace(stage,
-            symbols=(replace(stage.symbols[0], ready_time=0.0),)),)),))
-        schedule = replace(schedule, transfers=(retime(first, 0.0, 3.0),
-                                                retime(second, 3.0, 4.0)))
-        data = inputs(CollectiveKind.BROADCAST, slices=2)
-        transfer_id, path = second.transfer_id, (0, 1)
+
+def micro_documents(*, channels=1, model_timeout_s=5.0):
+    """Test-only 3-rank broadcast, 4 slices; also the tests/scip repair fixture."""
+    ranks = MICRO_RANKS
+    return {
+        "topology": {"name": "overhead-micro", "ranks": ranks,
+                     "nodes": [{"id": 0, "ranks": list(range(ranks))}],
+                     "directed_links": [{"src": a, "dst": b, "alpha_us": 1.0, "beta_us_per_byte": 0.01}
+                                        for a in range(ranks) for b in range(ranks) if a != b]},
+        "sketch": {
+            "collective": {"operator": "broadcast"},
+            "hyperparameters": {"total_size_bytes": 4096, "slice_size_bytes": 1024},
+            "solver": {"per_model_timeout_s": model_timeout_s, "cpu_budget": 2, "max_channels": channels},
+            "budgets": {"max_initial_synthesis_s": 10, "max_offline_validation_per_round_s": 5,
+                        "max_offline_validation_total_s": 20, "max_repair_per_round_s": 5,
+                        "max_repair_total_s": 20, "max_tuning_rounds": 2, "cleanup_reserve_s": 0.5},
+            "tolerances": {"absolute": 1e-5, "relative": 1e-5},
+            "calibration": {"enabled": False},
+        },
+        "atom": {"synthesis_method": "constructive_trees"},
+        "runtime": {"rank_map": [{"rank": r, "host": "worker-a", "device": r} for r in range(ranks)],
+                    "environment": {"NCCL_BUFFSIZE": "16777216"},
+                    "scratch_bytes_per_rank": 16777216},
+    }
+
+
+def micro_cost_model(topology):
+    """Link 0->1 is ten times slower than every other link."""
+    from vericcl.performance.model import CostModel, ServiceCost
+    services, resources = {}, {}
+    for key in topology.links:
+        beta = .1 if (key.src_rank, key.dst_rank) == SLOW_LINK else .01
+        suffix = "%d:%d" % (key.src_rank, key.dst_rank)
+        services["link:" + suffix] = (ServiceCost(1, beta),)
+        services["rrc:" + suffix] = (ServiceCost(1.5, beta),)
+        resources["link:" + suffix] = 1 / beta
+    for rank in range(MICRO_RANKS):
+        services["copy:%d" % rank] = (ServiceCost(.1, .001),)
+        services["reduce:%d" % rank] = (ServiceCost(.2, .002),)
+    return CostModel("overhead-micro", services, resources)
+
+
+def micro_operations(*, relayed=None, missing=()):
+    """Root 0 sends slices 0..3 to ranks 1 and 2.
+
+    With ``relayed`` (two-flow form) slices in it reach rank 1 through 0->2->1.
+    Operations named in ``missing`` are omitted (a correctness violation).
+    """
+    from vericcl.xml.v5_model import NetworkOperation
+    participants = tuple(range(MICRO_RANKS))
+    operations = []
+    for s in range(4):
+        contributors = frozenset({s})
+        if relayed is None:
+            for dst in (1, 2):
+                operations.append(NetworkOperation("slice%d-to%d" % (s, dst), "send", 0, dst, 0, 0,
+                    contributors, contributors, participants, frozenset(), frozenset(), float(s)))
+            continue
+        operations.append(NetworkOperation("s%d-to2" % s, "send", 0, 2, 0, 0, contributors, contributors,
+                                           participants, frozenset(), frozenset(), float(s)))
+        if s in relayed:
+            operations.append(NetworkOperation("s%d-to1" % s, "send", 2, 1, 0, 0, contributors, contributors,
+                participants, frozenset({"s%d-to2" % s}), frozenset(), float(s) + .5))
+        else:
+            operations.append(NetworkOperation("s%d-to1" % s, "send", 0, 1, 0, 0, contributors, contributors,
+                participants, frozenset(), frozenset(), float(s)))
+    return tuple(op for op in operations if op.operation_id not in missing)
+
+
+@dataclass
+class MicroCase:
+    method: str
+    description: str
+    documents: dict
+    lowering: object
+    bundle: object
+    repair: object
+    strategy: object = None
+    setup: dict = field(default_factory=dict)
+
+
+def _hotspots(bundle, lowering):
+    from vericcl.symbolic.executor import execute_bundle
+    from vericcl.verification.hotspots import locate_hotspots
+    execution = execute_bundle(bundle, lowering.inputs, lowering.model)
+    return locate_hotspots(execution, bundle, lowering.inputs, lowering.topology, lowering.model)
+
+
+def micro_case(method, directory, *, channels=1, model_timeout_s=5.0, timeout_s=300.0):
+    """Build the incumbent and the repair call; strategy preparation is untimed."""
+    from vericcl.execution.budget import StandaloneLease
+    from vericcl.input.loader import load_request
+    from vericcl.topology import load_topology
+    from vericcl.xml.v5_lower import lower_and_check
+    from vericcl.xml.v5_model import LoweringContext, NetworkCandidate
+    if method not in REPAIR_METHODS:
+        raise ValueError("unknown repair micro case")
+    documents = micro_documents(channels=channels, model_timeout_s=model_timeout_s)
+    directory = Path(directory)
+    files = {}
+    for name, document in documents.items():
+        files[name] = directory / (name + ".json")
+        files[name].write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    inputs = load_request(files)
+    topology = load_topology(inputs)
+    lowering = LoweringContext(inputs, topology, micro_cost_model(topology), StandaloneLease.after(timeout_s))
+
+    def lower(operations, origin):
+        candidate = NetworkCandidate(inputs.rank_count, inputs.hyperparameters.slice_count,
+                                     inputs.hyperparameters.slice_size_bytes, operations, origin)
+        return lower_and_check(candidate, lowering)
+
+    # Repairs are called through their modules at call time, so the
+    # instrumented aliases (not names bound here) are timed.
+    if method == "correctness":
+        from vericcl.tuning import correctness
+        bundle = lower(micro_operations(missing=("slice2-to2",)), "overhead-missing-delivery")
+        if bundle.can_execute:
+            raise ValueError("correctness micro case must start from a violated candidate")
+        steps = documents["sketch"].get("repair", {}).get("correctness", {}).get("max_steps", 8)
+        return MicroCase(method, "type 1: a missing slice-2 delivery to rank 2 is re-added from an owner",
+                         documents, lowering, bundle,
+                         lambda context: correctness.repair_correctness(bundle, context.lowering, max_steps=steps))
+    if method == "reallocation":
+        from vericcl.tuning import allocation
+        bundle = lower(micro_operations(relayed=(3,)), "overhead-two-flow")
+        report = _hotspots(bundle, lowering)
+        records = [record for _, record in allocation.reallocation_strategies(report, bundle, lowering)]
+        if not records:
+            raise ValueError("reallocation micro case found no hotspot with an idle sibling flow")
+        strategy = records[0]
+        return MicroCase(method, "type 2: slices move from the hot direct flow to the idle 0->2->1 flow",
+                         documents, lowering, bundle,
+                         lambda context: allocation.solve_reallocation(bundle, strategy, context), strategy,
+                         {"hotspot_count": len(report.hotspots), "strategy_count": len(records)})
+    bundle = lower(micro_operations(), "overhead-slow-link")
+    if not bundle.can_execute:
+        raise ValueError("repair micro case incumbent must be executable")
+    if method == "bottleneck":
+        from vericcl.tuning import bottleneck
+        report = _hotspots(bundle, lowering)
+        strategy = next((record for _, record in bottleneck.bottleneck_strategies(report, bundle, lowering)), None)
+        if strategy is None:
+            raise ValueError("bottleneck micro case found no scheduling bottleneck")
+        return MicroCase(method, "type 3: the slow 0->1 hotspot is forwarded by an owner rank (scoped MILP)",
+                         documents, lowering, bundle,
+                         lambda context: bottleneck.solve_bottleneck(bundle, strategy, report, context), strategy,
+                         {"hotspot_count": len(report.hotspots)})
+    from vericcl.tuning import strategies
+    from vericcl.verification.bottlenecks import StrategyRecord
+    strategy = StrategyRecord("path", ("slice0-to1",), paths=(("slice0-to1", (0, 2, 1)),))
+    domain = strategies.build_domain(None, strategy)
+    return MicroCase(method, "solve_repair: reroute slice 0 to rank 1 through rank 2 (event-model MILP)",
+                     documents, lowering, bundle,
+                     lambda context: strategies.solve_repair(bundle, domain, strategy, context), strategy)
+
+
+def repair_record(case, result):
+    """Normalize ``(bundle, CorrectnessReport)`` and ``RepairResult`` outcomes."""
+    if case.method == "correctness":
+        candidate, report = result
+        record = {"status": report.status, "model_calls": 0, "attempt_count": len(report.steps),
+                  "evidence": report.as_json(), "solver_evidence": []}
     else:
-        raise ValueError("unknown micro case")
-    flow = next(flow for flow in build_flow_index(schedule).flows
-                if transfer_id in flow.comparison_transfer_ids)
-    hint = FlowReplacementHint(
-        source_flow_id=flow.flow_id, demand_id=flow.demand_id,
-        candidate_flow_ids=("selected",), candidate_paths={"selected": path},
-        candidate_first_lanes={"selected": LaneKey(path[0], path[1], 1)},
-        divergence_rank=path[0], waiting_transfer_id=transfer_id,
-        bottleneck_lane=flow.lanes[flow.transfer_ids.index(transfer_id)],
-        wait_start_us=0.0, wait_end_us=1.0, earliest_candidate_start_us=0.0)
-    return schedule, topology(), data, hint
-
-
-def load_case(args):
-    from vericcl.artifacts.writer import load_schedule_sidecar
-    from vericcl.input.loader import resolve_inputs
-    from vericcl.topology.loader import load_topology
-    data = resolve_inputs(args.topology, args.sketch, args.atoms)
-    return load_schedule_sidecar(Path(args.schedule)), load_topology(data), data
+        candidate = result.candidate
+        record = {"status": result.status, "model_calls": result.model_calls,
+                  "attempt_count": len(result.attempts),
+                  "evidence": {"domain": json_value(result.domain), "search_complete": result.search_complete,
+                               "acceptance_basis": result.acceptance_basis,
+                               "full_search_proven": result.full_search_proven},
+                  "solver_evidence": json_value(result.solver_evidence)}
+    incumbent = case.bundle.prediction
+    record["candidate"] = bundle_summary(candidate)
+    record["schedule_sha256"] = None if candidate is None else candidate.xml_sha256
+    record["completion_time_us"] = (None if candidate is None or candidate.prediction is None
+                                    else candidate.prediction.t_pred_us)
+    record["incumbent_t_pred_us"] = None if incumbent is None else incumbent.t_pred_us
+    return record
 
 
 def run_repair(args):
-    from vericcl.solver.budget import ModelBudget
-    from vericcl.tuning.model import TuningOverlay
-    import vericcl.tuning.impact as impact_module
-    import vericcl.tuning.local_milp as local_module
-    import vericcl.tuning.repair as greedy_module
-    import vericcl.verification.pipeline as pipeline
-    if args.micro:
-        schedule, topo, data, hint = micro_case(args.micro)
-    else:
-        schedule, topo, data = load_case(args)
-        checked = pipeline.validate_and_lower_candidate(schedule, data, topo)
-        if not checked.flow_bdd or not checked.flow_bdd.hints:
-            raise ValueError("schedule has no repair hint")
-        hint = checked.flow_bdd.hints[args.hint_index]
+    from vericcl.execution.budget import StandaloneLease
+    from vericcl.tuning.strategies import RepairContext
+    from vericcl.verification.symbolic_check import clear_check_cache
+    with tempfile.TemporaryDirectory(prefix="overhead-micro-") as directory:
+        started = time.perf_counter()
+        case = micro_case(args.method, directory, channels=args.channels or 1,
+                          model_timeout_s=args.model_timeout, timeout_s=args.timeout)
+        setup_s = time.perf_counter() - started
+    incumbent = case.bundle
     refs = registrations()
-    overlay = TuningOverlay("overhead-repair", "parent", channel_count=args.channels,
-                            milp_parameters=(("Threads", 1), ("Seed", 0)))
     records = []
-    payload = {"environment": environment(), "arguments": vars(args),
-        "input_identity": input_identity(args, data),
-        "parent_sha256": digest(schedule), "parent_completion_time_us": max(
-            t.ed_time for t in schedule.transfers), "hint": json_value(hint),
-        "transfer_count": len(schedule.transfers), "warmups": 1,
-        "records": records, "complete": False}
+    payload = {"environment": environment(), "arguments": vars(args), "pipeline": "v5",
+        "method": args.method, "case": case.description, "documents": case.documents,
+        "input_identity": {"normalized_input_sha256": case.lowering.inputs.input_sha256,
+                           "documents_sha256": digest(case.documents)},
+        "incumbent": bundle_summary(incumbent), "parent_sha256": incumbent.xml_sha256,
+        "parent_completion_time_us": None if incumbent.prediction is None else incumbent.prediction.t_pred_us,
+        "transfer_count": len(incumbent.source.operations), "strategy": json_value(case.strategy),
+        "setup": dict(case.setup, setup_s=setup_s), "symbolic_cache": "cleared_before_each_sample",
+        "warmups": 1, "records": records, "complete": False}
     write_json(args.output, payload)
-    for index in range(args.repeats + 1):
-        timer = PhaseTimer()
-        with instrument(timer, refs), timer.span("repair_round"):
-            closure = impact_module.compute_impact_closure(
-                schedule, frozenset({hint.waiting_transfer_id}), topo)
-            if args.method == "greedy":
-                result = greedy_module.repair_flow_suffix(schedule, hint, overlay, topo, data)
-            else:
-                result = local_module.solve_local_repair(schedule, hint, closure,
-                    overlay, topo, data, ModelBudget(args.timeout, 0.0, args.timeout))
-            outcome = (pipeline.validate_and_lower_candidate(result.schedule, data, topo)
-                       if result.schedule is not None else None)
-        if index:
-            records.append({"timing": timer.payload(), "status": result.status.value,
-                "evidence": json_value(result.evidence), "impact_count": len(closure.transfer_ids),
-                "schedule_sha256": digest(result.schedule) if result.schedule else None,
-                "completion_time_us": max(t.ed_time for t in result.schedule.transfers)
-                                      if result.schedule else None,
-                "validation": outcome_summary(outcome) if outcome else None})
-            write_json(args.output, payload, replace=True)
+    switch = TimerSwitch()
+    calls = []
+
+    def operation():
+        clear_check_cache()
+        context = RepairContext(replace(case.lowering, lease=StandaloneLease.after(args.timeout)),
+                                candidate_batch_size=4)
+        timer = switch.timer = PhaseTimer()
+        with timer.span("repair_round"):
+            result = case.repair(context)
+        calls.append((timer, result))
+
+    # Samples are short: evidence is written after timing, so repeated()'s
+    # samples exclude file synchronization. The first call is its warmup.
+    with instrument(switch, refs):
+        payload["repeated"] = repeated(operation, repeats=args.repeats, warmups=1)
+    for timer, result in calls[1:]:
+        records.append({"timing": timer.payload(), **repair_record(case, result)})
     payload["complete"] = True
     write_json(args.output, payload, replace=True)
     print(json.dumps({"output": args.output, "median_s": statistics.median(
@@ -168,106 +310,51 @@ def run_repair(args):
     return 0
 
 
-def online_registrations():
-    from vericcl.verification.online.runner import NcclTestsRunner
-    refs = list(registrations())
-    for module, name, label, priority in (
-        ("pipeline", "_preflight", "online_preflight", 25),
-        ("pipeline", "_calibrate", "calibration", 25),
-        ("runner", "collect_trace_files", "trace_collect", 30),
-        ("trace_format", "parse_trace", "trace_parse", 40),
-        ("clock_sync", "align_clocks", "trace_align", 40),
-        ("trace_analysis", "analyze_trace", "trace_analysis", 40),
-    ):
-        owner = importlib.import_module("vericcl.verification.online." + module)
-        refs.append((getattr(owner, name), label, priority))
-    for name, label in (("measure", "release_measurement"),
-                        ("validate_release", "release_single"),
-                        ("diagnostic", "trace_run"), ("run_auxiliary", "clock_sync")):
-        refs.append((getattr(NcclTestsRunner, name), label, 25))
-    return tuple(refs)
-
-
-def online_eligible(outcome):
-    from vericcl.artifacts.writer import _offline_valid
-    return (outcome.artifact is not None and outcome.artifact.runtime_compatible
-            and _offline_valid(outcome))
-
+# ---------------------------------------------------------------------------
+# online (GPU) overhead: v5 calibration and traced verification runs
 
 def online_output_root(args):
-    from vericcl.experiments.remote import ExperimentPathPolicy
-    from vericcl.experiments.v100 import load_v100_config
-    config = load_v100_config(Path(args.config))
-    return ExperimentPathPolicy(config.experiment_root).require_allowed(
-        Path(args.output).absolute())
+    """Absolute output root; with ``--config`` it must lie in the experiment root."""
+    path = Path(args.output).absolute()
+    if getattr(args, "config", None):
+        from vericcl.experiments.remote import ExperimentPathPolicy
+        from vericcl.experiments.v100 import load_v100_config
+        config = load_v100_config(Path(args.config))
+        path = ExperimentPathPolicy(config.experiment_root).require_allowed(path)
+    return path
 
 
-def load_calibration_case(args):
-    from vericcl.cli.online import representative_calibration_topology
-    from vericcl.input.loader import resolve_inputs
-    from vericcl.topology.loader import load_topology
-    from vericcl.verification.online.calibration import CalibrationRequest
-    from vericcl.verification.online.calibration_xml import build_calibration_benchmark
-    source = resolve_inputs(args.topology, args.sketch, args.atoms)
-    topo = representative_calibration_topology(load_topology(source), "inter_node")
-    benchmark = build_calibration_benchmark(CalibrationRequest(
-        "inter_node", source.hyperparameters.slice_size_bytes,
-        max_calibration_channels=16, datatype="float32"), topo, concurrency=args.channels)
-    return benchmark.schedule, topo, benchmark.inputs
+def online_overrides(args):
+    overrides = parse_overrides(getattr(args, "set", None))
+    if args.mode == "online":
+        overrides.setdefault("sketch.trace_and_measure.enabled", True)
+    return overrides
 
 
-def run_online_once(args):
-    from vericcl.artifacts.writer import atomic_write_text
-    from vericcl.cli.online import build_online_context_factory
-    from vericcl.experiments.v100 import (
-        load_v100_config, _configured_hosts, _runtime_dependencies, _factory_environment)
-    from vericcl.verification.online.pipeline import run_online_validation
-    from vericcl.verification.pipeline import validate_and_lower_candidate
-
-    config = load_v100_config(Path(args.config))
+def run_online_once(args, *, services=None):
     output = online_output_root(args)
-    if args.mode == "calibration":
-        schedule, topo, data = load_calibration_case(args)
-    else:
-        schedule, topo, data = load_case(args)
-    outcome = validate_and_lower_candidate(schedule, data, topo)
-    if not online_eligible(outcome):
-        write_json(output / "overhead.json", {
-            "environment": environment(), "arguments": vars(args),
-            "input_identity": input_identity(args, data),
-            "offline": outcome_summary(outcome), "result": {
-                "failure_code": "offline_validation_rejected",
-                "online_operator_validation": "not_run"}})
-        return 1
-    _configured_hosts(config)
     output.mkdir(parents=True, exist_ok=True)
-    xml_path = output / "schedule.xml"
-    atomic_write_text(xml_path, outcome.artifact.xml_text)
-    timer = PhaseTimer()
-    executor, collector = _runtime_dependencies(config, data.rank_count)
-    executor = LoggingExecutor(executor, output / "processes", timer)
-
-    def timed_collector(request):
-        with timer.span("trace_fetch_and_collect", 30):
-            return collector(request)
-
-    factory = build_online_context_factory(_factory_environment(config, data.rank_count),
-                                            executor=executor, trace_collector=timed_collector)
-    context = factory(outcome.artifact, schedule, data, xml_path,
-                      output / "traces", False, args.timeout, False)
-    context = replace(context, single_process_release_validation=not args.full_release)
-    with instrument(timer, online_registrations()), timer.span("online_other"):
-        result = run_online_validation(context)
-    write_json(output / "overhead.json", {"environment": environment(),
-        "input_identity": input_identity(args, data),
-        "arguments": vars(args), "schedule_sha256": digest(schedule),
-        "offline": outcome_summary(outcome), "timing": timer.payload(),
-        "result": json_value(result)})
-    print(json.dumps({"output": str(output), "wall_s": timer.payload()["wall_time_s"],
-        "release": result.release_status.value,
-        "trace": result.online_operator_validation.value,
-        "failure": result.failure_code}), flush=True)
-    return 0 if result.failure_code is None else 1
+    record = {"environment": environment(), "arguments": vars(args),
+              "online_acceptance": args.mode == "online"}
+    try:
+        files = request_files(args, output / "request")
+        overrides = online_overrides(args)
+    except (OSError, ValueError) as error:
+        record["error"] = {"type": type(error).__name__, "message": str(error)}
+        record["timing"] = PhaseTimer().payload()
+    else:
+        measure_primary(files, overrides, output,
+                        purpose="calibrate" if args.mode == "calibration" else "verify",
+                        refs=registrations(), xml_path=getattr(args, "xml", None),
+                        sidecar_path=getattr(args, "sidecar", None),
+                        cost_model_path=getattr(args, "model", None), services=services, record=record)
+    write_json(output / "overhead.json", record)
+    result = record.get("result", {})
+    print(json.dumps({"output": str(output), "wall_s": record["timing"]["wall_time_s"],
+        "execution": result.get("execution"), "stop_reason": result.get("stop_reason"),
+        "exit_code": record.get("exit_code"), "phases": record.get("phases"),
+        "error": record.get("error")}), flush=True)
+    return 0 if "error" not in record and record.get("exit_code") == 0 else 1
 
 
 def run_online(args):
@@ -318,40 +405,41 @@ def run_clock(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("mode", choices=("repair", "online", "clock", "calibration"))
-    parser.add_argument("--topology")
-    parser.add_argument("--sketch")
-    parser.add_argument("--atoms")
-    parser.add_argument("--schedule")
-    parser.add_argument("--config")
+    add_request_arguments(parser)
+    parser.add_argument("--xml", help="online: admitted v5 schedule.xml")
+    parser.add_argument("--sidecar", help="online: its v5 sidecar.json")
+    parser.add_argument("--model", help="online/calibration: starting cost model JSON")
+    parser.add_argument("--config", help="clock: V100 experiment config; online: output-root policy")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--micro", choices=("broadcast", "allreduce"))
-    parser.add_argument("--method", choices=("greedy", "milp"), default="greedy")
-    parser.add_argument("--bdd-backend", choices=("python", "native"), default="native")
+    parser.add_argument("--method", choices=REPAIR_METHODS, help="repair: micro case and repair type")
     parser.add_argument("--repeats", type=int,
                         help="default: five CPU repeats or one online invocation")
-    parser.add_argument("--hint-index", type=int, default=0)
-    parser.add_argument("--channels", type=int, default=16)
-    parser.add_argument("--timeout", type=float, default=300)
-    parser.add_argument("--full-release", action="store_true")
+    parser.add_argument("--channels", type=int, help="repair: micro case max_channels (default 1)")
+    parser.add_argument("--timeout", type=float, default=300,
+                        help="repair lease per sample; clock process timeout")
+    parser.add_argument("--model-timeout", type=float, default=5.0,
+                        help="repair: micro case sketch.solver.per_model_timeout_s")
     parser.add_argument("--ranks", type=int, choices=(2, 8, 16), default=8)
     parser.add_argument("--clock-samples", type=int, default=256)
     parser.add_argument("--tcp-only", action="store_true")
     args = parser.parse_args(argv)
     if args.repeats is None:
         args.repeats = 5 if args.mode == "repair" else 1
-    if args.repeats < 1 or args.timeout <= 0:
-        parser.error("positive repeats and timeout are required")
-    if args.mode == "clock" and args.repeats != 1:
-        parser.error("clock mode runs once; use distinct output paths for repetitions")
-    if args.mode == "calibration" and not all((args.topology, args.sketch, args.atoms)):
-        parser.error("calibration requires topology, sketch, and atoms")
-    if args.mode in {"repair", "online"} and not args.micro and not all((args.topology, args.sketch, args.atoms, args.schedule)):
-        parser.error("all input paths and schedule are required")
-    if args.mode in {"online", "clock", "calibration"} and (not args.config or args.micro):
-        parser.error("online requires config and a real schedule")
-    select_backend(args.bdd_backend)
+    if args.repeats < 1 or args.timeout <= 0 or args.model_timeout <= 0:
+        parser.error("positive repeats and timeouts are required")
+    if args.mode == "clock" and (args.repeats != 1 or not args.config):
+        parser.error("clock mode runs once with --config; use distinct output paths for repetitions")
+    if args.mode == "repair" and (not args.method or has_request(args) or args.xml or args.sidecar):
+        parser.error("repair requires --method and uses only its built-in micro case")
+    if args.mode in {"online", "calibration"} and not has_request(args):
+        parser.error("online and calibration require the four v5 documents or --effective-request")
+    if args.mode == "online" and not (args.xml and args.sidecar):
+        parser.error("online requires an admitted --xml and --sidecar")
+    if args.mode == "calibration" and (args.xml or args.sidecar):
+        parser.error("calibration measures components, not a supplied schedule")
     if args.mode == "clock":
         return run_clock(args)
     return run_repair(args) if args.mode == "repair" else run_online(args)

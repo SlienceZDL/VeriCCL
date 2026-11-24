@@ -6,6 +6,7 @@ import pytest
 
 from vericcl.input.models import ForbiddenTransfer
 from vericcl.semantics.atom import PathStage, Schedule, Symbol
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import CollectiveKind
 from vericcl.topology.model import (
     DirectedLink,
@@ -37,7 +38,7 @@ def _parallel_waits(*, count=3, block_alternative=True, windows=None):
             0,
             2,
             0,
-            {member: (PathStage(0, "SEND", (Symbol(0, 2, ready),)),)},
+            {member: (PathStage(0, "SEND", (symbolic_step(0, 2, ready),)),)},
             deadline,
             deadline + duration,
         )
@@ -50,7 +51,7 @@ def _parallel_waits(*, count=3, block_alternative=True, windows=None):
                 0,
                 1,
                 1,
-                {0: (PathStage(0, "SEND", (Symbol(0, 1, 0.0),)),)},
+                {0: (PathStage(0, "SEND", (symbolic_step(0, 1, 0.0),)),)},
                 0.0,
                 5.0,
             ),
@@ -215,9 +216,9 @@ def test_idle_cache_separates_readiness_deadline_and_duration(
 def test_cached_ranked_paths_still_apply_each_flows_prefix_exclusion():
     transfers = []
     for source in (0, 2):
-        first = PathStage(0, "SEND", (Symbol(source, 1, 0.0),))
+        first = PathStage(0, "SEND", (symbolic_step(source, 1, 0.0),))
         complete = PathStage(
-            0, "SEND", (Symbol(source, 1, 0.0), Symbol(1, 3, 1.0))
+            0, "SEND", (symbolic_step(source, 1, 0.0), symbolic_step(1, 3, 1.0))
         )
         transfers.extend((
             _transfer(

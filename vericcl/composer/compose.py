@@ -9,6 +9,7 @@ from vericcl.errors import SemanticError
 from vericcl.input.json_codec import canonical_json, sha256_json
 from vericcl.planner.model import PlanDAG, PlanNode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import OutputSlot
 from vericcl.solver.model import SolveCandidate
 from vericcl.topology.model import Topology
@@ -258,7 +259,7 @@ def _placeholder_atom(
     suffix = []
     for stage in atom.path:
         symbols = tuple(
-            Symbol(
+            symbolic_step(
                 symbol.src_rank,
                 symbol.dst_rank,
                 max(prior_ready, symbol.ready_time),
@@ -268,7 +269,7 @@ def _placeholder_atom(
         suffix.append(PathStage(stage.stage_id, stage.operator, symbols))
         prior_ready = symbols[-1].ready_time
     start = max(atom.st_time, prior_ready)
-    return Atom(
+    return Atom.build(
         slice_id=atom.slice_id,
         slice_size_bytes=atom.slice_size_bytes,
         path=prior_path + tuple(suffix),
@@ -452,7 +453,7 @@ def _compose_schedules(
                 global_atoms[(transfer.transfer_id, atom.slice_id)] = placeholder
             start = max(atom.st_time for atom in atoms)
             rebuilt_atoms = tuple(
-                Atom(
+                Atom.build(
                     slice_id=atom.slice_id,
                     slice_size_bytes=atom.slice_size_bytes,
                     path=atom.path,
@@ -635,7 +636,9 @@ def compose_routes(
     if topology.rank_count != plan.rank_count:
         raise SemanticError("plan and topology rank counts must agree")
     channels = _validate_channel_count(channel_count)
-    node_schedule_identity = route_node_schedule_identity(node_schedules)
+    # No identity hash of the input node schedules here: nothing read it and
+    # it cost ~1.7 s per composed 2x8 plan (route_node_schedule_identity
+    # stays available to callers that need it).
     if lease is not None:
         lease.check()
     provisional = _compose_schedules(
@@ -646,7 +649,6 @@ def compose_routes(
     if lease is not None:
         lease.check()
     metadata = dict(provisional.metadata)
-    metadata["route_node_schedule_identity"] = node_schedule_identity
     metadata['hierarchy_event_policy'] = hierarchy_event_policy
     provisional = Schedule(
         schedule_id=provisional.schedule_id,

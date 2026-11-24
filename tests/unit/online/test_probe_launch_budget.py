@@ -8,6 +8,8 @@ from vericcl.execution.context import RunContext
 from vericcl.verification.online import remote
 from vericcl.verification.online.probe_jobs import plan_probes
 
+pytestmark = pytest.mark.usefixtures('home_is_tmp')
+
 
 @pytest.mark.parametrize('budget,expected_launches,expected_status', [(30, 0, 'timeout'), (100, 4, 'unstable')])
 def test_probe_launch_admission_preserves_remaining_margin(tmp_path, monkeypatch, budget, expected_launches, expected_status):

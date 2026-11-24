@@ -4,13 +4,11 @@ This table is generated from `vericcl/input/schema.py`. All four JSON inputs rej
 
 M must be divisible by S, and S must contain complete datatype elements. For AllToAll/ReduceScatter, N=M/S must also be divisible by the rank count. Do not provide N or input_chunkup directly. Omit root/reduction_op or use null for operators to which they do not apply; concrete values are rejected.
 
-The command-line option `--set path=JSON` can fill unspecified values. Replacing a different existing value requires `--override-input`. Original files are saved in `process/input_snapshot/`; the final effective configuration and value sources are stored as `effective_request` and `value_sources` in `run.json`. Configuration fields do not expand shell placeholders; write actual absolute paths into JSON.
+Use `--set path=JSON` to fill unspecified values. Add `--override-input` to replace a different explicit value. Original files are stored in `input_snapshot`; the effective configuration and value origins are written to `effective-request.json` and `value-sources.json`. Write actual absolute paths in JSON; configuration fields do not expand shell variables.
 
-solve requires an initial synthesis budget and maximum round count; a count above 0 also requires repair budgets. All processing entry points require per-model/CPU, per-round/total offline, and cleanup budgets. Enabling calibration or using calibrate requires online budgets, a fit-error limit, and a per-job deadline. Enabling tracing/measurement also requires trace capacity and a job deadline. Each history reuse feature requires its index and the corresponding tolerance or age limit. Runtime numerical checks use explicit absolute and relative tolerances.
+solve/live require an initial synthesis budget and a round limit, plus repair budgets when the round limit exceeds zero. Processing commands require per-model and CPU limits, per-round and total offline budgets, and a cleanup reserve. Calibration requires online budgets, a fit-error tolerance, and a job timeout. Trace and measurement require trace capacity and a job timeout. History reuse requires an index and the relevant tolerance or age limit. live requires all seven phase deadlines and control endpoints. Runtime numerical checks use explicit absolute and relative tolerances.
 
 JSON Schema describes the standard structure; load_request checks cross-field arithmetic, enabling conditions, duplicate keys, and explicitly supported legacy migrations. Operator names are case-insensitive; compatible aliases are all_gather, all_reduce, all_to_all, and reducescatter. Explicitly listed solver parameters in legacy hyperparameters can be migrated, as can symmetry, shortest_paths, batching, and objective_mode at the atom top level. Legacy total_solve_timeout_s migrates only to the initial synthesis budget. force_resolve, force_recalibrate, and legacy algorithm boolean switches have been removed.
-
-A manual node's `atoms` specify only sets of slices, source ranks, and destination ranks; the stage comes from the node's `stage_id`. Each expanded constraint restricts one directed edge. Manual mode uses hierarchy to solve each stage and retains hierarchical subproblem reuse; whole-schedule history reuse is limited to automatic plans. When manual mode is disabled, its nodes and variable groups do not participate in automatic synthesis.
 
 The object/array rows below describe configuration sections, and subsequent rows describe their members. Within arrays, [] denotes each element. See the [README](../README.md) for more workflows and [supported configurations](supported-configuration.md) for the scope of evidence.
 
@@ -32,7 +30,7 @@ The object/array rows below describe configuration sections, and subsequent rows
 | `topology.directed_links[].dst` | integer | `unspecified` | Required; ≥0, ≤9223372036854775807 | Receiving rank. |
 | `topology.directed_links[].alpha_us` | number | `unspecified` | Required; ≥0 | Fixed service overhead per operation, in microseconds. |
 | `topology.directed_links[].beta_us_per_byte` | number | `unspecified` | Required; >0 | Service cost per byte, in microseconds per byte; bandwidth is its reciprocal. |
-| `topology.directed_links[].max_channels` | integer | `16` | May be omitted or null; ≥1, ≤16 | Maximum allowed channel count; the default search covers 1 through 7, with an explicit upper limit of up to 16. |
+| `topology.directed_links[].max_channels` | integer | `16` | May be omitted or null; ≥1, ≤16 | Maximum channel count: 8 by default, or up to 16 when explicitly configured. |
 | `topology.directed_links[].resources` | array | `[]` | May be omitted or null; — | Identifiers of shared resources used by this link. |
 | `topology.directed_links[].physical_path` | array | `[]` | May be omitted or null; — | Description of the physical path represented by the abstract link. |
 | `topology.shared_resources` | array | `[]` | May be omitted or null; — | Shared bottlenecks across abstract links, preventing physical bandwidth from being counted more than once. |
@@ -72,7 +70,8 @@ The object/array rows below describe configuration sections, and subsequent rows
 | `sketch.solver.cpu_budget` | integer | `unspecified` | Checked when enabled; ≥1, ≤9223372036854775807 | CPU quota available to the entire task. |
 | `sketch.solver.max_threads_per_model` | integer | `12` | May be omitted or null; ≥1, ≤9223372036854775807 | Thread limit per model, defaulting to 12; also bounded by the CPU quota. |
 | `sketch.solver.max_parallel_models` | integer | `unspecified` | Checked when enabled; ≥1, ≤9223372036854775807 | Maximum number of concurrent models; managed by the budget manager if omitted. |
-| `sketch.solver.max_channels` | integer | `7` | May be omitted or null; ≥1, ≤16 | Maximum allowed channel count; the default search covers 1 through 7, with an explicit upper limit of up to 16. |
+| `sketch.solver.max_channels` | integer | `8` | May be omitted or null; ≥1, ≤16 | Maximum channel count: 8 by default, or up to 16 when explicitly configured. |
+| `sketch.solver.channel_candidates` | array | `[1, 2, 3, 4, 5, 6, 7, 8]` | May be omitted or null; — | Candidate channel counts, defaulting to 1 through 8. Any integer in the permitted range is supported, subject to max_channels and runtime limits. |
 | `sketch.solver.solver_seed` | integer | `0` | May be omitted or null; ≥0, ≤9223372036854775807 | SCIP random seed. |
 | `sketch.solver.mip_gap` | number | `0` | May be omitted or null; ≥0, ≤1 | Allowed numerical MIP gap; it does not prove coverage of the full repair space. |
 | `sketch.solver.require_proven_optimal` | boolean | `false` | May be omitted or null; — | Whether the current solver model must reach numerical optimality. |
@@ -101,6 +100,10 @@ The object/array rows below describe configuration sections, and subsequent rows
 | `sketch.calibration.max_relative_fit_error` | number | `unspecified` | Checked when enabled; ≥0 | Maximum allowed relative error in cost fitting. |
 | `sketch.calibration.job_timeout_s` | number | `unspecified` | Checked when enabled; >0 | Time limit for one complete measurement job, including launch, retries, collection, and cleanup. |
 | `sketch.calibration.payload_sizes` | array | `[]` | May be omitted or null; — | Additional probe sizes; do not change the application M/S. |
+| `sketch.calibration.chain_steps` | integer | `8` | May be omitted or null; ≥1, ≤9223372036854775807 | Consecutive steps per probe flow on one TB. Fitting uses time per step to capture pipelining; set to 1 for single-step probes. |
+| `sketch.calibration.chain_max_bytes` | integer | `4194304` | May be omitted or null; ≥1, ≤9223372036854775807 | Maximum total bytes in a probe chain. Large payloads shorten the chain to at least one step, limiting calibration time. |
+| `sketch.calibration.equivalence_classes` | boolean | `true` | May be omitted or null; — | Group structurally equivalent links and concurrency patterns. Measure one representative per class and apply qualified results to its members. |
+| `sketch.calibration.candidate_limit` | integer | `2` | May be omitted or null; ≥1, ≤9223372036854775807 | Candidates per slice size selected by the initial prediction for first-round calibration; measure the patterns these candidates use. |
 | `sketch.trace_and_measure` | object | `{}` | May be omitted or null; — | One switch controls detailed tracing and the formal measured-gain threshold for candidates; disabled by default. |
 | `sketch.trace_and_measure.enabled` | boolean | `false` | May be omitted or null; — | Enable the feature in this configuration section. |
 | `sketch.trace_and_measure.pairs` | integer | `20` | May be omitted or null; ≥1, ≤9223372036854775807 | Predetermined number of paired AB/BA launches; must be an even number of at least 2. |
@@ -114,20 +117,71 @@ The object/array rows below describe configuration sections, and subsequent rows
 | `sketch.trace_and_measure.seed` | integer | `0` | May be omitted or null; ≥0, ≤9223372036854775807 | Seed that fixes the sampling order in advance. |
 | `sketch.trace_and_measure.job_timeout_s` | number | `unspecified` | Checked when enabled; >0 | Time limit for one complete measurement job, including launch, retries, collection, and cleanup. |
 | `sketch.trace_and_measure.trace_capacity_bytes` | integer | `unspecified` | Checked when enabled; ≥1, ≤9223372036854775807 | Detailed trace buffer bytes per rank; must accommodate the file header and all trace records for one complete invocation. |
+| `sketch.symbolic` | object | `unspecified` | Checked when enabled; — | Settings for full symbolic execution and BDD analysis. Omitting this section preserves the standard workflow and its input hash. |
+| `sketch.symbolic.enabled` | boolean | `false` | May be omitted or null; — | Enable the feature in this configuration section. |
+| `sketch.symbolic.loop_iterations` | integer | `2` | May be omitted or null; ≥1, ≤9223372036854775807 | Number of MSCCL loop iterations in the progress model. Dependency flags and connection FIFOs persist between iterations; two iterations expose cross-iteration waits. |
+| `sketch.symbolic.fifo_slots` | integer | `8` | May be omitted or null; ≥1, ≤9223372036854775807 | Buffer slots per connection, corresponding to runtime NCCL_STEPS. |
+| `sketch.symbolic.chunk_steps` | integer | `4` | May be omitted or null; ≥1, ≤9223372036854775807 | FIFO slots consumed by a full MSCCL chunk, corresponding to MSCCL_CHUNKSTEPS. Message capacity is derived for the size being checked. |
+| `sketch.symbolic.max_related_operations` | integer | `48` | May be omitted or null; ≥1, ≤9223372036854775807 | Maximum related operations per hotspot, including resource competitors, ordering predecessors, and dependencies leading to completion. |
+| `sketch.symbolic.max_order_hints` | integer | `32` | May be omitted or null; ≥1, ≤9223372036854775807 | Maximum TB-order suggestions per analysis round. |
+| `sketch.symbolic.max_plan_choices` | integer | `6` | May be omitted or null; ≥1, ≤9223372036854775807 | Candidate paths per transfer considered by the BDD decision filter during bottleneck repair. |
 | `sketch.repair` | object | `{}` | May be omitted or null; — | Division of analysis and solving work during repair. |
 | `sketch.repair.mode` | string | `"strategy_first"` | May be omitted or null; strategy_first / joint | strategy_first selects a strategy first; joint selects valid decisions jointly. |
 | `sketch.repair.candidate_batch_size` | integer | `4` | May be omitted or null; ≥1, ≤9223372036854775807 | Candidates sent to local SCIP per batch; does not limit the total search. |
 | `sketch.repair.analysis_batch_size` | integer | `16` | May be omitted or null; ≥1, ≤9223372036854775807 | Analysis suggestions per batch; expand further when exhausted. |
+| `sketch.repair.refinement_factors` | array | `[2, 4, 8]` | May be omitted or null; — | Slice subdivision factors tried first when expanding the search. Preserve routes, channels, and TB order while splitting each slice into factor pieces to enable pipelining. Acceptance requires model and paired-measurement gains. An empty list disables refinement. |
+| `sketch.repair.hotspot` | object | `{}` | May be omitted or null; — | Hotspot analysis settings for symbolic execution, BDDs, and counters. |
+| `sketch.repair.hotspot.bucket_count` | integer | `64` | May be omitted or null; ≥1, ≤9223372036854775807 | Number of time buckets; each bucket spans T_pred / bucket_count. |
+| `sketch.repair.hotspot.wait_threshold_ratio` | number | `0.05` | May be omitted or null; ≥0 | Contention slowdown or TB waiting above this fraction of service time is classified as congestion. |
+| `sketch.repair.hotspot.idle_utilization_threshold` | number | `0.5` | May be omitted or null; ≥0, ≤1 | A link below this utilization within a time bucket is treated as idle or lightly used. |
+| `sketch.repair.hotspot.max_alt_hops` | integer | `3` | May be omitted or null; ≥1, ≤9223372036854775807 | Maximum hops in an alternative path. |
+| `sketch.repair.hotspot.max_hotspots` | integer | `16` | May be omitted or null; ≥1, ≤9223372036854775807 | Maximum hotspots reported per round. |
+| `sketch.repair.hotspot.tail_only` | boolean | `true` | May be omitted or null; — | Generate repairs only for hotspots that can delay completion, either on the critical path or competing for a congested resource used by critical operations. |
+| `sketch.repair.correctness` | object | `{}` | May be omitted or null; — | Type 1 repair: locally repair violations of semantics, progress, forbidden edges, or buffer access rules, then recheck the candidate. |
+| `sketch.repair.correctness.max_steps` | integer | `8` | May be omitted or null; ≥1, ≤9223372036854775807 | Maximum correctness-repair attempts per candidate. |
+| `sketch.repair.reallocation` | object | `{}` | May be omitted or null; — | Type 2 repair: redistribute existing slices between flows of a chunk when a hot flow and an idle alternative coexist. Slice geometry stays fixed. |
+| `sketch.repair.reallocation.max_chunks` | integer | `8` | May be omitted or null; ≥1, ≤9223372036854775807 | Maximum chunks jointly adjusted by one allocation repair, including chunks competing for the hot resource. |
+| `sketch.repair.reallocation.max_incremental_moves` | integer | `4` | May be omitted or null; ≥0, ≤9223372036854775807 | Maximum additional candidates that move slices one at a time from hot to idle flows, alongside the balanced allocation. |
+| `sketch.repair.bottleneck` | object | `{}` | May be omitted or null; — | Type 3 repair: identify related operations symbolically, filter alternative forwarding plans using BDDs and cost estimates, and solve the bounded region with local MILP. |
+| `sketch.repair.bottleneck.max_scope_operations` | integer | `48` | May be omitted or null; ≥1, ≤9223372036854775807 | Maximum operations in a bottleneck-repair region, including rerouted transfers and downstream consumers. |
+| `sketch.repair.bottleneck.dependency_depth` | integer | `2` | May be omitted or null; ≥0, ≤9223372036854775807 | Number of downstream data-dependency levels included in the repair region. |
+| `sketch.repair.bottleneck.plans_per_slice` | integer | `3` | May be omitted or null; ≥1, ≤9223372036854775807 | Plans retained per reroutable transfer after filtering. |
+| `sketch.repair.bottleneck.max_plans` | integer | `24` | May be omitted or null; ≥1, ≤9223372036854775807 | Maximum filtered plans passed to local MILP. |
 | `sketch.runtime_compatibility` | object | `{}` | May be omitted or null; — | Full static runtime compatibility checks, which can be disabled; basic launch safety checks always remain active. |
 | `sketch.runtime_compatibility.enabled` | boolean | `true` | May be omitted or null; — | Enable the feature in this configuration section. |
+| `sketch.size_bands` | array | `[]` | May be omitted or null; — | Up to four ordered, non-overlapping message-size bands, matching the MSCCL_XML_FILES limit. Synthesize, measure, and repair at each representative size; merge adjacent bands with identical programs. |
+| `sketch.size_bands[].min_bytes` | integer | `unspecified` | Required; ≥0, ≤9223372036854775807 | Inclusive lower bound, defaulting to 0. |
+| `sketch.size_bands[].max_bytes` | integer | `unspecified` | Required; ≥1, ≤9223372036854775807 | Exclusive upper bound, defaulting to 4294967296. |
+| `sketch.size_bands[].representative_bytes` | integer | `unspecified` | Required; ≥1, ≤9223372036854775807 | Representative size within [min_bytes, max_bytes), in MSCCL selection units: the nccl-tests size column, or total output bytes for AllGather. Converted to per-rank input bytes using collective semantics. |
+| `sketch.size_bands[].slice_size_bytes` | integer | `null` | May be omitted or null; ≥1, ≤9223372036854775807 | Fixed minimum slice size S in bytes; if omitted, search for a valid partition first. N is derived as M/S. |
 | `sketch.history` | object | `{}` | May be omitted or null; — | Cross-task schedule and absolute calibration caches; the two switches are independent and disabled by default. |
-| `sketch.history.schedule_reuse` | boolean | `false` | May be omitted or null; — | In automatic mode, retrieve isomorphic historical schedules with similar relative bandwidths, then adapt and revalidate them; use false for manual plans. |
+| `sketch.history.schedule_reuse` | boolean | `false` | May be omitted or null; — | Find historical schedules with the same graph structure and similar relative bandwidths, then adapt and revalidate them. |
 | `sketch.history.calibration_reuse` | boolean | `false` | May be omitted or null; — | Reuse only valid measurement components with exactly matching device, runtime, datatype, and mode identities. |
 | `sketch.history.relative_bandwidth_tolerance` | number | `unspecified` | Checked when enabled; ≥0 | Maximum allowed value of the largest mapped bandwidth scale divided by the smallest, minus one. |
 | `sketch.history.max_schedule_candidates` | integer | `unspecified` | Checked when enabled; ≥1, ≤9223372036854775807 | Maximum candidates checked by fast history lookup. |
 | `sketch.history.calibration_max_age_s` | number | `unspecified` | Checked when enabled; >0 | Maximum calibration cache age. |
 | `sketch.history.schedule_index` | string | `unspecified` | Checked when enabled; — | Historical schedule index path; resolve relative paths from the case directory. |
 | `sketch.history.calibration_index` | string | `unspecified` | Checked when enabled; — | Calibration index path; resolve relative paths from the case directory. |
+| `sketch.live` | object | `{}` | May be omitted or null; — | Optional resident execution mode; the main offline loop runs independently. |
+| `sketch.live.enabled` | boolean | `false` | May be omitted or null; — | Enable the feature in this configuration section. |
+| `sketch.live.request_prepare_timeout_s` | number | `unspecified` | Checked when enabled; >0 | Deadline for request preparation and input protection. |
+| `sketch.live.execution_attempt_timeout_s` | number | `unspecified` | Checked when enabled; >0 | Deadline for each GPU execution attempt. |
+| `sketch.live.background_tuning_task_timeout_s` | number | `unspecified` | Checked when enabled; >0 | Deadline for one background tuning task. |
+| `sketch.live.version_prepare_timeout_s` | number | `unspecified` | Checked when enabled; >0 | Deadline for preparing a new version. |
+| `sketch.live.control_phase_timeout_s` | number | `unspecified` | Checked when enabled; >0 | Deadline for one control phase. |
+| `sketch.live.recovery_timeout_s` | number | `unspecified` | Checked when enabled; >0 | Fixed total deadline for failure recovery. |
+| `sketch.live.close_cleanup_timeout_s` | number | `unspecified` | Checked when enabled; >0 | Shared deadline for shutdown, background-task completion, and resource cleanup. |
+| `sketch.live.window_requests` | integer | `8` | May be omitted or null; ≥1, ≤9223372036854775807 | Requests per qualified telemetry window. |
+| `sketch.live.consecutive_windows` | integer | `2` | May be omitted or null; ≥1, ≤9223372036854775807 | Consecutive windows with a consistent change required to trigger an update. |
+| `sketch.live.relative_change_threshold` | number | `0.1` | May be omitted or null; >0, ≤0.99 | Change threshold relative to the baseline. |
+| `sketch.live.baseline_max_cv` | number | `0.05` | May be omitted or null; ≥0, ≤0.05 | Maximum coefficient of variation for establishing a stable baseline. |
+| `sketch.live.min_residence_requests` | integer | `32` | May be omitted or null; ≥0, ≤9223372036854775807 | Minimum successful requests after adopting a version before an ordinary update. |
+| `sketch.live.max_retries` | integer | `2` | May be omitted or null; ≥0, ≤4294967295 | Additional full-request retries after failure; defaults to 2. |
+| `sketch.live.external_telemetry_path` | string | `unspecified` | Checked when enabled; — | Path to the caller-maintained JSONL file containing in-band telemetry. |
+| `sketch.live.external_max_age_s` | number | `60` | May be omitted or null; >0 | Maximum accepted age of external telemetry. |
+| `sketch.live.fault_injection` | object | `{}` | May be omitted or null; — | Development fault injection, enabled explicitly. |
+| `sketch.live.fault_injection.request_id` | integer | `0` | May be omitted or null; ≥0, ≤9223372036854775807 | Logical request to fail; 0 disables injection. |
+| `sketch.live.fault_injection.attempts` | integer | `0` | May be omitted or null; ≥0, ≤4294967295 | Initial attempts of that request marked as failed after actual completion. |
 
 ## atom.json
 
@@ -135,8 +189,8 @@ The object/array rows below describe configuration sections, and subsequent rows
 
 | Field | Type | Default | Requirements and values | Purpose |
 |---|---|---|---|---|
-| `atom.synthesis_method` | string | `"auto"` | May be omitted or null; auto / hierarchy / constructive_trees | For automatic plans, auto uses M_switch to select hierarchy for small messages and constructive_trees for large messages; manual plans use hierarchy, and auto also resolves to hierarchy. |
-| `atom.M_switch` | integer | `unspecified` | Checked when enabled; ≥1, ≤9223372036854775807 | Explicit message-size threshold in bytes when automatic plans use auto. |
+| `atom.synthesis_method` | string | `"auto"` | May be omitted or null; auto / hierarchy / constructive_trees | auto selects hierarchy below M_switch and constructive_trees for larger messages. |
+| `atom.M_switch` | integer | `unspecified` | Checked when enabled; ≥1, ≤9223372036854775807 | Explicit message-size threshold in bytes, required for auto selection. |
 | `atom.stage_num` | integer | `null` | May be omitted or null; ≥1, ≤9223372036854775807 | Hard constraint on the number of logical stages; determined automatically if omitted. |
 | `atom.forbidden_transfers` | array | `[]` | May be omitted or null; — | [original slice_id,src,dst,stage]; forbids only this direct edge in the specified stage, while valid alternate paths remain allowed. |
 | `atom.strategies` | object | `{}` | May be omitted or null; — | Optional initial solving strategies, disabled by default. |
@@ -153,10 +207,6 @@ The object/array rows below describe configuration sections, and subsequent rows
 | `atom.manual.nodes[].group` | array | `unspecified` | Required; — | Ranks available to this manual node. |
 | `atom.manual.nodes[].root` | integer | `unspecified` | Checked when enabled; ≥0, ≤9223372036854775807 | External root for Broadcast/Reduce, defaulting to 0; for a manual node, that node's root. |
 | `atom.manual.nodes[].relay_ranks` | array | `[]` | May be omitted or null; — | Ranks allowed to relay within the group; ranks outside the group are not allowed. |
-| `atom.manual.nodes[].atoms` | array | `[]` | May be omitted or null; — | Variable groups that forbid directed edges within a stage, expanded over all combinations of their sets. |
-| `atom.manual.nodes[].atoms[].slice_ids` | array | `unspecified` | Required; — | Original slice IDs subject to the constraint. |
-| `atom.manual.nodes[].atoms[].src_ranks` | array | `unspecified` | Required; — | Sending ranks of forbidden edges. |
-| `atom.manual.nodes[].atoms[].dst_ranks` | array | `unspecified` | Required; — | Receiving ranks of forbidden edges. |
 | `atom.manual.nodes[].depends_on` | array | `[]` | May be omitted or null; — | IDs of nodes on which this manual node depends. |
 | `atom.manual.nodes[].input_states` | array | `unspecified` | Checked when enabled; — | Input state contract for the manual node. |
 | `atom.manual.nodes[].input_states[].rank` | integer | `unspecified` | Required; ≥0, ≤9223372036854775807 | Logical rank ID, starting at 0. |
@@ -185,12 +235,17 @@ The object/array rows below describe configuration sections, and subsequent rows
 | `runtime.environment.MSCCL_ROOT` | string | `unspecified` | Checked when enabled; — | Runtime root directory. |
 | `runtime.environment.MSCCL_XML_FILES` | string | `unspecified` | Checked when enabled; — | Existing MSCCL XML loading interface; the native versioned interface binds plans explicitly. |
 | `runtime.environment.NCCL_ALGO` | string | `unspecified` | Checked when enabled; — | Retained NCCL algorithm interface. |
-| `runtime.environment.NCCL_BUFFSIZE` | string | `unspecified` | Required; — | Communication buffer size per channel, as a decimal byte string from 8 to 2147483647; Simple-protocol alignment and slice-capacity checks also apply. |
+| `runtime.environment.NCCL_BUFFSIZE` | string | `unspecified` | Required; — | Communication buffer size per channel, as a decimal byte string from 1 to 2147483647. |
 | `runtime.environment.NCCL_DEBUG` | string | `unspecified` | Checked when enabled; — | Runtime logging level. |
 | `runtime.environment.NCCL_DEBUG_SUBSYS` | string | `unspecified` | Checked when enabled; — | Runtime logging subsystems. |
+| `runtime.environment.NCCL_IB_DISABLE` | string | `unspecified` | Checked when enabled; — | Disable IB/RoCE and use sockets. |
 | `runtime.environment.NCCL_IB_GID_INDEX` | string | `unspecified` | Checked when enabled; — | Explicit GID index. |
 | `runtime.environment.NCCL_IB_HCA` | string | `unspecified` | Checked when enabled; — | Explicitly selected IB/RoCE devices. |
+| `runtime.environment.NCCL_IGNORE_DISABLED_P2P` | string | `unspecified` | Checked when enabled; — | Suppress warnings about disabled P2P. |
+| `runtime.environment.NCCL_NET_GDR_LEVEL` | string | `unspecified` | Checked when enabled; — | Maximum topology distance for GPUDirect RDMA. |
+| `runtime.environment.NCCL_NET_GDR_READ` | string | `unspecified` | Checked when enabled; — | Use GPUDirect RDMA reads on the sending side. |
 | `runtime.environment.NCCL_P2P_DISABLE` | string | `unspecified` | Checked when enabled; — | Whether to disable GPU P2P paths. |
+| `runtime.environment.NCCL_P2P_LEVEL` | string | `unspecified` | Checked when enabled; — | Maximum topology distance for GPU P2P. |
 | `runtime.environment.NCCL_PROTO` | string | `unspecified` | Checked when enabled; — | Runtime protocol; tasks use Simple. |
 | `runtime.environment.NCCL_SHM_DISABLE` | string | `unspecified` | Checked when enabled; — | Whether to disable host shared-memory paths. |
 | `runtime.environment.NCCL_SOCKET_IFNAME` | string | `unspecified` | Checked when enabled; — | Communication network interface selection. |
@@ -210,7 +265,7 @@ The object/array rows below describe configuration sections, and subsequent rows
 | `runtime.paths.msccl_root` | string | `unspecified` | Checked when enabled; — | Built MSCCL root, containing include/lib. |
 | `runtime.paths.nccl_tests_root` | string | `unspecified` | Checked when enabled; — | Optional nccl-tests root directory. |
 | `runtime.paths.vericcl_driver` | string | `unspecified` | Checked when enabled; — | Absolute path to the independent primitive measurement program vericcl-probe. |
-| `runtime.paths.vericcl_native` | string | `unspecified` | Checked when enabled; — | Absolute path to the full-schedule execution program vericcl-native. |
+| `runtime.paths.vericcl_native` | string | `unspecified` | Checked when enabled; — | Absolute path to vericcl-native for full-schedule and resident execution. |
 | `runtime.device_memory_budget_bytes` | integer | `0` | May be omitted or null; ≥0, ≤9223372036854775807 | Total device memory budget; 0 uses available memory at launch as the bound, while still checking actual allocations. |
 | `runtime.protocol` | string | `"Simple"` | May be omitted or null; Simple | Currently fixed to Simple. |
 | `runtime.scratch_bytes_per_rank` | integer | `unspecified` | Required; ≥0, ≤9223372036854775807 | Allowed scratch bytes per rank. |
@@ -222,6 +277,10 @@ The object/array rows below describe configuration sections, and subsequent rows
 | `runtime.limits.dependency_id` | integer | `127` | May be omitted or null; ≥0, ≤127 | Maximum dependency ID. |
 | `runtime.limits.buffer_offset` | integer | `32767` | May be omitted or null; ≥0, ≤32767 | Maximum buffer slice offset. |
 | `runtime.tb_layout` | string | `"separate"` | May be omitted or null; separate / fused | Separate send/receive layout by default; fused requires explicit selection. |
-| `runtime.control` | object | `{}` | May be omitted or null; — | Rank synchronization configuration for one execution. |
+| `runtime.xml_size_range` | object | `{}` | May be omitted or null; — | Message-size interval [min_bytes, max_bytes) in which MSCCL selects this XML. |
+| `runtime.xml_size_range.min_bytes` | integer | `0` | May be omitted or null; ≥0, ≤9223372036854775807 | Inclusive lower bound, defaulting to 0. |
+| `runtime.xml_size_range.max_bytes` | integer | `4294967296` | May be omitted or null; ≥1, ≤9223372036854775807 | Exclusive upper bound, defaulting to 4294967296. |
+| `runtime.control` | object | `{}` | May be omitted or null; — | Resident control-plane settings. |
 | `runtime.control.bind_address` | string | `unspecified` | Checked when enabled; — | Reachable listening address of rank 0. |
 | `runtime.control.port` | integer | `unspecified` | Checked when enabled; ≥1, ≤65535 | Control TCP port. |
+| `runtime.control.unix_socket` | string | `unspecified` | Checked when enabled; — | Absolute Unix socket path on the controller host. |

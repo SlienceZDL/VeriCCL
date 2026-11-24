@@ -12,12 +12,12 @@ def test_default_options_leave_auxiliary_and_optional_paths_off(tmp_path):
     config = result.request_config
     assert config["atom"]["synthesis_method"] == "auto"
     assert result.selected_synthesis_method == "hierarchy"
-    assert result.solver.max_channels == 7
+    assert result.solver.max_channels == 8
     assert config["sketch"]["runtime_compatibility"]["enabled"] is True
     assert config["sketch"]["trace_and_measure"]["enabled"] is False
     assert config["sketch"]["history"]["schedule_reuse"] is False
     assert config["sketch"]["history"]["calibration_reuse"] is False
-    assert "live" not in config["sketch"]
+    assert config["sketch"]["live"]["enabled"] is False
     assert config["atom"]["manual"]["enabled"] is False
     assert not result.strategies.symmetry and not result.strategies.shortest_paths
     assert not result.strategies.batching
@@ -84,10 +84,10 @@ def test_shortest_paths_is_rejected_for_constructive_trees(tmp_path):
         load(write_request(tmp_path, docs))
 
 
-def test_live_enabled_requires_migration(tmp_path):
+def test_live_requires_all_seven_finite_timeouts(tmp_path):
     docs = request_documents()
     docs["sketch"]["live"] = {"enabled": True}
-    with pytest.raises(InputValidationError, match="live.*removed"):
+    with pytest.raises(InputValidationError, match="request_prepare_timeout_s"):
         load(write_request(tmp_path, docs))
 
 

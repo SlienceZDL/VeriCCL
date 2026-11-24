@@ -2,6 +2,7 @@ from dataclasses import replace
 
 from vericcl.input.models import ForbiddenTransfer
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import CollectiveKind
 from vericcl.topology.model import (
     DirectedLink,
@@ -41,7 +42,7 @@ def _transfer(
         stage_id=stage_id,
         member_slice_ids=frozenset(member_paths),
         atoms=tuple(
-            Atom(
+            Atom.build(
                 slice_id=member,
                 slice_size_bytes=1024,
                 path=path,
@@ -57,9 +58,9 @@ def _transfer(
 
 
 def two_members_with_shared_suffix():
-    left = PathStage(0, "REDUCE", (Symbol(0, 2, 0.0),))
-    right = PathStage(0, "REDUCE", (Symbol(1, 2, 0.0),))
-    suffix = PathStage(1, "SEND", (Symbol(2, 3, 1.0),))
+    left = PathStage(0, "REDUCE", (symbolic_step(0, 2, 0.0),))
+    right = PathStage(0, "REDUCE", (symbolic_step(1, 2, 0.0),))
+    suffix = PathStage(1, "SEND", (symbolic_step(2, 3, 1.0),))
     transfers = (
         _transfer(
             "tx-left",
@@ -112,25 +113,25 @@ def two_members_with_shared_suffix():
 
 
 def crossing_flows_with_ready_wait():
-    wait_first = PathStage(0, "SEND", (Symbol(0, 1, 0.0),))
+    wait_first = PathStage(0, "SEND", (symbolic_step(0, 1, 0.0),))
     wait_full = PathStage(
         0,
         "SEND",
-        (Symbol(0, 1, 0.0), Symbol(1, 3, 1.0)),
+        (symbolic_step(0, 1, 0.0), symbolic_step(1, 3, 1.0)),
     )
-    cross_first = PathStage(0, "SEND", (Symbol(4, 1, 0.0),))
+    cross_first = PathStage(0, "SEND", (symbolic_step(4, 1, 0.0),))
     cross_middle = PathStage(
         0,
         "SEND",
-        (Symbol(4, 1, 0.0), Symbol(1, 3, 1.0)),
+        (symbolic_step(4, 1, 0.0), symbolic_step(1, 3, 1.0)),
     )
     cross_full = PathStage(
         0,
         "SEND",
         (
-            Symbol(4, 1, 0.0),
-            Symbol(1, 3, 1.0),
-            Symbol(3, 5, 5.0),
+            symbolic_step(4, 1, 0.0),
+            symbolic_step(1, 3, 1.0),
+            symbolic_step(3, 5, 5.0),
         ),
     )
     transfers = (
@@ -248,13 +249,13 @@ def crossing_inputs(*, forbid_alternative=False):
 
 
 def tb_order_case(*, necessary_order=False):
-    prep_stage = PathStage(0, "SEND", (Symbol(2, 0, 0.0),))
+    prep_stage = PathStage(0, "SEND", (symbolic_step(2, 0, 0.0),))
     slow_stage = PathStage(
         0,
         "SEND",
-        (Symbol(2, 0, 0.0), Symbol(0, 1, 5.0)),
+        (symbolic_step(2, 0, 0.0), symbolic_step(0, 1, 5.0)),
     )
-    fast_stage = PathStage(0, "SEND", (Symbol(0, 1, 0.0),))
+    fast_stage = PathStage(0, "SEND", (symbolic_step(0, 1, 0.0),))
     transfers = (
         _transfer(
             "prep",

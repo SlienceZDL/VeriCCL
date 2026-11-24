@@ -17,11 +17,16 @@ from vericcl.semantics.ranges import DataRange
 from vericcl.semantics.versions import StateVersion
 from vericcl.semantics.version_schedule import VersionSchedule, VersionOperation, OutputBinding, replay_version_schedule
 from vericcl.verification.model import CheckResult, ValidationStatus
-from vericcl.xml.capacity import (ExecutionShape, BlockCapacity, StepCapacity, check_capacity, simple_payload_capacity,
-                                  simple_chunk_geometry)
+from vericcl.xml.capacity import ExecutionShape, BlockCapacity, StepCapacity, check_capacity, simple_payload_capacity
 from .v5_model import StorageCandidate, CandidateBundle, Value, Instruction, StoragePlan, NativeStep, NativeBlock, NativeProgram, Address
 from .v5_buffers import build_storage_plan, canonical_region
 from .v5_program import lower_program, build_executable, emit_native_xml, execution_dependencies, _endpoints, _dependency_ancestors
+
+
+class _SymbolicFailure(SemanticError):
+    def __init__(self, result):
+        super().__init__('symbolic+BDD check failed: ' + result.message)
+        self.result = result
 
 
 DIMENSIONS = ('semantic', 'storage', 'endpoint', 'deadlock', 'xml', 'launch', 'compatibility', 'prediction')
@@ -279,21 +284,13 @@ def evaluate_program(source, storage, program, xml_text, context, *, supplied_si
         capacity = _capacity(program, context)
         inputs = context.inputs
         _launch_geometry(program, storage, context)
-        buffsize = int(inputs.request_config['runtime']['environment']['NCCL_BUFFSIZE'])
-        element = DATATYPE_BYTES[inputs.collective.datatype]
-        if simple_payload_capacity(buffsize, element) < inputs.hyperparameters.slice_size_bytes:
-            raise SemanticError('NCCL_BUFFSIZE cannot hold one whole Simple slice')
-        chunk, granule, geometry_valid = simple_chunk_geometry(buffsize, element)
-        if not geometry_valid:
-            raise SemanticError('NCCL_BUFFSIZE gives a %d-byte Simple chunk; the pinned MSCCL launch requires a '
-                                'multiple of %d bytes for %s' % (chunk, granule, inputs.collective.datatype))
+        # NCCL_BUFFSIZE only needs to hold one Simple step of one element;
+        # larger chunks are pipelined by the interpreter's gridOffset loop.
+        if simple_payload_capacity(int(inputs.request_config['runtime']['environment']['NCCL_BUFFSIZE']), DATATYPE_BYTES[inputs.collective.datatype]) < DATATYPE_BYTES[inputs.collective.datatype]:
+            raise SemanticError('NCCL_BUFFSIZE cannot hold one Simple element')
         if not capacity.compatible:
             raise SemanticError('runtime capacity: ' + ', '.join(sorted({issue.code for issue in capacity.violations})))
-        legacy = simple_chunk_geometry(buffsize, 1)[2] if inputs.collective.kind in {
-            CollectiveKind.ALL_GATHER, CollectiveKind.BROADCAST} else geometry_valid
-        checks['launch'] = _check('launch', evidence={'scope': 'static launch safety; node preflight is also required',
-            'simple_chunk_bytes': chunk, 'simple_chunk_multiple': granule,
-            'legacy_nccl_api_chunk_geometry': legacy})
+        checks['launch'] = _check('launch', evidence={'scope': 'static launch safety; node preflight is also required'})
     except SemanticError as error:
         checks['launch'] = _check('launch', 'invalid', str(error))
     if context.inputs.request_config['sketch']['runtime_compatibility']['enabled']:
@@ -319,8 +316,48 @@ def evaluate_program(source, storage, program, xml_text, context, *, supplied_si
                     raise SemanticError('semantic sidecar differs from replayed native state mapping')
             checks['semantic'] = _check('semantic', evidence=evidence)
             checks['storage'] = _check('storage')
+            # Primary correctness gate: symbolic execution of the lowered
+            # program plus BDD checks (coverage, causality, exactly-once,
+            # constraints, deadlock, buffer safety, XML consistency).
+            from types import SimpleNamespace
+            from vericcl.verification.symbolic_check import cached_check, check_bundle
+            backend = context.inputs.request_config['sketch']['solver'].get('bdd_backend', 'cudd')
+            storage_digest = hashlib.sha256(json.dumps(_serialize_storage(storage), sort_keys=True,
+                                                       default=str).encode()).hexdigest()
+            from vericcl.symbolic_full.config import enabled as full_symbolic_enabled
+            if full_symbolic_enabled(context.inputs):
+                # sketch.symbolic.enabled: the emitted XML itself is executed
+                # symbolically on the runtime progress model; every check is a
+                # BDD computation (vericcl/symbolic_full/checks.py).
+                from vericcl.symbolic_full.cache import remember
+                from vericcl.symbolic_full.checks import full_check
+
+                def full():
+                    result, execution = full_check(xml_text, storage, program, executable, context.inputs,
+                                                   context.topology, backend=backend, lease=context.lease)
+                    remember((xml_hash, context.inputs.input_sha256, backend), execution)
+                    return result
+                symbolic, reused = cached_check(
+                    (xml_hash, storage_digest, context.inputs.input_sha256, backend, 'full'), full)
+            else:
+                symbolic, reused = cached_check(
+                    (xml_hash, storage_digest, context.inputs.input_sha256, backend),
+                    lambda: check_bundle(SimpleNamespace(storage_plan=storage, program=program,
+                                                         executable=executable, prediction=prediction),
+                                         context.inputs, None,  # correctness needs no cost model
+                                         backend=backend)[0])
+            if not symbolic.valid:
+                # Keep the per-check verdicts and witnesses: correctness repair
+                # (tuning.correctness) uses them to locate the violation.
+                raise _SymbolicFailure(symbolic)
+            checks['semantic'] = _check('semantic', evidence=dict(evidence, symbolic_bdd=dict(symbolic.checks),
+                                                                  symbolic_statistics=dict(symbolic.statistics),
+                                                                  symbolic_cache='hit' if reused else 'computed'))
         except BudgetExhausted:
             raise
+        except _SymbolicFailure as failure:
+            checks['semantic'] = _check('semantic', 'invalid', str(failure), {
+                'symbolic_bdd': dict(failure.result.checks), 'witnesses': _plain(dict(failure.result.witnesses))})
         except (SemanticError, KeyError) as error:
             key = 'prediction' if prediction is None else 'semantic'
             checks[key] = _check(key, 'invalid', str(error))
@@ -333,6 +370,27 @@ def evaluate_program(source, storage, program, xml_text, context, *, supplied_si
             'reference_orders_omitted': list(storage.reference_orders_omitted)}
     return CandidateBundle(source, xml_text, xml_hash, sidecar, program, version, executable, prediction,
                            MappingProxyType(checks), capacity, storage)
+
+
+def predict_only(candidate, context):
+    """T_pred of ``candidate`` under the same lowering and cost model as
+    ``lower_and_check``, without XML emission or the correctness checks.
+
+    Used to rank alternatives before the full gate (as SyCCL filters with
+    the simulator that scores its final result). Returns None when the
+    candidate cannot be lowered or its cost coverage is incomplete; the
+    full gate still runs on whatever is selected.
+    """
+    context.lease.check()
+    try:
+        storage = candidate.storage_plan if isinstance(candidate, StorageCandidate) else build_storage_plan(candidate, context)
+        program = lower_program(storage, context)
+        executable = build_executable(program, storage, context)
+        return predict(executable, context.model, exact=True, lease=context.lease, detail=False).t_pred_us
+    except BudgetExhausted:
+        raise
+    except (SemanticError, KeyError):
+        return None
 
 
 def lower_and_check(candidate, context):

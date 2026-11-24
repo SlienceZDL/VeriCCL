@@ -1,0 +1,92 @@
+{
+ "device_memory_budget_bytes": 0,
+ "environment": {
+  "NCCL_BUFFSIZE": "2097152",
+  "NCCL_PROTO": "Simple"
+ },
+ "protocol": "Simple",
+ "rank_map": [
+  {
+   "device": 0,
+   "host": "worker-a",
+   "rank": 0
+  },
+  {
+   "device": 1,
+   "host": "worker-a",
+   "rank": 1
+  },
+  {
+   "device": 2,
+   "host": "worker-a",
+   "rank": 2
+  },
+  {
+   "device": 3,
+   "host": "worker-a",
+   "rank": 3
+  },
+  {
+   "device": 4,
+   "host": "worker-a",
+   "rank": 4
+  },
+  {
+   "device": 5,
+   "host": "worker-a",
+   "rank": 5
+  },
+  {
+   "device": 6,
+   "host": "worker-a",
+   "rank": 6
+  },
+  {
+   "device": 7,
+   "host": "worker-a",
+   "rank": 7
+  },
+  {
+   "device": 0,
+   "host": "worker-b",
+   "rank": 8
+  },
+  {
+   "device": 1,
+   "host": "worker-b",
+   "rank": 9
+  },
+  {
+   "device": 2,
+   "host": "worker-b",
+   "rank": 10
+  },
+  {
+   "device": 3,
+   "host": "worker-b",
+   "rank": 11
+  },
+  {
+   "device": 4,
+   "host": "worker-b",
+   "rank": 12
+  },
+  {
+   "device": 5,
+   "host": "worker-b",
+   "rank": 13
+  },
+  {
+   "device": 6,
+   "host": "worker-b",
+   "rank": 14
+  },
+  {
+   "device": 7,
+   "host": "worker-b",
+   "rank": 15
+  }
+ ],
+ "scratch_bytes_per_rank": 16777216,
+ "tb_layout": "separate"
+}

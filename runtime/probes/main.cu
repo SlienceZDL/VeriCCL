@@ -127,7 +127,379 @@ void save(const std::string& path, const std::string& text) {
   if (rename(temporary.c_str(), path.c_str()) != 0) throw std::runtime_error("cannot publish native evidence");
 }
 
+// ---------------------------------------------------------------------------
+// Batch session: one MPI launch runs many probe modes. Each mode gets its own
+// NCCL communicator over its member ranks (MPI_Comm_split of the session) and
+// its MSCCL XML; each of its launches is an independent barrier-separated
+// episode with its own warmup and timed iterations, reported exactly like a
+// single-launch probe. Results are JSON lines per (mode, session rank),
+// published by rename without a per-file fsync.
+struct BatchJob {
+  std::string key, xml, datatype = "float32", reduction = "sum";
+  size_t payload = 0;
+  int warmup = 5, timed = 20, launches = 1;
+  double atol = 1e-5, rtol = 1e-5;
+  std::vector<int> members;
+  std::vector<Flow> flows;
+};
+
+std::map<std::string, std::string> plan_fields(const std::string& line) {
+  std::map<std::string, std::string> result;
+  std::stringstream stream(line);
+  std::string token;
+  stream >> token;  // record kind
+  while (stream >> token) {
+    auto equal = token.find('=');
+    if (equal == std::string::npos) throw std::runtime_error("invalid batch plan token: " + token);
+    result[token.substr(0, equal)] = token.substr(equal + 1);
+  }
+  return result;
+}
+
+void publish_plain(const std::string& path, const std::string& text) {
+  std::string temporary = path + ".partial";
+  std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+  out << text;
+  out.close();
+  if (!out) throw std::runtime_error("cannot write batch evidence");
+  if (rename(temporary.c_str(), path.c_str()) != 0) throw std::runtime_error("cannot publish batch evidence");
+}
+
+// Runs every launch of one job on an already initialized communicator; the
+// stream, buffers and counter table are per job (payload sizes differ).
+std::string run_batch_job(const BatchJob& job, MPI_Comm comm, ncclComm_t nccl, int rank, int device,
+                          const cudaDeviceProp& properties, int runtime_version, int driver_version) {
+  int ranks = int(job.members.size());
+  auto type = datatype(job.datatype);
+  auto op = reduction(job.reduction);
+  if (job.payload % datatype_bytes(type)) throw std::runtime_error("payload is not a whole datatype element");
+  int blocks = 0;
+  for (const auto& f : job.flows) {
+    if (f.src >= ranks || f.dst >= ranks || f.channel >= 16 ||
+        (f.kind != "send" && f.kind != "rrc" && f.kind != "copy" && f.kind != "reduce") ||
+        ((f.src == f.dst) != (f.kind == "copy" || f.kind == "reduce")))
+      throw std::runtime_error("invalid flow endpoints or primitive");
+    if (f.src == rank || f.dst == rank) blocks++;
+  }
+  if (!blocks || blocks > 216) throw std::runtime_error("invalid active-rank TB count");
+  cudaStream_t stream = nullptr;
+  void *input = nullptr, *output = nullptr;
+  int* alignment = nullptr;
+  VericclProbeCounter* table = nullptr;
+  bool attached = false;
+  std::string lines;
+  try {
+    VC_CUDA(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    size_t elements = job.payload / datatype_bytes(type);
+    size_t bytes = job.payload * job.flows.size();
+    VC_CUDA(cudaMalloc(&input, bytes)); VC_CUDA(cudaMalloc(&output, bytes));
+    size_t entries = size_t(blocks) * 256;
+    VC_CUDA(cudaMalloc(&table, entries * sizeof(*table)));
+    VC_CUDA(cudaMemsetAsync(table, 0, entries * sizeof(*table), stream));
+    for (size_t slot = 0; slot < job.flows.size(); slot++)
+      fill_values((char*)input + slot * job.payload, elements, type, value(rank, slot), stream);
+    VC_CUDA(cudaStreamSynchronize(stream));
+    VC_NCCL(vericclProbeAttach(nccl, table, entries));
+    attached = true;
+    int nccl_version = 0;
+    VC_NCCL(ncclGetVersion(&nccl_version));
+    // Iterations are aligned on the GPU, not the host: a one-element
+    // allreduce on the probe communicator precedes each probe on the same
+    // stream, so every GPU starts the probe right after all peers arrive.
+    // A host MPI barrier per iteration costs 12-47 ms once the session spans
+    // two hosts (TCP progress), which hides sub-millisecond probes.
+    VC_CUDA(cudaMalloc(&alignment, sizeof(int)));
+    VC_CUDA(cudaMemsetAsync(alignment, 0, sizeof(int), stream));
+    // Default: ranks align once per launch (barrier above); iterations then
+    // run back to back, and the flows of one probe synchronize through their
+    // own connections. Per-iteration alignment ("allreduce" on the GPU or
+    // "mpi" on the host) left the measured GPU service unchanged on 2x8 V100
+    // but cost 6x more wall time for multi-flow inter-host modes.
+    const char* align_env = getenv("VERICCL_BATCH_ALIGN");
+    const std::string align = align_env ? align_env : "none";
+    auto run = [&]() {
+      for (size_t slot = 0; slot < job.flows.size(); slot++)
+        fill_values((char*)output + slot * job.payload, elements, type, accumulator(rank, slot), stream);
+      if (align == "allreduce") {
+        VC_NCCL(ncclAllReduce(alignment, alignment, 1, ncclInt32, ncclSum, nccl, stream));
+      } else if (align == "mpi") {
+        VC_CUDA(cudaStreamSynchronize(stream));
+        if (MPI_Barrier(comm) != MPI_SUCCESS) throw std::runtime_error("MPI probe barrier failed");
+      }
+      VC_NCCL(ncclCustomCollective(input, output, elements * job.flows.size(), type, op, 0, nccl, stream));
+    };
+    std::vector<VericclProbeCounter> counters(entries);
+    for (int launch = 1; launch <= job.launches; launch++) {
+      if (MPI_Barrier(comm) != MPI_SUCCESS) throw std::runtime_error("MPI launch barrier failed");
+      for (int i = 0; i < job.warmup; i++) run();
+      VC_CUDA(cudaStreamSynchronize(stream));
+      VC_CUDA(cudaMemsetAsync(table, 0, entries * sizeof(*table), stream));
+      VC_CUDA(cudaStreamSynchronize(stream));
+      auto start = std::chrono::steady_clock::now();
+      for (int i = 0; i < job.timed; i++) run();
+      VC_CUDA(cudaStreamSynchronize(stream));
+      double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+      VC_CUDA(cudaMemcpy(counters.data(), table, entries * sizeof(*table), cudaMemcpyDeviceToHost));
+      unsigned long long incorrect = 0;
+      for (size_t slot = 0; slot < job.flows.size(); slot++) {
+        const auto& f = job.flows[slot];
+        if (f.dst != rank) continue;
+        double expected = value(f.src, slot);
+        if (f.kind == "rrc") expected = combine(expected, value(rank, slot), op);
+        if (f.kind == "reduce") expected = combine(expected, accumulator(rank, slot), op);
+        incorrect += check_values((char*)output + slot * job.payload, elements, type, expected, job.atol, job.rtol, stream);
+      }
+      for (size_t slot = 0; slot < job.flows.size(); slot++)
+        incorrect += check_values((char*)input + slot * job.payload, elements, type, value(rank, slot), job.atol, job.rtol, stream);
+      unsigned long long all_incorrect = 0;
+      if (MPI_Allreduce(&incorrect, &all_incorrect, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm) != MPI_SUCCESS)
+        throw std::runtime_error("MPI correctness agreement failed");
+      std::ostringstream report;
+      report << std::setprecision(17) << "{\"schema_version\":1,\"job_id\":" << quote(job.key)
+        << ",\"launch\":" << launch << ",\"rank\":" << rank << ",\"device\":" << device
+        << ",\"status\":\"completed\",\"driver_kind\":\"native_msccl\",\"correct\":" << (all_incorrect ? "false" : "true")
+        << ",\"incorrect_elements\":" << all_incorrect << ",\"gpu_released\":true,\"datatype\":" << quote(job.datatype)
+        << ",\"reduction_op\":" << quote(job.reduction) << ",\"payload_bytes\":" << job.payload
+        << ",\"warmup_iterations\":" << job.warmup << ",\"timed_iterations\":" << job.timed
+        << ",\"timed_wall_s\":" << wall << ",\"device_name\":" << quote(properties.name)
+        << ",\"compute_capability\":" << quote(std::to_string(properties.major) + "." + std::to_string(properties.minor))
+        << ",\"cuda_runtime_version\":" << runtime_version << ",\"cuda_driver_version\":" << driver_version
+        << ",\"nccl_version\":" << nccl_version << ",\"endpoints\":[";
+      // Every executed step of every TB (256 step slots per TB): a chained
+      // probe flow runs several steps on one TB.
+      bool first_endpoint = true;
+      for (int tb = 0; tb < blocks; tb++) for (int step = 0; step < 256; step++) {
+        const auto& c = counters[size_t(tb) * 256 + step];
+        if (step && !c.samples && !c.invalid_samples) continue;
+        if (!first_endpoint) report << ',';
+        first_endpoint = false;
+        report << "{\"tb\":" << tb << ",\"step\":" << step << ",\"service_ns\":" << c.service_ns
+          << ",\"dependency_wait_ns\":" << c.dependency_wait_ns << ",\"samples\":" << c.samples
+          << ",\"first_start_ns\":" << c.first_start_ns << ",\"last_end_ns\":" << c.last_end_ns
+          << ",\"invalid_samples\":" << c.invalid_samples << ",\"kind\":" << c.kind << ",\"channel\":" << c.channel << '}';
+      }
+      report << "]}\n";
+      lines += report.str();
+    }
+    VC_NCCL(vericclProbeAttach(nccl, nullptr, 0)); attached = false;
+    VC_CUDA(cudaFree(alignment)); alignment = nullptr;
+    VC_CUDA(cudaFree(table)); table = nullptr;
+    VC_CUDA(cudaFree(input)); input = nullptr;
+    VC_CUDA(cudaFree(output)); output = nullptr;
+    VC_CUDA(cudaStreamDestroy(stream)); stream = nullptr;
+    VC_CUDA(cudaDeviceSynchronize());
+    return lines;
+  } catch (...) {
+    // The caller aborts the communicator; release this job's resources.
+    try {
+      cudaDeviceSynchronize();
+      if (attached) vericclProbeAttach(nccl, nullptr, 0);
+      if (alignment) cudaFree(alignment);
+      if (table) cudaFree(table);
+      if (input) cudaFree(input);
+      if (output) cudaFree(output);
+      if (stream) cudaStreamDestroy(stream);
+      cudaDeviceSynchronize();
+    } catch (...) {}
+    throw;
+  }
+}
+
+// Session-wide waits must not busy-poll: ranks idle in a blocking
+// MPI_Barrier/Allreduce (TCP progress) slowed the active ranks' NCCL network
+// proxies from 1-12 ms to 45-92 ms per inter-host iteration on 2x8 V100.
+void polite_wait(MPI_Request& request, const char* what) {
+  int done = 0;
+  while (!done) {
+    if (MPI_Test(&request, &done, MPI_STATUS_IGNORE) != MPI_SUCCESS) throw std::runtime_error(what);
+    if (!done) usleep(500);
+  }
+}
+
+void polite_barrier(MPI_Comm comm) {
+  MPI_Request request;
+  if (MPI_Ibarrier(comm, &request) != MPI_SUCCESS) throw std::runtime_error("MPI session barrier failed");
+  polite_wait(request, "MPI session barrier failed");
+}
+
+int polite_max(int value, MPI_Comm comm) {
+  int result = 0;
+  MPI_Request request;
+  if (MPI_Iallreduce(&value, &result, 1, MPI_INT, MPI_MAX, comm, &request) != MPI_SUCCESS)
+    throw std::runtime_error("MPI session agreement failed");
+  polite_wait(request, "MPI session agreement failed");
+  return result;
+}
+
+// One communicator per distinct (XML, members, flows); consecutive jobs that
+// differ only in payload size reuse it. Every rank reads the same plan, so
+// all ranks agree on when the communicator is rebuilt.
+struct SessionComm {
+  std::string signature;
+  MPI_Comm sub = MPI_COMM_NULL;
+  ncclComm_t nccl = nullptr;
+  int position = -1;
+  bool broken = false;
+};
+
+std::string job_signature(const BatchJob& job) {
+  std::ostringstream text;
+  text << job.xml << '|';
+  for (int m : job.members) text << m << ',';
+  text << '|';
+  for (const auto& f : job.flows) text << f.kind << ':' << f.src << ':' << f.dst << ':' << f.channel << ',';
+  return text.str();
+}
+
+void release_comm(SessionComm& state) {
+  if (state.nccl) {
+    if (state.broken) ncclCommAbort(state.nccl);
+    else ncclCommDestroy(state.nccl);
+    state.nccl = nullptr;
+  }
+  if (state.sub != MPI_COMM_NULL) MPI_Comm_free(&state.sub);
+  state.position = -1;
+  state.broken = false;
+}
+
+int run_batch(int argc, char** argv) {
+  std::string plan_path, output;
+  for (int i = 2; i + 1 < argc; i += 2) {
+    std::string key(argv[i]);
+    if (key == "--plan") plan_path = argv[i + 1];
+    else if (key == "--output-dir") output = argv[i + 1];
+    else throw std::runtime_error("unknown batch option: " + key);
+  }
+  if (plan_path.empty() || output.empty()) throw std::runtime_error("batch requires --plan and --output-dir");
+  std::ifstream plan(plan_path);
+  if (!plan) throw std::runtime_error("cannot read batch plan");
+  std::vector<int> devices;
+  std::vector<BatchJob> jobs;
+  std::string line;
+  while (std::getline(plan, line)) {
+    if (line.empty()) continue;
+    auto fields = plan_fields(line);
+    if (line.rfind("world ", 0) == 0) {
+      for (auto& v : split(fields.at("devices"), ',')) devices.push_back(int(integer(v)));
+      continue;
+    }
+    if (line.rfind("job ", 0) != 0) throw std::runtime_error("unknown batch plan record");
+    BatchJob job;
+    job.key = fields.at("key"); job.xml = fields.at("xml");
+    job.payload = integer(fields.at("payload"));
+    job.datatype = fields.at("datatype"); job.reduction = fields.at("reduction");
+    job.warmup = int(integer(fields.at("warmup"))); job.timed = int(integer(fields.at("timed")));
+    job.launches = int(integer(fields.at("launches")));
+    job.atol = std::stod(fields.at("atol")); job.rtol = std::stod(fields.at("rtol"));
+    for (auto& v : split(fields.at("members"), ',')) job.members.push_back(int(integer(v)));
+    for (auto& v : split(fields.at("flows"), ',')) {
+      auto parts = split(v, ':');
+      if (parts.size() != 4) throw std::runtime_error("invalid batch flow");
+      job.flows.push_back({parts[0], int(integer(parts[1])), int(integer(parts[2])), int(integer(parts[3]))});
+    }
+    if (!job.payload || job.timed < 1 || job.launches < 1 || job.members.empty() || job.flows.empty())
+      throw std::runtime_error("incomplete batch job: " + job.key);
+    jobs.push_back(std::move(job));
+  }
+  int rank = -1, ranks = 0;
+  MPI_Init(&argc, &argv);
+  MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank); MPI_Comm_size(MPI_COMM_WORLD, &ranks);
+  int completed = 0, failed = 0;
+  bool released = true;
+  try {
+    if (ranks != int(devices.size())) throw std::runtime_error("MPI session size differs from the batch plan");
+    VC_CUDA(cudaSetDevice(devices[rank]));
+    cudaDeviceProp properties;
+    VC_CUDA(cudaGetDeviceProperties(&properties, devices[rank]));
+    int runtime_version = 0, driver_version = 0;
+    VC_CUDA(cudaRuntimeGetVersion(&runtime_version)); VC_CUDA(cudaDriverGetVersion(&driver_version));
+    SessionComm state;
+    std::string init_error;
+    auto failure_line = [](const BatchJob& job, int position, const std::string& message) {
+      return "{\"schema_version\":1,\"job_id\":" + quote(job.key) + ",\"rank\":" + std::to_string(position) +
+             ",\"status\":\"failed\",\"correct\":false,\"gpu_released\":true,\"error\":" + quote(message) + "}\n";
+    };
+    for (const auto& job : jobs) {
+      std::string signature = job_signature(job);
+      int broken_any = polite_max(state.broken ? 1 : 0, MPI_COMM_WORLD);
+      if (signature != state.signature || broken_any) {
+        state.broken = state.broken || broken_any;
+        release_comm(state);
+        polite_barrier(MPI_COMM_WORLD);
+        int position = -1;
+        for (size_t i = 0; i < job.members.size(); i++)
+          if (job.members[i] == rank) position = int(i);
+        if (MPI_Comm_split(MPI_COMM_WORLD, position >= 0 ? 0 : MPI_UNDEFINED, position, &state.sub) != MPI_SUCCESS)
+          throw std::runtime_error("MPI session split failed");
+        state.signature = signature;
+        state.position = position;
+        init_error.clear();
+        if (position >= 0) {
+          try {
+            if (setenv("MSCCL_XML_FILES", job.xml.c_str(), 1) != 0 || setenv("VERICCL_TRACE_ENABLE", "0", 1) != 0)
+              throw std::runtime_error("cannot set probe environment");
+            ncclUniqueId id;
+            if (position == 0) VC_NCCL(ncclGetUniqueId(&id));
+            if (MPI_Bcast(&id, sizeof(id), MPI_BYTE, 0, state.sub) != MPI_SUCCESS)
+              throw std::runtime_error("MPI unique-id broadcast failed");
+            VC_NCCL(ncclCommInitRank(&state.nccl, int(job.members.size()), id, position));
+          } catch (const std::exception& error) {
+            init_error = error.what();
+            state.broken = true;
+          }
+        }
+      }
+      if (state.position >= 0) {
+        std::string lines;
+        if (!state.nccl) {
+          failed++;
+          lines = failure_line(job, state.position, init_error.empty() ? "communicator unavailable" : init_error);
+        } else {
+          try {
+            lines = run_batch_job(job, state.sub, state.nccl, state.position, devices[rank], properties,
+                                  runtime_version, driver_version);
+            completed++;
+          } catch (const std::exception& error) {
+            failed++;
+            state.broken = true;
+            lines = failure_line(job, state.position, error.what());
+          }
+        }
+        publish_plain(output + "/" + job.key + ".w" + std::to_string(rank) + ".jsonl", lines);
+      }
+      polite_barrier(MPI_COMM_WORLD);
+    }
+    release_comm(state);
+    VC_CUDA(cudaDeviceSynchronize());
+  } catch (const std::exception& error) {
+    released = false;
+    try { cudaDeviceSynchronize(); released = true; } catch (...) {}
+    std::string report = "{\"schema_version\":1,\"rank\":" + std::to_string(rank) + ",\"status\":\"failed\",\"gpu_released\":" +
+      (released ? "true" : "false") + ",\"error\":" + quote(error.what()) + "}\n";
+    std::cerr << report;
+    try { save(output + "/rank-" + std::to_string(rank) + ".json", report); } catch (...) {}
+    MPI_Abort(MPI_COMM_WORLD, 4);
+    return 4;
+  }
+  std::string receipt = "{\"schema_version\":1,\"rank\":" + std::to_string(rank) +
+    ",\"status\":\"completed\",\"driver_kind\":\"native_msccl\",\"gpu_released\":true,\"jobs_completed\":" +
+    std::to_string(completed) + ",\"jobs_failed\":" + std::to_string(failed) + "}\n";
+  save(output + "/rank-" + std::to_string(rank) + ".json", receipt);
+  std::cout << receipt;
+  MPI_Finalize();
+  return 0;
+}
+
 int main(int argc, char** argv) {
+  if (argc > 1 && std::string(argv[1]) == "batch") {
+    try {
+      return run_batch(argc, argv);
+    } catch (const std::exception& error) {
+      std::cerr << "{\"status\":\"failed\",\"error\":" << quote(error.what()) << "}\n";
+      return 4;
+    }
+  }
   int rank = -1, ranks = 0;
   Options o;
   ncclComm_t comm = nullptr;
@@ -258,10 +630,13 @@ int main(int argc, char** argv) {
       << ",\"compute_capability\":" << quote(std::to_string(properties.major) + "." + std::to_string(properties.minor))
       << ",\"cuda_runtime_version\":" << runtime_version << ",\"cuda_driver_version\":" << driver_version
       << ",\"nccl_version\":" << nccl_version << ",\"endpoints\":[";
-    for (int tb = 0; !o.capture_trace && tb < blocks; tb++) {
-      if (tb) report << ',';
-      const auto& c = counters[size_t(tb) * 256];
-      report << "{\"tb\":" << tb << ",\"step\":0,\"service_ns\":" << c.service_ns
+    bool first_endpoint = true;
+    for (int tb = 0; !o.capture_trace && tb < blocks; tb++) for (int step = 0; step < 256; step++) {
+      const auto& c = counters[size_t(tb) * 256 + step];
+      if (step && !c.samples && !c.invalid_samples) continue;
+      if (!first_endpoint) report << ',';
+      first_endpoint = false;
+      report << "{\"tb\":" << tb << ",\"step\":" << step << ",\"service_ns\":" << c.service_ns
         << ",\"dependency_wait_ns\":" << c.dependency_wait_ns << ",\"samples\":" << c.samples
         << ",\"first_start_ns\":" << c.first_start_ns << ",\"last_end_ns\":" << c.last_end_ns
         << ",\"invalid_samples\":" << c.invalid_samples << ",\"kind\":" << c.kind << ",\"channel\":" << c.channel << '}';

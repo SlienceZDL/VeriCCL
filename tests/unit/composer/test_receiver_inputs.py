@@ -3,6 +3,7 @@
 from vericcl.composer.compose import compose
 from vericcl.planner.model import PlanDAG, PlanEdge, PlanNode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.topology.model import LinkKey
 
 from tests.unit.composer.helpers import reduce_spec
@@ -43,8 +44,8 @@ def test_reduction_waits_for_receiver_input_without_other_slice_barrier():
         for offset in range(2):
             member = source * 2 + offset
             transfer_id = node.node_id + str(offset)
-            atom = Atom(member, 1024, (PathStage(node.stage_id, 'REDUCE',
-                        (Symbol(source, 0, 0.0),)),), 0.0, duration)
+            atom = Atom.build(member, 1024, (PathStage(node.stage_id, 'REDUCE',
+                        (symbolic_step(source, 0, 0.0),)),), 0.0, duration)
             transfers.append(Transfer(
                 transfer_id, 'REDUCE', source, 0, 0, node.stage_id,
                 frozenset({member}), (atom,), 0.0, duration, frozenset(),

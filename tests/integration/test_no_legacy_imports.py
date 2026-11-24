@@ -25,29 +25,13 @@ class _RejectLegacyPackage(importlib.abc.MetaPathFinder):
         return None
 
 
-def _vericcl_module(name):
-    return name == "vericcl" or name.startswith("vericcl.")
-
-
-@pytest.fixture
-def isolated_vericcl_modules():
-    # monkeypatch restores the modules this test removes, but modules first
-    # imported during the test would otherwise stay bound to the throw-away
-    # package copies (for example a second LinkKey class). Leave sys.modules
-    # with exactly the vericcl modules that existed before the test.
-    before = {name for name in sys.modules if _vericcl_module(name)}
-    yield
-    for name in [name for name in sys.modules if _vericcl_module(name) and name not in before]:
-        del sys.modules[name]
-
-
-def test_public_workflow_has_no_legacy_package_dependency(tmp_path, isolated_vericcl_modules, monkeypatch):
+def test_public_workflow_has_no_legacy_package_dependency(tmp_path, monkeypatch):
     for module_name in tuple(sys.modules):
         if module_name == LEGACY_PACKAGE or module_name.startswith(
             LEGACY_PACKAGE + "."
         ):
             monkeypatch.delitem(sys.modules, module_name)
-        if _vericcl_module(module_name):
+        if module_name == "vericcl" or module_name.startswith("vericcl."):
             monkeypatch.delitem(sys.modules, module_name)
     blocker = _RejectLegacyPackage()
     monkeypatch.setattr(sys, "meta_path", [blocker, *sys.meta_path])
@@ -61,7 +45,7 @@ def test_public_workflow_has_no_legacy_package_dependency(tmp_path, isolated_ver
         common += ['--' + name, str(path)]
     assert main(['solve', *common, '--run-id', 'solve']) == 0
     solve_root = tmp_path / 'examples/no-legacy/output/solve'
-    accepted = json.loads((solve_root / 'run.json').read_text())['best']['candidate']
+    accepted = json.loads((solve_root / 'best/accepted.json').read_text())['candidate']
     assert main(['verify', *common, '--run-id', 'verify', '--xml', str(solve_root / accepted['xml']),
                  '--sidecar', str(solve_root / accepted['sidecar'])]) == 0
     assert not any(

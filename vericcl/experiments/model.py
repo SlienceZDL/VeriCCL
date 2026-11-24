@@ -1,3 +1,31 @@
+"""Experiment manifests made of v5 request documents.
+
+A manifest (``schema_version`` 2) names one shared v5 atom and an ordered list
+of cases. Each case names a v5 topology, a v5 sketch and a v5 runtime
+document, all as repository-relative paths::
+
+    {
+      "schema_version": 2,
+      "atom": "tests/fixtures/experiments-v5/atom.json",
+      "cases": [
+        {"topology_name": "v100-n2g4", "collective_label": "ag", "size_label": "4m",
+         "topology": ".../topology/v100-n2g4.json",
+         "sketch": ".../sketch/v100-n2g4/ag-4m.json",
+         "runtime": ".../runtime/v100-n2g4/ag-4m.json"}
+      ]
+    }
+
+The case runtime is the experiment's part of the v5 runtime: a complete,
+loadable runtime whose ``rank_map`` uses *logical* host names (one per
+topology node, ordered by first rank) and whose environment carries the
+explicit ``NCCL_BUFFSIZE`` of the experiment. Deployment details (real host
+names, tool paths, MPI/NCCL interface settings) are bound later by the
+harness, e.g. :func:`vericcl.experiments.v100.bind_runtime`.
+
+Every case is resolved with :func:`vericcl.input.loader.load_request` while
+loading, and its metadata (rank count, nccl-tests message size, slice size,
+NCCL buffer size) comes from the resolved v5 inputs.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,13 +34,22 @@ from pathlib import Path
 import re
 from typing import Tuple
 
-from vericcl.errors import SemanticError
-from vericcl.input.loader import resolve_inputs
+from vericcl.errors import SemanticError, VeriCCLError
+from vericcl.input.loader import load_request
 from vericcl.semantics.collective import CollectiveKind
 
 
-_MANIFEST_FIELDS = frozenset(
-    {"schema_version", "atom", "topologies", "collectives", "sizes"}
+MANIFEST_SCHEMA_VERSION = 2
+_MANIFEST_FIELDS = frozenset({"schema_version", "atom", "cases"})
+_CASE_FIELDS = frozenset(
+    {
+        "topology_name",
+        "collective_label",
+        "size_label",
+        "topology",
+        "sketch",
+        "runtime",
+    }
 )
 _LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _COLLECTIVE_KINDS = {
@@ -43,15 +80,6 @@ def _path(value: object, field: str) -> Path:
     return path.resolve()
 
 
-def _unique_labels(value: object, field: str) -> Tuple[str, ...]:
-    if not isinstance(value, list) or not value:
-        raise SemanticError("{} must be a non-empty list".format(field))
-    labels = tuple(_identifier(item, field) for item in value)
-    if len(labels) != len(set(labels)):
-        raise SemanticError("{} contains duplicates".format(field))
-    return labels
-
-
 def _reject_duplicate_keys(pairs):
     result = {}
     for key, value in pairs:
@@ -77,15 +105,24 @@ def _repository_file(root: Path, value: object, field: str) -> Path:
 
 @dataclass(frozen=True)
 class ExperimentCase:
+    """One experiment case: v5 topology, sketch and runtime documents.
+
+    ``message_size_bytes`` is the nccl-tests size (all-gather: per-rank input
+    times ranks), ``slice_size_bytes`` the explicit v5 slice size and
+    ``nccl_buffsize_bytes`` the explicit ``NCCL_BUFFSIZE`` of the case runtime.
+    """
+
     task_id: str
     topology_name: str
     collective_label: str
     size_label: str
     topology_path: Path
     sketch_path: Path
+    runtime_path: Path
     rank_count: int
     message_size_bytes: int
     slice_size_bytes: int
+    nccl_buffsize_bytes: int
 
     def __post_init__(self) -> None:
         _identifier(self.task_id, "experiment task_id")
@@ -97,16 +134,12 @@ class ExperimentCase:
         if label not in _COLLECTIVE_KINDS:
             raise SemanticError("experiment collective label is unsupported")
         _identifier(self.size_label, "experiment size_label")
-        object.__setattr__(
-            self,
-            "topology_path",
-            _path(self.topology_path, "experiment topology_path"),
-        )
-        object.__setattr__(
-            self,
-            "sketch_path",
-            _path(self.sketch_path, "experiment sketch_path"),
-        )
+        for field in ("topology_path", "sketch_path", "runtime_path"):
+            object.__setattr__(
+                self,
+                field,
+                _path(getattr(self, field), "experiment " + field),
+            )
         _positive_integer(self.rank_count, "experiment rank_count")
         _positive_integer(
             self.message_size_bytes,
@@ -115,6 +148,10 @@ class ExperimentCase:
         _positive_integer(
             self.slice_size_bytes,
             "experiment slice_size_bytes",
+        )
+        _positive_integer(
+            self.nccl_buffsize_bytes,
+            "experiment nccl_buffsize_bytes",
         )
 
 
@@ -141,11 +178,64 @@ class ExperimentManifest:
         object.__setattr__(self, "cases", cases)
 
 
+def case_request_files(case: ExperimentCase, atom_path: Path) -> dict:
+    """The v5 request files of a case with its logical (unbound) runtime."""
+    return {
+        "topology": case.topology_path,
+        "sketch": case.sketch_path,
+        "atom": Path(atom_path),
+        "runtime": case.runtime_path,
+    }
+
+
+def _load_case(root: Path, atom_path: Path, value: object, index: int) -> ExperimentCase:
+    field = "manifest case {}".format(index)
+    if not isinstance(value, dict) or set(value) != _CASE_FIELDS:
+        raise SemanticError("{} fields are invalid".format(field))
+    topology_name = _identifier(value["topology_name"], field + " topology_name")
+    collective_label = _identifier(value["collective_label"], field + " collective_label")
+    if collective_label not in _COLLECTIVE_KINDS:
+        raise SemanticError("manifest collective is unsupported")
+    size_label = _identifier(value["size_label"], field + " size_label")
+    files = {
+        "topology": _repository_file(root, value["topology"], field + " topology"),
+        "sketch": _repository_file(root, value["sketch"], field + " sketch"),
+        "atom": atom_path,
+        "runtime": _repository_file(root, value["runtime"], field + " runtime"),
+    }
+    try:
+        resolved = load_request(files, purpose="solve")
+    except (VeriCCLError, ValueError) as error:
+        raise SemanticError(
+            "{} is not a valid v5 request: {}".format(field, error)
+        ) from error
+    if resolved.collective.kind is not _COLLECTIVE_KINDS[collective_label]:
+        raise SemanticError("manifest collective differs from its sketch")
+    slice_size = resolved.hyperparameters.slice_size_bytes
+    if slice_size is None:
+        raise SemanticError("{} sketch must set an explicit slice size".format(field))
+    environment = resolved.request_config["runtime"]["environment"]
+    return ExperimentCase(
+        task_id="{}-{}-{}".format(topology_name, collective_label, size_label),
+        topology_name=topology_name,
+        collective_label=collective_label,
+        size_label=size_label,
+        topology_path=files["topology"],
+        sketch_path=files["sketch"],
+        runtime_path=files["runtime"],
+        rank_count=resolved.rank_count,
+        message_size_bytes=resolved.size_accounting["nccl_tests_size_bytes"],
+        slice_size_bytes=slice_size,
+        nccl_buffsize_bytes=int(environment["NCCL_BUFFSIZE"]),
+    )
+
+
 def load_experiment_manifest(
     path: Path,
     *,
     repo_root: Path,
 ) -> ExperimentManifest:
+    """Load a schema_version 2 manifest and resolve every case as v5 inputs."""
     root = _path(repo_root, "repository root")
     manifest_path = _path(path, "experiment manifest path")
     if not manifest_path.is_relative_to(root):
@@ -163,67 +253,14 @@ def load_experiment_manifest(
         raise SemanticError("experiment manifest must be an object")
     if set(payload) != _MANIFEST_FIELDS:
         raise SemanticError("experiment manifest fields are invalid")
-    if payload["schema_version"] != 1:
+    if payload["schema_version"] != MANIFEST_SCHEMA_VERSION:
         raise SemanticError("experiment manifest schema is unsupported")
     atom_path = _repository_file(root, payload["atom"], "manifest atom")
-    topologies = _unique_labels(payload["topologies"], "manifest topologies")
-    collectives = _unique_labels(
-        payload["collectives"],
-        "manifest collectives",
+    raw_cases = payload["cases"]
+    if not isinstance(raw_cases, list) or not raw_cases:
+        raise SemanticError("manifest cases must be a non-empty list")
+    cases = tuple(
+        _load_case(root, atom_path, value, index)
+        for index, value in enumerate(raw_cases)
     )
-    if any(value not in _COLLECTIVE_KINDS for value in collectives):
-        raise SemanticError("manifest collective is unsupported")
-    sizes = _unique_labels(payload["sizes"], "manifest sizes")
-
-    cases = []
-    for topology_name in topologies:
-        topology_path = _repository_file(
-            root,
-            "tests/fixtures/legacy-experiments/topo/{}.json".format(topology_name),
-            "manifest topology",
-        )
-        for collective_label in collectives:
-            for size_label in sizes:
-                sketch_path = _repository_file(
-                    root,
-                    "tests/fixtures/legacy-experiments/sketch/{0}/{1}/{1}-{2}.json".format(
-                        topology_name,
-                        collective_label,
-                        size_label,
-                    ),
-                    "manifest sketch",
-                )
-                resolved = resolve_inputs(
-                    topology_path,
-                    sketch_path,
-                    atom_path,
-                )
-                if resolved.collective.kind is not _COLLECTIVE_KINDS[
-                    collective_label
-                ]:
-                    raise SemanticError(
-                        "manifest collective differs from its sketch"
-                    )
-                message_size = resolved.hyperparameters.total_size_bytes
-                if resolved.collective.kind is CollectiveKind.ALL_GATHER:
-                    message_size *= resolved.rank_count
-                cases.append(
-                    ExperimentCase(
-                        task_id="{}-{}-{}".format(
-                            topology_name,
-                            collective_label,
-                            size_label,
-                        ),
-                        topology_name=topology_name,
-                        collective_label=collective_label,
-                        size_label=size_label,
-                        topology_path=topology_path,
-                        sketch_path=sketch_path,
-                        rank_count=resolved.rank_count,
-                        message_size_bytes=message_size,
-                        slice_size_bytes=(
-                            resolved.hyperparameters.slice_size_bytes
-                        ),
-                    )
-                )
-    return ExperimentManifest(atom_path=atom_path, cases=tuple(cases))
+    return ExperimentManifest(atom_path=atom_path, cases=cases)

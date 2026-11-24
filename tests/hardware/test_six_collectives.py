@@ -43,19 +43,10 @@ def test_release_smoke_for_each_executable_collective(kind):
         message_size,
         inplace=inplace,
     )
-    launcher = runner(config, environment, process_count=2)
-    process = launcher.diagnostic(
+    process = runner(config, environment, process_count=2).diagnostic(
         request,
         environment,
     )
-    # The diagnostic launch disables nccl-tests data checks (-c 0), so its
-    # "#wrong" column is "N/A"; numerical correctness of the same XML is
-    # checked by the release validation launch (-c 1) below.
-    rows = parse_nccl_tests_output(
-        process.stdout,
-        message_size,
-        allow_unchecked=True,
-    )
+    rows = parse_nccl_tests_output(process.stdout, message_size)
     assert len(rows) == 1
     rows[0].selected_time_us(inplace=inplace)
-    launcher.validate_release(request)

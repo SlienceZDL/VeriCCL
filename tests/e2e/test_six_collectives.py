@@ -1,34 +1,15 @@
 import pytest
 
-from tests.e2e._support import (
-    assert_exact_tiny_buffers,
-    assert_semantic_outputs,
-    assert_validation_report,
-    assert_xml_contract,
-    solve_retained_workflow,
-)
+from tests.e2e._support import OPERATORS, assert_end_to_end, documents
 
 
 pytestmark = pytest.mark.phase07
 
 
-OPERATORS = (
-    "broadcast",
-    "reduce",
-    "allgather",
-    "allreduce",
-    "alltoall",
-    "reducescatter",
-)
+@pytest.mark.parametrize('operator', OPERATORS)
+def test_public_solve_emits_executable_semantically_exact_collective(solved, operator):
+    run = solved(documents(operator))
 
-
-@pytest.mark.parametrize("operator", OPERATORS)
-def test_retained_workflow_emits_semantic_valid_direct_collective(tmp_path, operator):
-    result = solve_retained_workflow(tmp_path, operator)
-
-    xml_operator = "reduce_scatter" if operator == "reducescatter" else operator
-    assert result["xml"].attrib["coll"] == xml_operator
-    assert_exact_tiny_buffers(result, operator, False)
-    assert_semantic_outputs(result, operator)
-    assert_validation_report(result)
-    assert_xml_contract(result)
+    assert run.xml.attrib['coll'] == operator
+    assert run.sidecar['request_contract']['operator'] == operator
+    assert_end_to_end(run)

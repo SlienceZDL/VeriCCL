@@ -56,6 +56,9 @@ def _load(path):
         stat = path.stat()
     except FileNotFoundError:
         return {'schema_version': 5, 'buckets': {}}
+    if stat.st_size == 0:
+        # A replacement whose data a power loss dropped; reuse simply restarts.
+        return {'schema_version': 5, 'buckets': {}}
     return _read(str(path.resolve()), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
 
 
@@ -83,13 +86,11 @@ def save_schedule(path, bundle, inputs):
                      (item['payload']['slice_count'] * item['payload']['slice_bytes']))
         buckets[bucket] = records[:32]
         temporary = path.with_name('.' + path.name + '.' + uuid.uuid4().hex)
-        atomic_write_bytes(temporary, (json.dumps({'schema_version': 5, 'buckets': buckets}, allow_nan=False) + '\n').encode())
+        # Atomic replacement without fsync: the index is a rebuildable
+        # accelerator, and _load treats a file lost to power failure as empty.
+        atomic_write_bytes(temporary, (json.dumps({'schema_version': 5, 'buckets': buckets}, allow_nan=False) + '\n').encode(),
+                           durable=False)
         os.replace(temporary, path)
-        descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
 
 
 @dataclass(frozen=True)

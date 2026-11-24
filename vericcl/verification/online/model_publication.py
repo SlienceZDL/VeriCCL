@@ -1,6 +1,7 @@
 """Component-wise model replacement with explicit applicability identities."""
 from dataclasses import asdict, dataclass, field, replace
 from fractions import Fraction
+import functools
 import math
 
 from vericcl.performance.model import CostModel
@@ -17,8 +18,54 @@ class ComponentUpdates:
     records: tuple = ()
 
 
+def resource_envelopes(profiles, baseline):
+    """Shared-resource capacities implied by qualified measured profiles.
+
+    The aggregate rate of the flows a measured mode puts on a resource is a
+    lower bound on its capacity; it equals the capacity only when the
+    resource saturated. A resource counts as saturated when its largest
+    measured concurrency did not raise the aggregate by more than 10% over
+    the next smaller one. Otherwise the input capacity is kept unless a
+    measurement already exceeded it. (Using every envelope as the capacity
+    let a single-flow measurement - bounded by its own connection - define a
+    whole host's shared limit.)
+    """
+    by_count = {}
+    for profile in profiles:
+        if profile.source not in {'measured', 'history'} or not profile.flow_resources:
+            continue
+        for resource in profile.resources:
+            members = [flow for flow in profile.mode if resource in profile.flow_resources[flow]]
+            rate = sum((Fraction(str(profile.rates[flow])) for flow in members), Fraction(0))
+            counts = by_count.setdefault(resource, {})
+            counts[len(members)] = max(counts.get(len(members), Fraction(0)), rate)
+    envelopes = {}
+    for resource, counts in by_count.items():
+        largest = max(counts)
+        smaller = [count for count in counts if count < largest]
+        observed = max(counts.values())
+        saturated = bool(smaller) and largest > 1 and counts[largest] <= Fraction(11, 10) * counts[max(smaller)]
+        if saturated or resource not in baseline:
+            envelopes[resource] = observed
+        else:
+            envelopes[resource] = max(observed, Fraction(str(baseline[resource])))
+    return envelopes
+
+
 def profile_key(profile):
-    return 'profile:' + digest({'mode': list(profile.mode), 'resources': list(profile.resources)})
+    return _profile_key(tuple(profile.mode), tuple(profile.resources))
+
+
+@functools.lru_cache(maxsize=65536)
+def _profile_key(mode, resources):
+    return 'profile:' + digest({'mode': list(mode), 'resources': list(resources)})
+
+
+def _by_key(profiles):
+    grouped = {}
+    for profile in profiles:
+        grouped.setdefault(profile_key(profile), []).append(profile)
+    return grouped
 
 
 def _overlay(levels):
@@ -57,6 +104,54 @@ def model_json(model):
     return {'version': model.version, 'services': {k: [asdict(v) for v in values] for k, values in model.services.items()},
             'resources': dict(model.resources), 'profiles': [p.as_json() for p in model.profiles],
             'context': dict(model.context), 'metadata': dict(model.metadata)}
+
+
+_SERIALIZED = {}
+
+
+def _cached_json(model):
+    """model_json of a published model object, computed once.
+
+    Sequential publications compare each new model with the previous one; the
+    previous one is the object returned by the last call. Keyed by identity
+    (the object is retained with its value), never by version string.
+    """
+    entry = _SERIALIZED.get(id(model))
+    if entry is not None and entry[0] is model:
+        return entry[1]
+    value = model_json(model)
+    while len(_SERIALIZED) >= 4:
+        _SERIALIZED.pop(next(iter(_SERIALIZED)))
+    _SERIALIZED[id(model)] = (model, value)
+    return value
+
+
+def model_changes(before, after):
+    """Changed components only: per service key, per profile id, per resource."""
+    changes = []
+    for category in ('services', 'profiles', 'resources', 'context', 'metadata'):
+        old, new = before[category], after[category]
+        if old == new:
+            continue
+        if category == 'profiles':
+            old = {item['profile_id']: item for item in old}
+            new = {item['profile_id']: item for item in new}
+        if isinstance(old, dict) and isinstance(new, dict):
+            changed = {str(key): {'before': old.get(key), 'after': new.get(key)}
+                       for key in sorted(set(old) | set(new), key=str) if old.get(key) != new.get(key)}
+            changes.append({'component': category, 'changed': changed})
+        else:
+            changes.append({'component': category, 'before': old, 'after': new})
+    return changes
+
+
+def persist_model(run_context, model, parent_json, *, previous_version, issues=(), records=()):
+    """Write a model version and its component-level difference from a parent."""
+    after = _cached_json(model)
+    run_context.write_json('models/' + model.version + '.json', after)
+    run_context.write_json('models/' + model.version + '-diff.json', {
+        'previous_version': previous_version, 'version': model.version,
+        'changes': model_changes(parent_json, after), 'issues': list(issues), 'qualification_records': list(records)})
 
 
 def publish_model(old, updates, *, initial=None, history=None, current_signatures=None, run_context=None):
@@ -98,47 +193,40 @@ def publish_model(old, updates, *, initial=None, history=None, current_signature
         if values:
             services[key] = values
     profiles = []
-    all_profiles = (*old.profiles, *updates.profiles, *historical.profiles, *(initial.profiles if initial else ()))
-    for key in sorted({profile_key(p) for p in all_profiles}):
+    # Profiles are grouped by component key once; filtering every profile list
+    # per key was quadratic in the model size (seconds per publication).
+    new_by, old_by, cached_by = _by_key(updates.profiles), _by_key(old.profiles), _by_key(historical.profiles)
+    base_by = old_by if initial is None or initial is old else _by_key(initial.profiles)
+    for key in sorted(set(new_by) | set(old_by) | set(cached_by) | set(base_by)):
         applicable = key in previous_signatures and previous_signatures.get(key) == signatures.get(key)
-        new = tuple(p for p in updates.profiles if profile_key(p) == key)
-        current = tuple(p for p in old.profiles if profile_key(p) == key and p.source in {'measured', 'history'}) if applicable else ()
-        cached = tuple(p for p in historical.profiles if profile_key(p) == key) if historical.signatures.get(key) == signatures.get(key) else ()
-        baseline = tuple(p for p in (initial or old).profiles if profile_key(p) == key and p.source in {'initial', 'estimated'})
+        new = tuple(new_by.get(key, ()))
+        current = tuple(p for p in old_by.get(key, ()) if p.source in {'measured', 'history'}) if applicable else ()
+        cached = tuple(cached_by.get(key, ())) if historical.signatures.get(key) == signatures.get(key) else ()
+        baseline = tuple(p for p in base_by.get(key, ()) if p.source in {'initial', 'estimated'})
         profiles.extend(_overlay((new, current, cached, baseline)))
     metadata = dict(old.metadata)
     if signatures:
         metadata['calibration_signatures'] = signatures
-    resources = dict((initial or old).resources)
-    envelopes = {}
-    for profile in profiles:
-        if profile.source not in {'measured', 'history'} or not profile.flow_resources:
-            continue
-        for resource in profile.resources:
-            rate = sum((Fraction(str(profile.rates[flow])) for flow in profile.mode
-                        if resource in profile.flow_resources[flow]), Fraction(0))
-            envelopes[resource] = max(envelopes.get(resource, Fraction(0)), rate)
+    baseline_resources = dict((initial or old).resources)
+    resources = dict(baseline_resources)
+    envelopes = resource_envelopes(profiles, baseline_resources)
     for resource, rate in envelopes.items():
         capacity = float(rate)
         if Fraction(str(capacity)) < rate:
             capacity = math.nextafter(capacity, math.inf)
         resources[resource] = capacity
     if envelopes:
-        metadata['resource_capacity_rule'] = 'envelope_of_qualified_applicable_profile_vectors'
+        metadata['resource_capacity_rule'] = 'saturated_envelope_or_lower_bound_of_qualified_profiles'
     else:
         metadata.pop('resource_capacity_rule', None)
     candidate = CostModel(old.version, services, resources, tuple(profiles), old.context, metadata)
-    before, after = model_json(old), model_json(candidate)
+    before, after = _cached_json(old), model_json(candidate)
     if before == after:
         return old
     candidate = replace(candidate, version='cost-' + digest({'parent': old.version, 'contents': after})[:24])
+    after['version'] = candidate.version
+    _SERIALIZED[id(candidate)] = (candidate, after)
     if run_context is not None:
-        run_context.write_json('models/' + candidate.version + '.json', model_json(candidate))
-        changes = []
-        for category in ('services', 'profiles', 'resources', 'context', 'metadata'):
-            if before[category] != after[category]:
-                changes.append({'component': category, 'before': before[category], 'after': after[category]})
-        run_context.write_json('models/' + candidate.version + '-diff.json', {
-            'previous_version': old.version, 'version': candidate.version, 'changes': changes,
-            'issues': updates.issues, 'qualification_records': updates.records})
+        persist_model(run_context, candidate, before, previous_version=old.version,
+                      issues=updates.issues, records=updates.records)
     return candidate

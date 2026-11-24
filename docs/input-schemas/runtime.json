@@ -102,6 +102,13 @@
           ],
           "minLength": 1
         },
+        "NCCL_IB_DISABLE": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
         "NCCL_IB_GID_INDEX": {
           "type": [
             "string",
@@ -116,7 +123,35 @@
           ],
           "minLength": 1
         },
+        "NCCL_IGNORE_DISABLED_P2P": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_NET_GDR_LEVEL": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_NET_GDR_READ": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
         "NCCL_P2P_DISABLE": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "NCCL_P2P_LEVEL": {
           "type": [
             "string",
             "null"
@@ -377,6 +412,35 @@
       ],
       "minLength": 1
     },
+    "xml_size_range": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "min_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 0,
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "max_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "default": 4294967296,
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "default": {}
+    },
     "control": {
       "type": [
         "object",
@@ -397,6 +461,13 @@
           ],
           "minimum": 1,
           "maximum": 65535
+        },
+        "unix_socket": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
         }
       },
       "required": [],

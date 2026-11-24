@@ -21,8 +21,7 @@ def test_tuning_repair_interfaces_are_public_exports():
         RepairStatus,
         TuningOverlay,
         compute_impact_closure,
-        repair_flow_suffix,
-        solve_local_repair,
+        solve_repair,
     )
 
     assert all(
@@ -33,8 +32,7 @@ def test_tuning_repair_interfaces_are_public_exports():
             RepairStatus,
             TuningOverlay,
             compute_impact_closure,
-            repair_flow_suffix,
-            solve_local_repair,
+            solve_repair,
         )
     )
 
@@ -46,8 +44,8 @@ def test_verification_first_import_order_has_no_cycle():
             "-c",
             (
                 "from vericcl.verification.flow_index import build_flow_index; "
-                "from vericcl.tuning import repair_flow_suffix; "
-                "assert build_flow_index and repair_flow_suffix"
+                "from vericcl.tuning import solve_repair; "
+                "assert build_flow_index and solve_repair"
             ),
         ),
         check=False,

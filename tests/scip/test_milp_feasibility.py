@@ -4,6 +4,7 @@ import pytest
 
 from vericcl.input.models import ObjectiveMode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.solver.budget import ModelBudget
 from tests.scip.helpers import fresh_budget
 from vericcl.solver.constructive import construct_candidate
@@ -85,14 +86,14 @@ def test_noncolliding_real_problem_preserves_the_legacy_schedule_object():
                 stage_id=0,
                 member_slice_ids=frozenset({0}),
                 atoms=(
-                    Atom(
+                    Atom.build(
                         slice_id=0,
                         slice_size_bytes=1048576,
                         path=(
                             PathStage(
                                 stage_id=0,
                                 operator="SEND",
-                                symbols=(Symbol(0, 1, 0.0),),
+                                symbols=(symbolic_step(0, 1, 0.0),),
                             ),
                         ),
                         st_time=0.0,

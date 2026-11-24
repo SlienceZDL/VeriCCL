@@ -5,6 +5,7 @@ from typing import Dict, FrozenSet, List, Mapping, Optional, Tuple
 from vericcl.errors import SemanticError
 from vericcl.planner.model import PlanNode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.solver.demands import CandidateEdge, SolverProblem, TransferDemand
 from vericcl.topology.model import LaneKey, LinkKey, PerformanceCurve, Topology
 from vericcl.topology.performance import (
@@ -485,7 +486,7 @@ def materialize_route_schedule(
                     (item.route_id, LinkKey(parent_rank, item.link.src_rank))
                 ].ed_time
             symbols.append(
-                Symbol(
+                symbolic_step(
                     src_rank=item.link.src_rank,
                     dst_rank=item.link.dst_rank,
                     ready_time=ready_time,
@@ -493,7 +494,7 @@ def materialize_route_schedule(
             )
         members = frozenset(members_by_key[key])
         atoms = tuple(
-            Atom(
+            Atom.build(
                 slice_id=slice_id,
                 slice_size_bytes=slice_size_bytes,
                 path=(

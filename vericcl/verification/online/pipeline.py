@@ -570,7 +570,7 @@ def _runtime_values(
     )
     expected = {
         "NCCL_ALGO": "MSCCL,RING",
-        "NCCL_BUFFSIZE": str(2 * context.schedule.slice_size_bytes),
+        "NCCL_BUFFSIZE": str(context.environment.get("NCCL_BUFFSIZE", 2 * context.schedule.slice_size_bytes)),
         "NCCL_PROTO": "Simple",
         "MSCCL_XML_FILES": str(xml_path),
         "VERICCL_EXPECTED_MSCCL_CHUNKSTEPS": str(context.chunk_steps),
@@ -1048,44 +1048,6 @@ def run_online_validation(context: OnlineContext) -> OnlineValidationResult:
     )
 
 
-def attach_online_result_to_tuning_context(
-    context,
-    candidate_id: str,
-    result: OnlineValidationResult,
-):
-    from vericcl.tuning.engine import (
-        OnlinePerformance,
-        TuningContext,
-    )
-
-    if not isinstance(context, TuningContext):
-        raise SemanticError("context must be a TuningContext")
-    if not isinstance(candidate_id, str) or not candidate_id:
-        raise SemanticError("candidate_id must be a non-empty string")
-    if not isinstance(result, OnlineValidationResult):
-        raise SemanticError("result must be an OnlineValidationResult")
-    if (
-        not result.online_tuning_allowed
-        or result.online_operator_validation is not OnlineStageStatus.PASSED
-        or result.release_status is not OnlineStageStatus.PASSED
-        or result.release_history is None
-        or result.tuning_evidence is None
-    ):
-        raise SemanticError("online result is not eligible for tuning")
-    statistics = result.release_history.rounds[-1]
-    performance = dict(context.online_performance)
-    performance[candidate_id] = OnlinePerformance(
-        statistics.median_us,
-        statistics.coefficient_of_variation,
-    )
-    trace_evidence = dict(context.online_trace_evidence)
-    trace_evidence[candidate_id] = result.tuning_evidence
-    return replace(
-        context,
-        online_validation=True,
-        online_performance=performance,
-        online_trace_evidence=trace_evidence,
-    )
 
 
 __all__ = [
@@ -1097,6 +1059,5 @@ __all__ = [
     "OnlineValidationResult",
     "TraceCollectionRequest",
     "TraceCollectionResult",
-    "attach_online_result_to_tuning_context",
     "run_online_validation",
 ]

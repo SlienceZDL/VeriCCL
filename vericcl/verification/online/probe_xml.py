@@ -12,8 +12,9 @@ class ProbeArtifact:
 
 def build_probe_xml(job):
     mapping = {entry['original_rank']: entry['rank'] for entry in job.rank_map}
-    chunks = len(job.flows)
-    if not chunks or chunks > 32768:
+    steps = getattr(job, 'chain_steps', 1)
+    chunks = len(job.flows) * steps
+    if not chunks or chunks > 32768 or steps > 256:
         raise ValueError('probe needs representable independent payload slots')
     root = ET.Element('algo', name='VeriCCL-probe', proto='Simple', coll='custom',
                       ngpus=str(len(mapping)), nchunksperloop=str(chunks),
@@ -34,10 +35,14 @@ def build_probe_xml(job):
             recv = mapping[flow.src_rank] if role in {'recv', 'rrc'} else -1
             native = {'send': 's', 'recv': 'r', 'rrc': 'rrc', 'copy': 'cpy', 'reduce': 're'}[role]
             tb = ET.SubElement(gpu, 'tb', id=str(tb_id), send=str(send), recv=str(recv), chan=str(flow.channel))
-            ET.SubElement(tb, 'step', s='0', type=native, srcbuf='i', srcoff=str(index),
-                          dstbuf='o', dstoff=str(index), cnt='1', depid='-1', deps='-1', hasdep='0')
-            endpoints.append(dict(rank=rank, original_rank=original, tb=tb_id, step=0,
-                                  flow_id=flow.flow_id, role=role, channel=flow.channel, slot=index))
+            # A flow's buffer slot holds ``steps`` consecutive chunks; its
+            # steps move them in order on one TB (a pipelined chain).
+            for step in range(steps):
+                chunk = index * steps + step
+                ET.SubElement(tb, 'step', s=str(step), type=native, srcbuf='i', srcoff=str(chunk),
+                              dstbuf='o', dstoff=str(chunk), cnt='1', depid='-1', deps='-1', hasdep='0')
+                endpoints.append(dict(rank=rank, original_rank=original, tb=tb_id, step=step,
+                                      flow_id=flow.flow_id, role=role, channel=flow.channel, slot=index))
             if not local:
                 key = (rank, flow.channel, 'send' if send >= 0 else 'recv')
                 channels[key] += 1

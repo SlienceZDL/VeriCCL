@@ -118,31 +118,6 @@ def _ancestors(dependencies):
     return result
 
 
-# Mandatory dependencies and their transitive closure for recently checked
-# (storage plan, inputs) objects. Both are immutable for a lowered bundle, and
-# the entry keeps strong references, so identity checks cannot alias a reused
-# id. Before this cache every generated strategy rebuilt the region-overlap
-# dependency map and its closure, although only order strategies change it.
-_LEGALITY_CACHE = {}
-_LEGALITY_LIMIT = 8
-
-
-def _legality_base(storage, inputs):
-    key = (id(storage), id(inputs))
-    entry = _LEGALITY_CACHE.get(key)
-    if entry is not None and entry[0] is storage and entry[1] is inputs:
-        return entry[2], entry[3]
-    mandatory = mandatory_dependencies(storage, inputs)
-    try:
-        ancestors = _ancestors(mandatory)
-    except SemanticError:
-        ancestors = None
-    if len(_LEGALITY_CACHE) >= _LEGALITY_LIMIT:
-        _LEGALITY_CACHE.pop(next(iter(_LEGALITY_CACHE)))
-    _LEGALITY_CACHE[key] = (storage, inputs, mandatory, ancestors)
-    return mandatory, ancestors
-
-
 def _paths(src, dst, participants, topology, lease):
     adjacency = {rank: [] for rank in participants}
     for edge in sorted(topology.links):
@@ -195,22 +170,10 @@ def legal_strategy(strategy, bundle, context):
                     *(topology.shared_resources[r].max_channels for r in edge.resource_ids))
         if channel >= limit:
             return False
-    mandatory, ancestors = _legality_base(storage, inputs)
+    dependencies = mandatory_dependencies(storage, inputs)
     for first, second in strategy.orders:
         if first == second or {first, second} - set(strategy.operation_ids):
             return False
-    if ancestors is None:
-        # The mandatory graph itself is cyclic, so no strategy is legal.
-        return False
-    if not strategy.orders:
-        return True
-    if len(strategy.orders) == 1:
-        # Adding "first before second" closes a cycle exactly when first
-        # already depends (transitively) on second.
-        first, second = strategy.orders[0]
-        return second not in ancestors[first]
-    dependencies = dict(mandatory)
-    for first, second in strategy.orders:
         dependencies[second] = dependencies[second] | {first}
     try:
         _ancestors(dependencies)
@@ -364,6 +327,22 @@ def _default_source(family, bundle, index, context):
 
 
 def _source(bundle, scope, context):
+    # Hotspot-derived strategies (symbolic execution + BDD + counters) first:
+    # reroutes through idle alternative links and joint domains over the
+    # hotspot and its related schedules. The generic families follow; priority
+    # is not a search cutoff.
+    hotspots = [(family, strategy) for family, strategy in getattr(context, '_hotspot_strategies', ())
+                # An explicitly supplied source for a family is used exactly as given.
+                if family in scope.families and family not in context.strategy_sources]
+    deferred = []
+    if context.trace_analysis is not None:
+        # Measured trace priorities outrank model-based hotspots: only hotspots
+        # on trace-prioritized operations go first, the rest follow later.
+        traced = [item for item in hotspots if any(key in context._trace_priorities for key in item[1].operation_ids)]
+        deferred = [item for item in hotspots if item not in traced]
+        hotspots = sorted(traced, key=lambda item: min(_priority(key, context._index, context) for key in item[1].operation_ids))
+    for family, strategy in hotspots:
+        yield family, strategy
     iterators = {family: iter(context.strategy_sources.get(family, _default_source)(family, bundle, context._index, context))
                  for family in scope.families}
     # Round robin avoids starving order/channel choices behind a large path grammar.
@@ -375,6 +354,7 @@ def _source(bundle, scope, context):
             except StopIteration:
                 context._coverage.exhausted(family)
                 del iterators[family]
+    yield from deferred
 
 
 def analyze(bundle, model, scope, context):
@@ -398,9 +378,40 @@ def analyze(bundle, model, scope, context):
                 return AnalysisBatch('model_unavailable', (), (), {'proven_no_improvement': False},
                                      {'missing_components': sorted(prediction.missing_components)})
             index = build_causal_index(bundle.executable, prediction,
-                                       semantic_predecessors=_legality_base(bundle.storage_plan, context.lowering.inputs)[0])
+                                       semantic_predecessors=mandatory_dependencies(bundle.storage_plan, context.lowering.inputs))
             context._binding, context._prediction, context._index = binding, prediction, index
             context._causes = _causes(bundle, index, prediction)
+            context._hotspot_strategies, context._hotspot_report = (), None
+            from vericcl.symbolic_full.config import enabled as full_symbolic_enabled
+            if bundle.program is not None and bundle.prediction is not None and full_symbolic_enabled(context.lowering.inputs):
+                # sketch.symbolic.enabled: hotspots and threadblock-order hints from the
+                # full symbolic execution of the XML (vericcl/symbolic_full/).
+                from vericcl.symbolic_full.analysis import analysis_inputs
+                report, strategies, causes = analysis_inputs(replace(bundle, prediction=prediction),
+                                                             context.lowering, model, context.backend, index)
+                context._hotspot_report, context._hotspot_strategies = report, strategies
+                context._causes = causes + context._causes
+            elif bundle.program is not None and bundle.prediction is not None:
+                from vericcl.symbolic.executor import execute_bundle
+                from .hotspots import locate_hotspots, hotspot_strategies
+                hot_bundle = replace(bundle, prediction=prediction)
+                execution = execute_bundle(hot_bundle, context.lowering.inputs, model)
+                report = locate_hotspots(execution, hot_bundle, context.lowering.inputs, context.lowering.topology, model)
+                context._hotspot_report = report
+                context._hotspot_strategies = tuple(hotspot_strategies(report, hot_bundle, replace(context.lowering, model=model)))
+                context._causes = tuple(BottleneckCause(
+                    'hotspot:' + item.operation_id, 'scheduling_hotspot', (item.operation_id,), item.related_operations,
+                    (), (item.congested_resource,),
+                    {'service_us': prediction.end_times[item.operation_id] - prediction.start_times[item.operation_id],
+                     'start_us': prediction.start_times[item.operation_id],
+                     'finish_us': prediction.end_times[item.operation_id],
+                     'resource_competitors': list(item.related_operations),
+                     'completion_tails': list(index.tails),
+                     'contention_us': item.contention_us, 'wait_us': item.wait_us, 'buckets': list(item.buckets),
+                     'alternative_links': [list(link) for link in item.alternative_links],
+                     'on_critical_path': item.on_critical_path, 'downstream_operations': item.downstream_operations,
+                     'score': item.score, **item.evidence,
+                     'evidence_level': 'symbolic_execution_bdd_counters'}) for item in report.hotspots) + context._causes
             context._trace_priorities = {}
             if context.trace_analysis is not None:
                 context._trace_priorities = {key: ordinal for ordinal, key in enumerate(context.trace_analysis['priority_operations'])}
@@ -439,6 +450,7 @@ def analyze(bundle, model, scope, context):
             status = 'candidates_exhausted' if context._exhausted else 'empty_batch'
         return AnalysisBatch(status, context._causes, strategies, context._coverage.snapshot(),
             {'prediction_model': model.version, 't_pred_us': context._prediction.t_pred_us,
+             'hotspots': None if getattr(context, '_hotspot_report', None) is None else context._hotspot_report.counters,
              'completion_tails': list(context._index.tails), 'backend': context.backend,
              'trace_analysis': None if context.trace_analysis is None else {
                  key: context.trace_analysis[key] for key in ('capture_id', 'xml_sha256', 'completion_tails',

@@ -1,66 +1,48 @@
-import hashlib
-
 import pytest
 
-from tests.e2e._support import (
-    canonical_report_sections,
-    solve_retained_workflow,
-)
+from tests.e2e._support import assert_accepted, documents, sha256, solve
 
 
 pytestmark = pytest.mark.phase07
 
 
-def _digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _prediction(run):
+    # The record carries a summary; the full timeline is stored once beside
+    # the candidate. used_components is a set serialised in hash-seed
+    # dependent order.
+    import json
+    summary = run.record['prediction']
+    prediction = json.loads((run.root / summary['detail']).read_text())
+    assert {key: prediction[key] for key in summary if key != 'detail'} == {k: v for k, v in summary.items() if k != 'detail'}
+    prediction['used_components'] = sorted(prediction['used_components'])
+    return prediction
 
 
 @pytest.mark.parametrize(
-    "operator,options",
+    'request_options',
     (
-        ("allreduce", {}),
-        (
-            "allgather",
-            {
-                "topology_name": "two_node_gateway.json",
-                "total_size_bytes": 8192,
-                "slice_size_bytes": 1024,
-                "hierarchy": True,
-            },
-        ),
+        {'operator': 'allreduce'},
+        {'operator': 'allgather', 'ranks': 4, 'slices': 4, 'method': 'hierarchy',
+         'gateway_nodes': True, 'stage_num': 3},
     ),
-    ids=("direct-allreduce", "gateway-allgather"),
+    ids=('direct-allreduce', 'gateway-allgather'),
 )
-def test_seed_zero_pure_software_runs_are_canonically_reproducible(
-    tmp_path,
-    operator,
-    options,
-):
-    first = solve_retained_workflow(
-        tmp_path / "first",
-        operator,
-        run_id="first",
-        **options,
-    )
-    second = solve_retained_workflow(
-        tmp_path / "second",
-        operator,
-        run_id="second",
-        **options,
-    )
+def test_same_inputs_and_seed_reproduce_identical_xml(solved, tmp_path, request_options):
+    options = dict(request_options)
+    request = documents(options.pop('operator'), seed=0, **options)
+    # The first run may be shared with other e2e modules (different case and
+    # project root); the second is always a fresh process in a new directory.
+    first = solved(request)
+    second = solve(tmp_path, request, case='reproduce', run_id='second')
 
-    assert first["sidecar"] == second["sidecar"]
-    assert canonical_report_sections(first["report"]) == (
-        canonical_report_sections(second["report"])
-    )
-    assert _digest(first["xml_path"]) == _digest(second["xml_path"])
-    assert first["report"]["xml_sha256"] == second["report"]["xml_sha256"]
-    reproducibility = first["report"]["reproducibility"]
-    assert reproducibility["solver_seed"] == 0
-    assert reproducibility["deterministic_artifacts"] is True
-    assert set(reproducibility["limits"]) == {
-        "environment_signature",
-        "hardware_measurement",
-        "parallel_solver_execution",
-        "solver_version",
-    }
+    for run in (first, second):
+        assert_accepted(run)
+        assert run.record['effective_config']['sketch']['solver']['solver_seed'] == 0
+    assert sha256(first.xml_path) == sha256(second.xml_path)
+    assert first.xml_text == second.xml_text
+    assert first.accepted['xml_sha256'] == second.accepted['xml_sha256']
+    assert first.sidecar == second.sidecar
+    assert first.record['input_sha256'] == second.record['input_sha256']
+    assert _prediction(first) == _prediction(second)
+    assert first.accepted['model_version'] == second.accepted['model_version']
+    assert first.accepted['t_pred_us'] == second.accepted['t_pred_us']

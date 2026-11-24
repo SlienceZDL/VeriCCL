@@ -2,6 +2,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Dict, Mapping, Optional, Tuple
 
 from vericcl.errors import ConstructionInfeasibleError, SemanticError
@@ -87,7 +88,10 @@ def _forbidden_edge(demand: TransferDemand, physical: LinkKey) -> bool:
     )
 
 
+@lru_cache(maxsize=65536)
 def _path_edges(path: Tuple[int, ...]) -> Tuple[LinkKey, ...]:
+    # Memoized: route models ask for the same few thousand candidate paths
+    # hundreds of thousands of times (2.8 M validated LinkKeys on 2x8).
     return tuple(
         LinkKey(src, dst) for src, dst in zip(path, path[1:])
     )
@@ -301,6 +305,7 @@ def _build_route_model(
     budget: ModelBudget,
     warm_start: Optional[RoutePattern],
     environment=None,
+    *, single_pass: bool = False,
 ):
     channels = _validate_api(
         template,
@@ -330,6 +335,8 @@ def _build_route_model(
         ScipAdapter.configure(model, seed=inputs.solver.solver_seed, threads=thread_count,
                               gap=0.0 if inputs.solver.require_proven_optimal else inputs.solver.mip_gap,
                               lease=budget.lease if budget.lease is not None else StandaloneLease(budget.deadline))
+        if single_pass:
+            ScipAdapter.screening(model)
         edges = tuple(
             sorted(
                 {
@@ -534,6 +541,7 @@ def _build_route_model(
                 hop_count=gp.quicksum(flow_selected.values()),
                 maximum_resource_load=maximum_resource_load,
             ),
+            single_pass=single_pass,
         )
         variables = _RouteVariables(
             edge_selected=edge_selected,
@@ -736,7 +744,10 @@ def solve_route_milp(
     budget: ModelBudget,
     warm_start: Optional[RoutePattern] = None,
     environment=None,
+    *, single_pass: bool = False,
 ) -> RoutePattern:
+    """``single_pass`` solves one weighted objective instead of the
+    lexicographic chain (see configure_lexicographic_objective)."""
     build_started = time.monotonic()
     try:
         model, variables, context = _build_route_model(
@@ -748,6 +759,7 @@ def solve_route_milp(
             budget,
             warm_start,
             environment,
+            single_pass=single_pass,
         )
     except RoutingModelFailure:
         raise

@@ -1,0 +1,77 @@
+--- a/src/enqueue.cc
++++ b/src/enqueue.cc
+@@ -12,6 +12,9 @@
+ #include "channel.h"
+ 
+ #include <cstring> // std::memcpy
++#include <map>
++#include <mutex>
++#include <tuple>
+ 
+ // Only generate inline kernels for LL
+ #define NCCL_FUNC5(func, algo, devredop, dtype) \
+@@ -830,6 +833,29 @@
+ 
+ // Compute enqueue element, save it in list
+ // Compute CUDA launch parameters
++// VeriCCL: resident-TB admission limit per (device, kernel, block size).
++// cudaGetDeviceProperties takes milliseconds on recent drivers; querying it
++// on every MSCCL launch dominated small collectives. The limit depends only
++// on the device, the selected kernel and its thread count, so it is computed
++// once with cheap attribute/occupancy queries and cached.
++static ncclResult_t vericclResidentLimit(int device, int funcIndex, int nThreads, int* limit) {
++  static std::mutex lock;
++  static std::map<std::tuple<int, int, int>, int> cache;
++  const std::tuple<int, int, int> key(device, funcIndex, nThreads);
++  {
++    std::lock_guard<std::mutex> guard(lock);
++    auto found = cache.find(key);
++    if (found != cache.end()) { *limit = found->second; return ncclSuccess; }
++  }
++  int multiprocessors = 0, resident = 0;
++  CUDACHECK(cudaDeviceGetAttribute(&multiprocessors, cudaDevAttrMultiProcessorCount, device));
++  CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&resident, ncclKerns[funcIndex], nThreads, 0));
++  *limit = resident > 0 ? resident * multiprocessors : 0;
++  std::lock_guard<std::mutex> guard(lock);
++  cache[key] = *limit;
++  return ncclSuccess;
++}
++
+ // Capture time code in view of CUDA graph
+ static ncclResult_t ncclSetupCollKernel(struct ncclInfo* info) {
+   ncclComm_t comm = info->comm;
+@@ -853,14 +879,11 @@
+   params->blockDim.x = std::max<unsigned>(params->blockDim.x, info->nThreads);
+   if (info->algorithm == NCCL_ALGO_MSCCL){
+     struct mscclAlgorithm* mscclAlgo = &info->comm->mscclHostComm.mscclDevComm.mscclAlgos[info->mscclInfo.mscclAlgoIndex];
+-    int residentBlocks = 0;
+-    cudaDeviceProp deviceProperties;
+-    CUDACHECK(cudaGetDeviceProperties(&deviceProperties, comm->cudaDev));
+-    CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+-        &residentBlocks, ncclKerns[work->header.funcIndex], info->nThreads, 0));
+-    if (residentBlocks <= 0 || mscclAlgo->nBlocks > residentBlocks * deviceProperties.multiProcessorCount) {
++    int residentLimit = 0;
++    NCCLCHECK(vericclResidentLimit(comm->cudaDev, work->header.funcIndex, info->nThreads, &residentLimit));
++    if (residentLimit <= 0 || mscclAlgo->nBlocks > residentLimit) {
+       WARN("VeriCCL: MSCCL plan has %d TBs but this kernel/device permits at most %d resident TBs", 
+-           mscclAlgo->nBlocks, residentBlocks * deviceProperties.multiProcessorCount);
++           mscclAlgo->nBlocks, residentLimit);
+       return ncclInvalidUsage;
+     }
+ 
+@@ -1520,13 +1543,8 @@
+   NCCLCHECK(computeColl(&info, &work, &proxy));
+   if (info.algorithm != NCCL_ALGO_MSCCL || info.protocol != NCCL_PROTO_SIMPLE)
+     return ncclInvalidUsage;
+-  cudaDeviceProp properties;
+-  int resident = 0;
+-  CUDACHECK(cudaGetDeviceProperties(&properties, comm->cudaDev));
+-  CUDACHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&resident,
+-    ncclKerns[work.header.funcIndex], info.nThreads, 0));
+-  *residentLimit = resident * properties.multiProcessorCount;
+-  if (resident <= 0 || comm->mscclHostComm.mscclDevComm.mscclAlgos[0].nBlocks > *residentLimit)
++  NCCLCHECK(vericclResidentLimit(comm->cudaDev, work.header.funcIndex, info.nThreads, residentLimit));
++  if (*residentLimit <= 0 || comm->mscclHostComm.mscclDevComm.mscclAlgos[0].nBlocks > *residentLimit)
+     return ncclInvalidUsage;
+   return ncclSuccess;
+ }

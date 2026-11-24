@@ -2,6 +2,7 @@ import pytest
 
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.topology.model import LaneKey
 from vericcl.verification.flow_index import (
     FlowIndex,
@@ -108,9 +109,9 @@ def test_flow_index_rejects_missing_path_operation():
     path = PathStage(
         0,
         "SEND",
-        (Symbol(0, 1, 0.0), Symbol(1, 2, 1.0)),
+        (symbolic_step(0, 1, 0.0), symbolic_step(1, 2, 1.0)),
     )
-    atom = Atom(0, 1024, (path,), 1.0, 2.0)
+    atom = Atom.build(0, 1024, (path,), 1.0, 2.0)
     transfer = Transfer(
         "only-second",
         "SEND",

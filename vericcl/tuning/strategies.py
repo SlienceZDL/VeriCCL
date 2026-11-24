@@ -1,7 +1,6 @@
 """Cause-scoped, integer-slice repair with required native event optimization."""
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
-from itertools import product
 
 from vericcl.errors import SemanticError, SolverUnavailableError
 from vericcl.execution.budget import BudgetExhausted
@@ -311,6 +310,23 @@ def _network_variants(bundle, domain, strategy, context):
                 yield paths, _substitute(bundle, paths, context)
 
 
+def _channel_neighbourhood(domains):
+    """Channel assignments for a repaired path: the current channels, then
+    every single-operation change.
+
+    The full product grows as C**k for k changed operations and, with every
+    combination lowered and checked, spent whole repair rounds on the first
+    path variant. The local event-column solve chooses among the admitted
+    columns, so a one-change neighbourhood keeps the repair search linear and
+    lets other path variants be reached.
+    """
+    base = tuple(values[0] for values in domains)
+    yield base
+    for index, values in enumerate(domains):
+        for value in values[1:]:
+            yield base[:index] + (value,) + base[index + 1:]
+
+
 def implementations(bundle, domain, strategy, context):
     for paths, network in _network_variants(bundle, domain, strategy, context):
         fixed = dict(paths.channels)
@@ -323,7 +339,7 @@ def implementations(bundle, domain, strategy, context):
             maximum = min(context.lowering.inputs.solver.max_channels, edge.max_channels,
                           *(context.lowering.topology.shared_resources[key].max_channels for key in edge.resource_ids))
             domains.append((fixed[original],) if original in fixed else tuple(dict.fromkeys((op.channel,) + tuple(range(maximum)))))
-        for values in product(*domains):
+        for values in _channel_neighbourhood(domains):
             context.lease.check()
             assigned = dict(zip((op.operation_id for op in changing), values))
             candidate = replace(network, operations=tuple(replace(op, channel=assigned.get(op.operation_id, op.channel)) for op in network.operations))
@@ -396,13 +412,9 @@ def solve_repair(bundle, domain, strategy_or_domain, context):
             valid_strategies += 1
             attempts.append({'status': 'started', 'strategy_id': strategy.strategy_id})
             for candidate_source in implementations(incumbent, domain, strategy, context):
-                candidate = lower_and_check(candidate_source, context.lowering)
-                if not candidate.can_execute:
-                    attempts.append({'status': 'invalid_candidate', 'checks': {key: result.message for key, result in candidate.checks.items() if result.status.value == 'invalid'}})
-                    continue
-                external = outside_invariants(incumbent, candidate, domain)
-                if not external.valid:
-                    attempts.append({'status': 'outside_changed', 'differences': external.differences})
+                from .proposals import admit
+                candidate = admit(candidate_source, incumbent, domain, context, attempts)
+                if candidate is None:
                     continue
                 if candidate.xml_sha256 in seen:
                     continue

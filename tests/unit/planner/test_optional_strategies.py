@@ -101,7 +101,7 @@ def test_batching_enabled_has_a_real_joint_model_and_valid_schedule(tmp_path):
     docs['atom']['stage_num'] = 1
     docs['sketch']['solver']['max_channels'] = 2
     inputs = load_request(write_request(tmp_path, docs))
-    stream = plan_hierarchy(inputs, load_topology(inputs), None, HierarchyContext(StandaloneLease.after(20)))
+    stream = plan_hierarchy(inputs, load_topology(inputs), None, HierarchyContext(StandaloneLease.after(20), fine_when_proven=True))
     candidates = list(stream)
     fine = next(candidate for candidate in candidates if candidate.stage == 'fine')
     assert check_semantics(fine.schedule, inputs).status.value == 'valid'

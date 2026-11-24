@@ -7,6 +7,8 @@ import pytest
 
 from tests.unit.online.test_probe_jobs import probe_context
 
+pytestmark = pytest.mark.usefixtures('home_is_tmp')
+
 
 @pytest.mark.parametrize('launcher_released', [False, True])
 def test_probe_rank_release_does_not_replace_launcher_cleanup(tmp_path, monkeypatch, launcher_released):

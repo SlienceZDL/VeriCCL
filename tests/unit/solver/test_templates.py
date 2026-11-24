@@ -172,6 +172,7 @@ def _domain_problem(
     root=None,
     contributors=None,
     reduction_dual=False,
+    node_id=None,
 ):
     inputs = _inputs(
         CollectiveKind.BROADCAST,
@@ -185,7 +186,7 @@ def _domain_problem(
         frozenset({root}) if contributors is None else frozenset(contributors)
     )
     node = PlanNode(
-        node_id="domain-{}".format(group[0]),
+        node_id=node_id or "domain-{}".format(group[0]),
         stage_id=0,
         local_collective=CollectiveSpec(
             kind=CollectiveKind.BROADCAST,
@@ -266,12 +267,13 @@ def test_direct_allgather_units_deduplicate_by_root_not_logical_position():
     templates = build_solver_templates(problems, plan.planning_mode)
 
     assert len(units) == 1024
-    assert len(templates) == 8
+    # Logical positions of one root always share a template; different roots
+    # may additionally share one through a verified domain automorphism (the
+    # complete graph's are enumerated only up to a cap).
+    assert len(templates) <= 8
     assert sum(len(template.members) for template in templates) == 1024
-    assert {
-        template.representative.demands[0].root_rank
-        for template in templates
-    } == set(range(8))
+    roots = {unit.demands[0].root_rank for unit in units}
+    assert roots == set(range(8))
 
 
 def test_same_root_logical_positions_use_identity_rank_mapping():
@@ -366,14 +368,27 @@ def test_cross_group_contributor_must_follow_verified_rank_bijection():
 def test_same_group_owner_change_cannot_reuse_identity_rank_mapping():
     topology = _paired_topology()
     first = _domain_problem(topology, (0, 1))
-    second = _domain_problem(topology, (0, 1), root=1)
+    # A second plan node over the same group (plan node IDs are unique).
+    second = _domain_problem(topology, (0, 1), root=1, node_id="domain-0-owner-1")
 
     templates = build_solver_templates(
         (first, second),
         PlanningMode.DIRECT,
     )
 
-    assert len(templates) == 2
+    # The symmetric pair domain lets the owners share a template, but only
+    # through the swap automorphism, never the identity mapping.
+    assert len(templates) == 1
+    mapped = [dict(member.rank_map) for member in templates[0].members]
+    assert {0: 1, 1: 0} in mapped and len(mapped) == 2
+
+
+def test_owner_change_without_domain_symmetry_keeps_templates_apart():
+    topology = _paired_topology("direction")
+    first = _domain_problem(topology, (2, 3))
+    second = _domain_problem(topology, (2, 3), root=3)
+
+    assert len(build_solver_templates((first, second), PlanningMode.DIRECT)) == 2
 
 
 @pytest.mark.parametrize(
@@ -403,9 +418,15 @@ def test_semantic_role_difference_prevents_template_reuse(change):
         arguments["reduction_dual"] = True
     second = _domain_problem(topology, (2, 3), **arguments)
 
-    assert len(
-        build_solver_templates((first, second), PlanningMode.DIRECT)
-    ) == 2
+    templates = build_solver_templates((first, second), PlanningMode.DIRECT)
+    if change == "root":
+        # A different root in a symmetric domain is the automorphic image of
+        # the first unit: one template, reached through the swap map.
+        assert len(templates) == 1
+        assert {2: 3, 3: 2} == {key: value for key, value in dict(templates[0].members[1].rank_map).items()
+                               } or {0: 3, 1: 2} == dict(templates[0].members[1].rank_map)
+    else:
+        assert len(templates) == 2
 
 
 def test_tree_and_chain_collectives_split_at_semantic_boundaries():
@@ -558,21 +579,38 @@ def test_planning_mode_and_search_restrictions_are_part_of_the_signature():
     assert len(restricted) == 2
 
 
-def test_unproved_domain_isomorphism_keeps_units_independent(monkeypatch):
+def test_template_membership_needs_no_domain_canonicalization(monkeypatch):
+    # The explicit maps already prove the subproblem models equal; the costly
+    # canonical domain search must not run while building templates.
     topology = _paired_topology()
     problems = (
         _domain_problem(topology, (0, 1)),
         _domain_problem(topology, (2, 3)),
     )
 
-    def bounded_failure(*_arguments):
-        raise SemanticError(
-            "domain isomorphism canonicalization limit exceeded"
-        )
+    def forbidden(*_arguments):
+        raise AssertionError("domain canonicalization called")
 
     monkeypatch.setattr(
-        "vericcl.solver.templates.exact_domain_signature",
-        bounded_failure,
+        "vericcl.topology.isomorphism.exact_domain_signature",
+        forbidden,
     )
 
-    assert len(build_solver_templates(problems, PlanningMode.DIRECT)) == 2
+    templates = build_solver_templates(problems, PlanningMode.DIRECT)
+    assert len(templates) == 1 and len(templates[0].members) == 2
+
+
+def test_template_library_reuses_an_earlier_representative_across_calls():
+    topology = _paired_topology()
+    first, second = _domain_problem(topology, (0, 1)), _domain_problem(topology, (2, 3))
+    library = {}
+    earlier = build_solver_templates((first,), PlanningMode.DIRECT, library=library)
+    later = build_solver_templates((second,), PlanningMode.DIRECT, library=library)
+    assert len(earlier) == len(later) == 1
+    assert later[0].template_id == earlier[0].template_id
+    assert later[0].representative == earlier[0].representative
+    # Members are only the new call's units, mapped from the old representative.
+    assert [member.node_id for member in later[0].members] == [second.node.node_id]
+    assert dict(later[0].members[0].rank_map) == {0: 2, 1: 3}
+    without = build_solver_templates((second,), PlanningMode.DIRECT)
+    assert without[0].representative.node.communication_group == (2, 3)

@@ -23,7 +23,9 @@ def test_slow_tail_without_wait_has_path_opportunities(tmp_path):
     assert batch.status == 'opportunities'
     assert batch.causes and batch.strategies
     assert any(cause.evidence['service_us'] > 0 for cause in batch.causes)
-    assert any(strategy.paths for strategy in batch.strategies)
+    # Rerouting opportunities: explicit paths, or hotspot-driven reallocation
+    # (type 2) / scheduling-bottleneck (type 3) repairs that choose paths.
+    assert any(strategy.paths or strategy.family in {'reallocation', 'bottleneck'} for strategy in batch.strategies)
     assert batch.coverage['unresolved_branches']
     assert not batch.coverage['proven_no_improvement']
 

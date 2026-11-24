@@ -230,11 +230,31 @@ def build_executable(program, storage, context):
     return Executable(tuple(operations), outputs, dict(context.model.context))
 
 
+REDUCING_KINDS = {CollectiveKind.ALL_REDUCE, CollectiveKind.REDUCE_SCATTER, CollectiveKind.REDUCE}
+
+
+def xml_size_range(inputs):
+    """Runtime size window [min, max) in which MSCCL selects this XML.
+
+    The program is size independent (each chunk is a fixed fraction of the
+    message), so the window is a size band, never a single message size.
+    """
+    band = inputs.request_config['runtime'].get('xml_size_range') or {}
+    low = int(band.get('min_bytes') or 0)
+    high = int(band.get('max_bytes') or 4294967296)
+    if not 0 <= low < high:
+        raise SemanticError('runtime.xml_size_range must satisfy 0 <= min_bytes < max_bytes')
+    return low, high
+
+
 def emit_native_xml(program, inputs):
-    runtime_bytes = inputs.hyperparameters.total_size_bytes * (inputs.rank_count if inputs.collective.kind is CollectiveKind.ALL_GATHER else 1)
-    root = etree.Element('algo', name='vericcl', nchannels=str(program.channels), nchunksperloop=str(program.chunks_per_loop),
-        proto='Simple', coll=inputs.collective.kind.value, inplace=str(int(inputs.collective.inplace)), redop='nop',
-        ngpus=str(program.rank_count), minBytes=str(runtime_bytes), maxBytes=str(runtime_bytes + 1))
+    low, high = xml_size_range(inputs)
+    attributes = dict(name='vericcl', nchannels=str(program.channels), nchunksperloop=str(program.chunks_per_loop),
+        proto='Simple', coll=inputs.collective.kind.value, inplace=str(int(inputs.collective.inplace)))
+    if inputs.collective.kind in REDUCING_KINDS:
+        attributes['redop'] = 'nop'
+    attributes.update(ngpus=str(program.rank_count), minBytes=str(low), maxBytes=str(high))
+    root = etree.Element('algo', **attributes)
     for rank in range(program.rank_count):
         gpu = etree.SubElement(root, 'gpu', id=str(rank), i_chunks=str(program.input_slots[rank]),
             o_chunks=str(program.output_slots[rank]), s_chunks=str(program.scratch_slots[rank]))

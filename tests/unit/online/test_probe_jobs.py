@@ -7,9 +7,12 @@ from vericcl.topology import load_topology
 from vericcl.execution.budget import StandaloneLease
 
 
-def probe_context(tmp_path, *, channels=3, ranks=3):
+def probe_context(tmp_path, *, channels=3, ranks=3, refinement_factors=None):
     from vericcl.verification.online.probe_jobs import ProbeContext
     documents = request_documents('allreduce', ranks)
+    if refinement_factors is not None:
+        # Pins the payload ladder to S/2, S, 2S (no refinement pieces).
+        documents['sketch'].setdefault('repair', {})['refinement_factors'] = refinement_factors
     documents['sketch']['solver']['max_channels'] = channels
     documents['sketch']['calibration'].update(enabled=True, max_relative_fit_error=.1, job_timeout_s=30)
     documents['sketch']['budgets'].update(max_online_validation_per_round_s=120, max_online_validation_total_s=300)
@@ -100,3 +103,14 @@ def test_shared_pairs_and_actual_three_flow_modes_have_separate_jobs(tmp_path):
     assert all(j.host_scope == 'inter' and 'egress0' in j.resources for j in shared)
     assert any(j.category == 'link' and j.host_scope == 'intra' for j in jobs)
     assert all({m['original_rank'] for m in j.rank_map} == {0, 1, 2} for j in shared)
+
+
+def test_default_payload_ladder_covers_refinement_pieces(tmp_path):
+    from vericcl.verification.online.probe_jobs import payload_sizes
+    context = probe_context(tmp_path, channels=1, ranks=2)
+    size = context.inputs.hyperparameters.slice_size_bytes
+    values = payload_sizes(context)
+    element = 4
+    for factor in context.inputs.request_config['sketch']['repair']['refinement_factors']:
+        if size % (factor * element) == 0:
+            assert size // factor in values

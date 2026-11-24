@@ -78,7 +78,13 @@ def initial_parameter_domain(inputs, runtime=None, *, fixed_slice_bytes=None, le
     bound_size = simple_payload_capacity(int(runtime['environment']['NCCL_BUFFSIZE']), element)
     links = config['topology']['directed_links']
     candidates, exclusions = [], []
-    for channels in range(1, available + 1):
+    # Default channel counts are 1..8 (sketch.solver.channel_candidates);
+    # non-power-of-two counts run correctly under MSCCL (verified with 3 and 6
+    # channels on 2x8 V100, 4 MiB..2 GiB). Restricted by max_channels and the
+    # runtime limit.
+    requested_channels = config['sketch']['solver'].get('channel_candidates') or tuple(range(1, 9))
+    channel_counts = sorted({int(c) for c in requested_channels if 1 <= int(c) <= available}) or [available]
+    for channels in channel_counts:
         if lease is not None:
             lease.check()
         if 1 + ranks > XML_MAX_RETAINED_NODES:
@@ -145,7 +151,11 @@ def initial_parameter_domain(inputs, runtime=None, *, fixed_slice_bytes=None, le
             exclusions.append(ParameterExclusion(channels, 'no_integer_capacity', 'no complete element fits the necessary limits'))
             continue
         lower = max(element, _ceil_div(size, maximum_n))
-        upper = min(size, bound_size)
+        # A slice is a fixed fraction of the message, not a wire-buffer unit:
+        # the MSCCL interpreter loops over NCCL_BUFFSIZE-sized pieces of each
+        # chunk (msccl_interpreter.h gridOffset loop), so S is not bounded by
+        # the buffer. Verified on 2x8 V100 with S up to 128 MiB and 4 MiB buffers.
+        upper = size
         def allowed(partition):
             n = size // partition
             return (size % partition == 0 and partition % element == 0 and n <= maximum_n and partition <= upper
@@ -156,10 +166,15 @@ def initial_parameter_domain(inputs, runtime=None, *, fixed_slice_bytes=None, le
             exclusions.append(ParameterExclusion(channels, 'fixed_slice_capacity', 'fixed S violates a necessary typed capacity bound'))
             continue
         else:
-            # Buffer index bounds limit this scan to at most 32768 integers,
-            # independent of message bytes. No power-of-two restriction.
-            chosen = next((size // n for n in range(maximum_n, 0, -1)
+            # Prefer the coarsest partition that still gives every channel at
+            # least one chunk per rank (few large chunks: fewer steps, fewer
+            # dependencies, size-independent XML). Buffer index bounds limit
+            # this scan to at most 32768 integers. No power-of-two restriction.
+            chosen = next((size // n for n in range(max(1, channels), maximum_n + 1)
                            if size % n == 0 and allowed(size // n)), None)
+            if chosen is None:
+                chosen = next((size // n for n in range(min(maximum_n, max(1, channels)), 0, -1)
+                               if size % n == 0 and allowed(size // n)), None)
         if chosen is None:
             exclusions.append(ParameterExclusion(channels, 'no_divisible_slice', 'no S satisfies the necessary bounds and exact partition arithmetic'))
             continue

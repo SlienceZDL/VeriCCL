@@ -2,6 +2,7 @@
 from vericcl.composer.compose import _compose_schedules
 from vericcl.planner.model import PlanDAG, PlanEdge, PlanNode
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 from vericcl.topology.model import LinkKey
 from tests.unit.composer.helpers import reduce_spec
@@ -22,7 +23,7 @@ def test_forwarded_aggregate_preserves_data_chain_without_nonlocal_wait():
         (PlanEdge('local', 'inter', local_output),), final)
 
     def transfer(name, stage, source, target, paths, start, predecessors=()):
-        atoms = tuple(Atom(member, 1024, (PathStage(stage, 'REDUCE', tuple(Symbol(*hop) for hop in path)),),
+        atoms = tuple(Atom.build(member, 1024, (PathStage(stage, 'REDUCE', tuple(symbolic_step(*hop) for hop in path)),),
                            start, start + 1) for member, path in sorted(paths.items()))
         return Transfer(name, 'REDUCE', source, target, 0, stage, frozenset(paths), atoms,
                         start, start + 1, frozenset(predecessors))
@@ -63,7 +64,7 @@ def test_forwarded_send_waits_for_local_arrival_and_keeps_prior_path():
     plan = PlanDAG(spec, 4, 1, initial, (first, second), (PlanEdge('first', 'second', second_input),), final)
 
     def send(name, stage, hops, start, predecessors=()):
-        atom = Atom(0, 1024, (PathStage(stage, 'SEND', tuple(Symbol(*hop) for hop in hops)),), start, start + 1)
+        atom = Atom.build(0, 1024, (PathStage(stage, 'SEND', tuple(symbolic_step(*hop) for hop in hops)),), start, start + 1)
         source, target, _ = hops[-1]
         return Transfer(name, 'SEND', source, target, 0, stage, frozenset({0}), (atom,),
                         start, start + 1, frozenset(predecessors))

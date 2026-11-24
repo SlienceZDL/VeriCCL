@@ -115,8 +115,11 @@ def test_direct_allgather_starts_one_route_model_per_root_for_fixed_k():
     _, _, templates, unit_count = _template_structure(inputs, topology)
 
     assert unit_count == 8 * 128
-    assert len(templates) == 8
-    assert {len(template.members) for template in templates} == {128}
+    # At most one route model per root; roots related by a verified domain
+    # automorphism of the complete graph may share one.
+    assert len(templates) <= 8
+    assert all(len(template.members) % 128 == 0 for template in templates)
+    assert sum(len(template.members) for template in templates) == 8 * 128
 
 
 def test_direct_allgather_search_starts_eight_route_models_for_fixed_k(
@@ -190,10 +193,11 @@ def test_direct_allgather_search_starts_eight_route_models_for_fixed_k(
         templates=templates,
     )
 
-    assert len(calls) == len(templates) == 8
+    # One route model per template (at most one per root on the complete graph).
+    assert len(calls) == len(templates) <= 8
     assert result.candidates == ()
-    assert result.diagnostics.route_model_count == 8
-    assert result.diagnostics.search_model_count_total == 8
+    assert result.diagnostics.route_model_count == len(templates)
+    assert result.diagnostics.search_model_count_total == len(templates)
 
 
 def test_gateway_allgather_template_count_is_slice_invariant():

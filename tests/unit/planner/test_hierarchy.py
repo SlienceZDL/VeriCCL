@@ -15,7 +15,6 @@ from vericcl.planner.groups import CommunicationGroups
 from vericcl.planner.model import PlanningMode
 from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 from vericcl.topology.loader import load_topology, topology_from_mapping
-from vericcl.workflow import _applied_strategies
 
 
 pytestmark = pytest.mark.phase02
@@ -242,7 +241,6 @@ def test_hierarchy_with_partial_gateway_domain_falls_back_to_direct_plan():
 
     assert plan.planning_mode is PlanningMode.DIRECT
     assert plan.planning_reason == "no_eligible_gateway_domain"
-    assert _applied_strategies(inputs, plan)["hierarchy"] is False
 
 
 def test_hierarchy_with_gateway_domain_records_gateway_allreduce_metadata():

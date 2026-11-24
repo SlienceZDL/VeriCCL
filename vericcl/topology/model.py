@@ -9,6 +9,8 @@ from vericcl.errors import SemanticError
 
 
 def _integer(value: object, field: str, minimum: int = 0) -> int:
+    if type(value) is int and value >= minimum:  # hot path; bool is excluded by type
+        return value
     if isinstance(value, bool) or not isinstance(value, int):
         raise SemanticError("{} must be an integer".format(field))
     if value < minimum:

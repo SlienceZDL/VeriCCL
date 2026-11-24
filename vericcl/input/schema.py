@@ -18,6 +18,8 @@ from vericcl.semantics.collective import CollectiveKind, CollectiveSpec
 
 DATATYPE_BYTES = {"float16": 2, "float32": 4, "float64": 8, "bfloat16": 2,
                   "int8": 1, "uint8": 1, "int32": 4, "uint32": 4, "int64": 8, "uint64": 8}
+LIVE_TIMEOUTS = ("request_prepare_timeout_s", "execution_attempt_timeout_s", "background_tuning_task_timeout_s",
+                 "version_prepare_timeout_s", "control_phase_timeout_s", "recovery_timeout_s", "close_cleanup_timeout_s")
 BUDGET_SECONDS = ("max_initial_synthesis_s", "max_online_validation_per_round_s", "max_online_validation_total_s",
                   "max_offline_validation_per_round_s", "max_offline_validation_total_s", "max_repair_per_round_s",
                   "max_repair_total_s", "max_run_wall_s", "cleanup_reserve_s")
@@ -98,7 +100,8 @@ TOPOLOGY = obj({
 SOLVER = section({
     "backend": scalar("string", enum=("scip",), default="scip"), "per_model_timeout_s": positive(),
     "cpu_budget": scalar("integer", minimum=1), "max_threads_per_model": scalar("integer", minimum=1, default=12),
-    "max_parallel_models": scalar("integer", minimum=1), "max_channels": scalar("integer", minimum=1, maximum=16, default=7),
+    "max_parallel_models": scalar("integer", minimum=1), "max_channels": scalar("integer", minimum=1, maximum=16, default=8),
+    "channel_candidates": array(scalar("integer", minimum=1, maximum=16), min_items=1, default=[1, 2, 3, 4, 5, 6, 7, 8]),
     "solver_seed": integer(default=0), "mip_gap": scalar("number", minimum=0, maximum=1, default=0),
     "require_proven_optimal": flag(), "bdd_backend": scalar("string", enum=("cudd", "autoref"), default="cudd"),
 })
@@ -117,7 +120,11 @@ SKETCH = obj({
         "warmup_iterations": integer(default=5), "timed_iterations": scalar("integer", minimum=1, default=20),
         "max_rounds": scalar("integer", minimum=1, default=3), "max_cv": positive(default=0.05),
         "max_relative_fit_error": scalar("number", minimum=0), "job_timeout_s": positive(),
-        "payload_sizes": array(scalar("integer", minimum=1), default=[])}),
+        "payload_sizes": array(scalar("integer", minimum=1), default=[]),
+        "chain_steps": scalar("integer", minimum=1, default=8),
+        "chain_max_bytes": scalar("integer", minimum=1, default=4194304),
+        "equivalence_classes": flag(True),
+        "candidate_limit": scalar("integer", minimum=1, default=2)}),
     "trace_and_measure": section({"enabled": flag(), "pairs": scalar("integer", minimum=1, default=20),
         "warmup_iterations": integer(default=5), "timed_iterations": scalar("integer", minimum=1, default=20),
         "max_rounds": scalar("integer", minimum=1, default=3), "max_cv": positive(default=0.05),
@@ -125,24 +132,51 @@ SKETCH = obj({
         "task_alpha": scalar("number", exclusive_minimum=0, maximum=0.05, default=0.05),
         "single_attempt_alpha_cap": scalar("number", exclusive_minimum=0, maximum=0.05, default=0.05),
         "seed": integer(default=0), "job_timeout_s": positive(), "trace_capacity_bytes": scalar("integer", minimum=1)}),
+    "symbolic": obj({"enabled": flag(), "loop_iterations": scalar("integer", minimum=1, default=2),
+        "fifo_slots": scalar("integer", minimum=1, default=8), "chunk_steps": scalar("integer", minimum=1, default=4),
+        "max_related_operations": scalar("integer", minimum=1, default=48),
+        "max_order_hints": scalar("integer", minimum=1, default=32),
+        "max_plan_choices": scalar("integer", minimum=1, default=6)}),
     "repair": section({"mode": scalar("string", enum=("strategy_first", "joint"), default="strategy_first"),
         "candidate_batch_size": scalar("integer", minimum=1, default=4),
-        "analysis_batch_size": scalar("integer", minimum=1, default=16)}),
+        "analysis_batch_size": scalar("integer", minimum=1, default=16),
+        "refinement_factors": array(scalar("integer", minimum=2), default=[2, 4, 8]),
+        "hotspot": section({"bucket_count": scalar("integer", minimum=1, default=64),
+            "wait_threshold_ratio": scalar("number", minimum=0, default=0.05),
+            "idle_utilization_threshold": scalar("number", minimum=0, maximum=1, default=0.5),
+            "max_alt_hops": scalar("integer", minimum=1, default=3),
+            "max_hotspots": scalar("integer", minimum=1, default=16),
+            "tail_only": flag(True)}),
+        "correctness": section({"max_steps": scalar("integer", minimum=1, default=8)}),
+        "reallocation": section({"max_chunks": scalar("integer", minimum=1, default=8),
+            "max_incremental_moves": scalar("integer", minimum=0, default=4)}),
+        "bottleneck": section({"max_scope_operations": scalar("integer", minimum=1, default=48),
+            "dependency_depth": scalar("integer", minimum=0, default=2),
+            "plans_per_slice": scalar("integer", minimum=1, default=3),
+            "max_plans": scalar("integer", minimum=1, default=24)})}),
     "runtime_compatibility": section({"enabled": flag(True)}),
+    "size_bands": array(obj({"min_bytes": scalar("integer", minimum=0), "max_bytes": scalar("integer", minimum=1),
+        "representative_bytes": scalar("integer", minimum=1),
+        "slice_size_bytes": scalar("integer", minimum=1, default=None)},
+        required=("min_bytes", "max_bytes", "representative_bytes")), default=[], max_items=4),
     "history": section({"schedule_reuse": flag(), "calibration_reuse": flag(),
         "relative_bandwidth_tolerance": scalar("number", minimum=0), "max_schedule_candidates": scalar("integer", minimum=1),
         "calibration_max_age_s": positive(), "schedule_index": scalar("string"), "calibration_index": scalar("string")}),
+    "live": section({"enabled": flag(), **{key: positive() for key in LIVE_TIMEOUTS},
+        "window_requests": scalar("integer", minimum=1, default=8), "consecutive_windows": scalar("integer", minimum=1, default=2),
+        "relative_change_threshold": scalar("number", exclusive_minimum=0, maximum=0.99, default=0.1),
+        "baseline_max_cv": scalar("number", minimum=0, maximum=0.05, default=0.05),
+        "min_residence_requests": integer(default=32), "max_retries": scalar("integer", minimum=0, maximum=2**32-1, default=2),
+        "external_telemetry_path": scalar("string"), "external_max_age_s": positive(default=60),
+        "fault_injection": section({"request_id": integer(default=0), "attempts": scalar("integer", minimum=0, maximum=2**32-1, default=0)})}),
 }, required=("collective", "hyperparameters"))
 
 MANUAL_STATE = obj({"rank": integer(), "offset": integer(), "contributors": array(integer(), min_items=1)},
                    required=("rank", "offset", "contributors"))
-MANUAL_ATOM = obj({key: array(integer(), min_items=1) for key in ("slice_ids", "src_ranks", "dst_ranks")},
-                  required=("slice_ids", "src_ranks", "dst_ranks"))
 MANUAL_NODE = obj({"id": scalar("string"), "stage_id": integer(),
     "operator": scalar("string", enum=tuple(k.value for k in CollectiveKind)),
     "group": array(integer(), min_items=1), "root": integer(),
     "relay_ranks": array(integer(), default=[]),
-    "atoms": array(MANUAL_ATOM, default=[]),
     "depends_on": array(scalar("string"), default=[]),
     "input_states": array(MANUAL_STATE, min_items=1), "output_states": array(MANUAL_STATE, min_items=1)},
     required=("id", "stage_id", "operator", "group"))
@@ -168,30 +202,13 @@ RUNTIME = obj({
         "recv_tbs_per_channel": scalar("integer", minimum=1, maximum=32, default=32),
         "dependency_id": integer(maximum=127, default=127), "buffer_offset": integer(maximum=32767, default=32767)}),
     "tb_layout": scalar("string", enum=("separate", "fused"), default="separate"),
-    "control": section({"bind_address": scalar("string"), "port": scalar("integer", minimum=1, maximum=65535)}),
+    "xml_size_range": section({"min_bytes": scalar("integer", minimum=0, default=0),
+                               "max_bytes": scalar("integer", minimum=1, default=4294967296)}),
+    "control": section({"bind_address": scalar("string"), "port": scalar("integer", minimum=1, maximum=65535),
+                        "unix_socket": scalar("string")}),
 }, required=("rank_map", "environment", "scratch_bytes_per_rank"))
 
 SCHEMAS = {"topology": TOPOLOGY, "sketch": SKETCH, "atom": ATOM, "runtime": RUNTIME}
-
-
-LIVE_MIGRATION_ERROR = ("sketch.live has been removed; use solve or verify --tune for offline tuning, "
-                        "calibrate for calibration, and trace_and_measure for fixed-schedule execution")
-
-
-def migrate_disabled_live(documents) -> bool:
-    """Remove inactive legacy settings; callers retain checkpoint identity separately."""
-    sketch = documents.get("sketch")
-    if not isinstance(sketch, dict) or "live" not in sketch:
-        return False
-    live = sketch["live"]
-    if live is not None and (not isinstance(live, dict) or
-                            (live.get("enabled") is not None and live.get("enabled") is not False)):
-        raise InputValidationError(LIVE_MIGRATION_ERROR)
-    del sketch["live"]
-    runtime = documents.get("runtime")
-    if isinstance(runtime, dict) and isinstance(runtime.get("control"), dict):
-        runtime["control"].pop("unix_socket", None)
-    return True
 
 
 def public_schemas() -> dict[str, dict]:
@@ -273,8 +290,6 @@ def _apply_overrides(documents, overrides, enabled, sources):
     for path, value in (overrides or {}).items():
         if not isinstance(path, str) or not path:
             raise InputValidationError("CLI override paths must be strings")
-        if path == "sketch.live" or path.startswith("sketch.live."):
-            raise InputValidationError(LIVE_MIGRATION_ERROR)
         if path == "sketch.collective.operator":
             value = normalize_operator(value)
         parts = path.split(".")
@@ -344,11 +359,8 @@ def _validate_topology(topology, runtime):
     if len({(item["host"], item["device"]) for item in mapping}) != ranks:
         raise InputValidationError("runtime.rank_map must use a distinct device for each rank on a host")
     raw = runtime["environment"]["NCCL_BUFFSIZE"]
-    # Plan section 7.1: the valid native range is 8 through 2147483647 bytes.
-    # Smaller values leave no Simple step (NCCL_STEPS=8) and previously ended
-    # as "no initial candidate" instead of an input error.
-    if not raw.isascii() or not raw.isdigit() or not 8 <= int(raw) <= 2**31 - 1:
-        raise InputValidationError("NCCL_BUFFSIZE must be an integer byte count from 8 to 2147483647")
+    if not raw.isascii() or not raw.isdigit() or not 0 < int(raw) <= 2**31 - 1:
+        raise InputValidationError("NCCL_BUFFSIZE must be a positive signed 32-bit byte count")
 
 
 def _validate_enabled(config, purpose):
@@ -358,7 +370,7 @@ def _validate_enabled(config, purpose):
         _required(solver, key, "sketch.solver")
     for key in ("cleanup_reserve_s", "max_offline_validation_per_round_s", "max_offline_validation_total_s"):
         _required(budgets, key, "sketch.budgets")
-    if purpose == "solve":
+    if purpose in {"solve", "live"}:
         for key in ("max_initial_synthesis_s", "max_tuning_rounds"):
             _required(budgets, key, "sketch.budgets")
         if budgets["max_tuning_rounds"]:
@@ -385,19 +397,24 @@ def _validate_enabled(config, purpose):
     if history["calibration_reuse"]:
         for key in ("calibration_max_age_s", "calibration_index"):
             _required(history, key, "sketch.history")
+    if sketch["live"]["enabled"] or purpose == "live":
+        injection = sketch['live']['fault_injection']
+        if bool(injection['request_id']) != bool(injection['attempts']):
+            raise InputValidationError('live fault injection requires both a request_id and a positive attempts count')
+        for key in LIVE_TIMEOUTS:
+            _required(sketch["live"], key, "sketch.live")
+        for key in ("bind_address", "port", "unix_socket"):
+            _required(config["runtime"]["control"], key, "runtime.control")
 
 
 def resolve_request(files, overrides=None, *, override_input=False, purpose="solve"):
     from vericcl.input.loader import _load_json_object
-    if purpose == "live":
-        raise InputValidationError(LIVE_MIGRATION_ERROR)
-    if purpose not in {"solve", "verify", "calibrate"}:
+    if purpose not in {"solve", "verify", "calibrate", "live"}:
         raise InputValidationError("invalid request purpose")
     if not isinstance(files, dict) or set(files) != set(SCHEMAS):
         raise InputValidationError("request files must explicitly contain topology, sketch, atom and runtime")
     documents = {name: _load_json_object(Path(path), name) for name, path in files.items()}
     origins = migrate(documents)
-    migrate_disabled_live(documents)
     sources = {}
     _apply_overrides(documents, overrides, override_input, sources)
     config = {name: _normalize(spec, documents[name], name, sources, str(Path(files[name]).resolve()), origins)
@@ -432,21 +449,13 @@ def resolve_request(files, overrides=None, *, override_input=False, purpose="sol
         for key in ("absolute", "relative"):
             _required(sketch["tolerances"], key, "sketch.tolerances")
     selected = atom["synthesis_method"]
-    if atom["manual"]["enabled"]:
-        if selected == "constructive_trees":
-            raise InputValidationError("manual stage plans require synthesis_method=hierarchy or auto")
-        if sketch["history"]["schedule_reuse"]:
-            raise InputValidationError("manual stage plans require history.schedule_reuse=false; subproblem reuse remains active")
-        selected = "hierarchy"
-    elif selected == "auto":
+    if selected == "auto":
         threshold = _required(atom, "M_switch", "atom")
         selected = "hierarchy" if size < threshold else "constructive_trees"
     if selected == "constructive_trees" and atom["strategies"]["shortest_paths"]:
         raise InputValidationError("shortest_paths is only an initial hierarchy option")
-    from vericcl.input.manual_atoms import expanded_forbidden_transfers
-    forbidden_values = expanded_forbidden_transfers(atom)
     forbidden = []
-    if forbidden_values:
+    if atom["forbidden_transfers"]:
         if reference is None and slice_size is not None:
             reference = slice_size
             sources["sketch.hyperparameters.reference_slice_size_bytes"] = {
@@ -454,7 +463,7 @@ def resolve_request(files, overrides=None, *, override_input=False, purpose="sol
         if reference is None:
             raise InputValidationError("reference_slice_size_bytes is required to bind slice_id constraints")
         hyper["reference_slice_size_bytes"] = reference
-        for slice_id, src, dst, stage in forbidden_values:
+        for slice_id, src, dst, stage in atom["forbidden_transfers"]:
             if (slice_id >= ranks * (size // reference) or max(src, dst) >= ranks or src == dst
                     or (atom["stage_num"] is not None and stage >= atom["stage_num"])):
                 raise InputValidationError("forbidden transfer is outside its reference partition/rank/stage domain")

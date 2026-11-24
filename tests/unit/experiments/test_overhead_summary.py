@@ -18,6 +18,27 @@ def test_incomplete_workflow_is_never_classified_successful():
     assert summarize(data)["status"] == "incomplete"
 
 
+def test_v5_run_result_is_summarized_with_its_execution_status():
+    from vericcl.execution.status import RunResult
+    from vericcl.experiments.overhead import result_record
+    from vericcl.experiments.overhead_summary import summarize
+
+    reports = {"accepted": {"candidate": {"record": "candidates/a/candidate.json",
+                                          "xml": "candidates/a/schedule.xml"}},
+               "run_summary": {"exit_code": 0},
+               "candidate_records": ["candidates/a/candidate.json", "candidates/b/candidate.json"]}
+    result = RunResult(True, "completed", {"semantic": "valid"}, "initial", "accepted", "maximum_rounds")
+    data = {"arguments": {"mode": "solve"}, "result": result_record(result, reports),
+            "timing": {"wall_time_s": 1.0, "exclusive_s": {"synthesis": 1.0}, "events": []}}
+    summary = summarize(json.loads(json.dumps(data)))
+    assert summary["status"] == "completed" and summary["candidate_count"] == 2
+    assert summary["workflow"]["final_xml"] == "candidates/a/schedule.xml"
+    assert summary["workflow"]["message"] == "maximum_rounds"
+    failed = RunResult(False, "incomplete", stop_reason="no_initial_candidate", failure_category="offline")
+    data["result"] = result_record(failed, {})
+    assert summarize(data)["status"] == "incomplete" and summarize(data)["candidate_count"] == 0
+
+
 def test_repeated_summary_retains_median_sample_and_failures():
     from vericcl.experiments.overhead_summary import summarize
 

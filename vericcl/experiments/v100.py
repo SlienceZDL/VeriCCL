@@ -1,6 +1,35 @@
+"""Staged V100 experiment harness on the v5 pipeline.
+
+Stages: ``preflight -> smoke -> solve -> benchmark -> summarize``
+(``python -m vericcl.experiments.v100 <stage> --config <config.json>``).
+
+Inputs. Cases come from a schema_version 2 manifest
+(:mod:`vericcl.experiments.model`): v5 topology, sketch and a *logical* v5
+runtime per case plus one shared atom. The logical runtime holds the
+experiment's runtime meaning (rank-to-node/device placement on logical hosts,
+explicit ``NCCL_BUFFSIZE``, scratch and memory budgets). :func:`bind_runtime`
+binds it to this deployment from :class:`V100ExperimentConfig`: logical hosts
+are replaced, in order of first rank, by the hosts of the configured
+hostfiles (``remote_host`` first); ``runtime.paths`` gets ``mpi_bin`` from the
+MPI launcher plus the config ``runtime_paths`` (``vericcl_driver`` and
+``vericcl_native`` are required; see ``examples/v100-experiments``);
+allowlisted config environment entries, the MPI transport and the NCCL
+transport of the benchmark stage (:data:`BENCHMARK_TRANSPORT`) fill
+environment keys the case does not set, so calibration and trace runs measure
+the transport the benchmark uses. Case values (e.g. ``NCCL_BUFFSIZE``) always
+win.
+
+Runs. ``solve`` runs :func:`vericcl.workflow_v5.run_primary` (purpose
+``solve``) with project root ``<experiment_root>/runs/<task_id>``; the v5 run
+directory is ``<project root>/examples/<task_id>/output/<run_id>`` and the
+bound runtime is kept at ``<project root>/inputs/runtime.json``. ``smoke``
+runs purpose ``calibrate`` on a 2-rank inter-node case derived from the first
+manifest case under ``<experiment_root>/smoke``.
+"""
 from __future__ import annotations
 
 import argparse
+import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -8,14 +37,17 @@ import json
 import math
 import os
 import re
+import traceback
 from pathlib import Path
-from vericcl.execution.security import is_foreign_home_path
 from types import MappingProxyType
 from typing import Callable, Mapping, Optional, Sequence, Tuple
 
-from vericcl.cli.online import build_online_context_factory
 from vericcl.artifacts.writer import atomic_write_bytes, atomic_write_text
 from vericcl.errors import SemanticError, VeriCCLError
+from vericcl.execution.context import RunContext, StorageFailure, finalize_run
+from vericcl.execution.events import emit_event
+from vericcl.execution.security import ENVIRONMENT_ALLOWLIST, is_foreign_home_path
+from vericcl.execution.status import RunResult
 from vericcl.experiments.model import (
     ExperimentCase,
     ExperimentManifest,
@@ -47,18 +79,8 @@ from vericcl.verification.online.runner import (
     SubprocessCommandExecutor,
 )
 from vericcl.verification.online.nccl_tests import parse_nccl_tests_table
-from vericcl.verification.online.calibration import CalibrationRequest
-from vericcl.verification.online.calibration_xml import (
-    build_calibration_benchmark,
-)
-from vericcl.verification.online.pipeline import (
-    OnlineStageStatus,
-    run_online_validation,
-)
-from vericcl.cli.online import representative_calibration_topology
-from vericcl.input.loader import resolve_inputs
-from vericcl.topology.loader import load_topology
-from vericcl.workflow import RunContext, execute_solve
+from vericcl.input.loader import load_request
+from vericcl.workflow_v5 import PrimaryRequest, run_primary
 
 
 HOSTS = {
@@ -83,9 +105,41 @@ _CONFIG_FIELDS = frozenset(
         "hostfiles",
         "max_clock_uncertainty_us",
         "environment",
+        "runtime_paths",
+    }
+)
+_REQUIRED_RUNTIME_PATHS = ("vericcl_driver", "vericcl_native")
+_RUNTIME_PATH_FIELDS = frozenset(
+    {
+        "cuda_home",
+        "msccl_root",
+        "nccl_tests_root",
+        "vericcl_driver",
+        "vericcl_native",
     }
 )
 _HOSTFILE_FIELDS = frozenset({"8", "16"})
+SMOKE_TASK_ID = "smoke-2x1-128m"
+SMOKE_TOTAL_SIZE_BYTES = 128 * 1024 * 1024
+SMOKE_TIMEOUT_S = 10800.0
+# NCCL transport of the benchmark stage: InfiniBand off (socket transport),
+# no GPUDirect RDMA, P2P over NVLink only. bind_runtime puts the same values
+# into every case runtime so calibration and trace runs measure this transport.
+BENCHMARK_TRANSPORT = MappingProxyType(
+    {
+        "NCCL_IB_DISABLE": "1",
+        "NCCL_IGNORE_DISABLED_P2P": "1",
+        "NCCL_NET_GDR_LEVEL": "0",
+        "NCCL_NET_GDR_READ": "0",
+        "NCCL_P2P_LEVEL": "NVL",
+    }
+)
+# Measurement settings v5 requires explicitly. The values are those of the
+# two-server tuning example inputs, where every calibrating sketch used
+# a 0.1 fit-error limit, 1200 s per measurement job and a 2 s cleanup reserve.
+CALIBRATION_MAX_RELATIVE_FIT_ERROR = 0.1
+MEASUREMENT_JOB_TIMEOUT_S = 1200
+CLEANUP_RESERVE_S = 2
 _REQUIRED_ENVIRONMENT = frozenset(
     {
         "NCCL_ALGO",
@@ -150,35 +204,48 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _write_or_reuse_text(path: Path, text: str) -> None:
-    try:
-        atomic_write_text(path, text)
-        return
-    except FileExistsError:
-        pass
-    try:
-        existing = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        raise SemanticError(
-            "existing experiment artifact is unreadable"
-        ) from error
-    if existing != text:
-        raise SemanticError(
-            "existing experiment artifact has conflicting content"
-        )
+def _document_text(document: Mapping) -> str:
+    return json.dumps(document, indent=1, sort_keys=True) + "\n"
 
 
-def _case_input_sha256(case: ExperimentCase, atom_path: Path) -> str:
+def _read_document(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise SemanticError("{} is unreadable".format(label)) from error
+    if not isinstance(value, dict):
+        raise SemanticError("{} must be a JSON object".format(label))
+    return value
+
+
+def _request_sha256(parts: Sequence[Tuple[str, str]]) -> str:
+    """Digest of labelled request inputs given as (label, sha256 hex)."""
     digest = hashlib.sha256()
-    for label, path in (
-        ("topology", case.topology_path),
-        ("sketch", case.sketch_path),
-        ("atom", atom_path),
-    ):
+    for label, value in parts:
         digest.update(label.encode("ascii"))
         digest.update(b"\x00")
-        digest.update(bytes.fromhex(_file_sha256(path)))
+        digest.update(bytes.fromhex(value))
     return digest.hexdigest()
+
+
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _case_input_sha256(
+    case: ExperimentCase,
+    atom_path: Path,
+    runtime_text: str,
+) -> str:
+    """Identity of a case request: its files plus the bound runtime."""
+    return _request_sha256(
+        (
+            ("topology", _file_sha256(case.topology_path)),
+            ("sketch", _file_sha256(case.sketch_path)),
+            ("atom", _file_sha256(atom_path)),
+            ("runtime", _text_sha256(runtime_text)),
+        )
+    )
 
 
 def _reject_duplicate_keys(pairs):
@@ -206,6 +273,10 @@ class V100ExperimentConfig:
     hostfile_16: Path
     environment: Mapping[str, str]
     max_clock_uncertainty_us: float = 50.0
+    # Optional v5 ``runtime.paths`` entries bound into every case runtime
+    # (``vericcl_driver``/``vericcl_native`` are required by the online
+    # stages of the solve and smoke runs).
+    runtime_paths: Mapping[str, str] = MappingProxyType({})
 
     def __post_init__(self) -> None:
         for field in (
@@ -267,6 +338,24 @@ class V100ExperimentConfig:
             "max_clock_uncertainty_us",
             float(threshold),
         )
+        paths = _string_mapping(self.runtime_paths, "runtime_paths")
+        unknown = sorted(set(paths).difference(_RUNTIME_PATH_FIELDS))
+        if unknown:
+            raise SemanticError(
+                "runtime_paths has unknown entries: {}".format(
+                    ", ".join(unknown)
+                )
+            )
+        object.__setattr__(
+            self,
+            "runtime_paths",
+            MappingProxyType(
+                {
+                    key: str(_absolute_path(value, "runtime_paths." + key))
+                    for key, value in sorted(paths.items())
+                }
+            ),
+        )
 
     def hostfile(self, rank_count: int) -> Path:
         if rank_count == 8:
@@ -297,6 +386,14 @@ def load_v100_config(path: Path) -> V100ExperimentConfig:
         raise SemanticError("V100 config fields are invalid")
     if payload["schema_version"] != 1:
         raise SemanticError("V100 config schema is unsupported")
+    runtime_paths = payload["runtime_paths"]
+    if not isinstance(runtime_paths, dict):
+        raise SemanticError("V100 config runtime_paths must be an object")
+    missing = [name for name in _REQUIRED_RUNTIME_PATHS if name not in runtime_paths]
+    if missing:
+        raise SemanticError(
+            "V100 config runtime_paths requires {}".format(", ".join(missing))
+        )
     hostfiles = payload["hostfiles"]
     if not isinstance(hostfiles, dict) or set(hostfiles) != _HOSTFILE_FIELDS:
         raise SemanticError("V100 config hostfile fields are invalid")
@@ -317,6 +414,7 @@ def load_v100_config(path: Path) -> V100ExperimentConfig:
         hostfile_16=hostfiles["16"],
         environment=payload["environment"],
         max_clock_uncertainty_us=payload["max_clock_uncertainty_us"],
+        runtime_paths=runtime_paths,
     )
 
 
@@ -391,6 +489,18 @@ def preflight(
         raise SemanticError("VERICCL_ONLINE_INTER_NODE must be one")
     if config.max_clock_uncertainty_us != 50.0:
         raise SemanticError("clock uncertainty threshold must be 50 us")
+    for name in _REQUIRED_RUNTIME_PATHS:
+        binary = config.runtime_paths.get(name)
+        if binary is None:
+            raise SemanticError(
+                "V100 preflight requires runtime_paths.{}".format(name)
+            )
+        if not Path(binary).is_file() or not os.access(binary, os.X_OK):
+            raise SemanticError(
+                "V100 preflight runtime_paths.{} is not executable".format(
+                    name
+                )
+            )
     if executor is None:
         return
     request = ProcessRequest(
@@ -435,29 +545,182 @@ def _runtime_dependencies(config: V100ExperimentConfig, rank_count: int):
     return remote_executor, collector
 
 
-def _factory_environment(
-    config: V100ExperimentConfig,
-    rank_count: int,
-) -> Mapping[str, str]:
-    environment = dict(config.environment)
-    environment.update(
-        {
-            "VERICCL_CALIBRATION_CACHE_PATH": str(
-                config.calibration_cache_path
-            ),
-            "VERICCL_CLOCK_SYNC_BINARY": str(config.clock_sync_binary),
-            "VERICCL_MAX_CLOCK_UNCERTAINTY_US": str(
-                config.max_clock_uncertainty_us
-            ),
-            "VERICCL_MPI_HOSTFILE": str(config.hostfile(rank_count)),
-            "VERICCL_MPI_LAUNCHER": str(config.mpi_launcher),
-            "VERICCL_MSCCL_BUILD_DIR": str(config.msccl_library_path),
-            "VERICCL_NCCL_TESTS_BUILD_DIR": str(
-                config.nccl_tests_binary_directory
-            ),
-        }
+def _deployment_environment(config: V100ExperimentConfig) -> dict:
+    """Allowlisted v5 runtime environment contributed by the deployment.
+
+    Mirrors the MPI/NCCL transport of the benchmark stage
+    (:func:`build_mpi_prefix`, :func:`build_performance_environment`) within
+    the keys a v5 runtime may carry.
+    """
+    environment = {
+        key: value
+        for key, value in config.environment.items()
+        if key in ENVIRONMENT_ALLOWLIST
+    }
+    for key, value in BENCHMARK_TRANSPORT.items():
+        environment.setdefault(key, value)
+    environment["PATH"] = "{}:{}".format(
+        config.mpi_launcher.parent,
+        config.environment.get("PATH", "/usr/bin:/bin"),
     )
-    return MappingProxyType(environment)
+    environment["LD_LIBRARY_PATH"] = ":".join(
+        value
+        for value in (
+            str(config.msccl_library_path),
+            str(config.mpi_launcher.parent.parent / "lib"),
+            config.environment.get("LD_LIBRARY_PATH", ""),
+        )
+        if value
+    )
+    environment.setdefault("OMPI_MCA_pml", "ob1")
+    environment.setdefault("OMPI_MCA_btl", "tcp,self,vader")
+    interface = config.environment.get("VERICCL_MPI_TCP_IF_INCLUDE")
+    if interface:
+        environment.setdefault("OMPI_MCA_btl_tcp_if_include", interface)
+    return environment
+
+
+def bind_runtime(
+    config: V100ExperimentConfig,
+    runtime: Mapping,
+) -> dict:
+    """Bind a logical v5 runtime document to the configured deployment.
+
+    Logical hosts are mapped, in order of their first (lowest) rank, onto the
+    hosts of the configured hostfiles (``remote_host`` first). Environment
+    keys set by the case win over deployment defaults, so an experiment's
+    explicit ``NCCL_BUFFSIZE`` is preserved. ``runtime.paths`` gets
+    ``mpi_bin`` and the configured ``runtime_paths``.
+    """
+    if not isinstance(config, V100ExperimentConfig):
+        raise SemanticError("bind_runtime requires V100ExperimentConfig")
+    document = copy.deepcopy(dict(runtime))
+    rank_map = document.get("rank_map")
+    if not isinstance(rank_map, list) or not rank_map or not all(
+        isinstance(entry, dict)
+        and isinstance(entry.get("rank"), int)
+        and isinstance(entry.get("host"), str)
+        for entry in rank_map
+    ):
+        raise SemanticError("case runtime rank_map is invalid")
+    logical = []
+    for entry in sorted(rank_map, key=lambda item: item["rank"]):
+        if entry["host"] not in logical:
+            logical.append(entry["host"])
+    hosts = _configured_hosts(config)
+    if len(logical) > len(hosts):
+        raise SemanticError(
+            "case runtime uses more hosts than the V100 hostfiles provide"
+        )
+    mapping = dict(zip(logical, hosts))
+    document["rank_map"] = [
+        dict(entry, host=mapping[entry["host"]]) for entry in rank_map
+    ]
+    case_environment = document.get("environment")
+    if not isinstance(case_environment, dict):
+        raise SemanticError("case runtime environment is invalid")
+    environment = _deployment_environment(config)
+    environment.update(case_environment)
+    document["environment"] = dict(sorted(environment.items()))
+    paths = dict(document.get("paths") or {})
+    paths["mpi_bin"] = str(config.mpi_launcher.parent)
+    paths.update(config.runtime_paths)
+    document["paths"] = dict(sorted(paths.items()))
+    return document
+
+
+def _bound_runtime_text(
+    config: V100ExperimentConfig,
+    runtime_path: Path,
+) -> str:
+    return _document_text(
+        bind_runtime(config, _read_document(runtime_path, "case runtime"))
+    )
+
+
+def _run_id() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+
+
+def _execute_run(
+    execute: Callable,
+    request: PrimaryRequest,
+    context: RunContext,
+):
+    """Run one v5 request and finalize it (cf. vericcl.cli.lifecycle)."""
+    try:
+        result = execute(request, context)
+        if not isinstance(result, RunResult):
+            raise SemanticError("v5 executor returned an invalid result")
+    except StorageFailure:
+        raise
+    except Exception as error:
+        emit_event(
+            context,
+            "execution_exception",
+            {"message": str(error), "traceback": traceback.format_exc()},
+        )
+        result = RunResult(
+            False,
+            "failed",
+            stop_reason="exception",
+            failure_category="internal",
+            optional_failures=(str(error),),
+        )
+    return result, finalize_run(context, result)
+
+
+def _start_run(
+    project_root: Path,
+    case_id: str,
+    files: Mapping[str, Path],
+    *,
+    purpose: str,
+    run_id: Optional[str],
+):
+    inputs = load_request(dict(files), purpose=purpose)
+    context = RunContext.create(
+        project_root,
+        case_id,
+        run_id or _run_id(),
+        input_files={
+            name + ".json": path for name, path in files.items()
+        },
+        environment=dict(inputs.request_config["runtime"]["environment"]),
+    )
+    return PrimaryRequest(inputs, purpose=purpose), context
+
+
+def _require_completed(result: RunResult, finalized, context: RunContext, label: str) -> None:
+    if result.execution != "completed" or not finalized.complete:
+        details = tuple(result.optional_failures) + tuple(finalized.errors)
+        raise SemanticError(
+            "{} run did not complete (execution={}, stop_reason={}, "
+            "exit_code={}): {}{}".format(
+                label,
+                result.execution,
+                result.stop_reason,
+                finalized.exit_code,
+                context.root,
+                "".join("\n" + str(item) for item in details),
+            )
+        )
+
+
+def accepted_xml(run_root: Path) -> Path:
+    """The non-empty accepted schedule XML recorded by a v5 run."""
+    root = Path(run_root).resolve()
+    payload = _read_document(root / "best" / "accepted.json", "accepted schedule")
+    candidate = payload.get("candidate")
+    relative = candidate.get("xml") if isinstance(candidate, dict) else None
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        raise SemanticError("accepted schedule names no XML")
+    xml = (root / relative).resolve()
+    if not xml.is_relative_to(root):
+        raise SemanticError("accepted schedule XML escapes the run directory")
+    if not xml.is_file() or xml.stat().st_size <= 0:
+        raise SemanticError("accepted schedule XML is missing or empty")
+    return xml
 
 
 def _xml_source(value: object) -> XmlSource:
@@ -481,8 +744,10 @@ def build_performance_environment(
     visible_count = case.rank_count // 2
     if visible_count not in {4, 8}:
         raise SemanticError("performance GPU count is unsupported")
+    # A VeriCCL XML runs with the explicit NCCL_BUFFSIZE of the case's v5
+    # runtime it was synthesized for; baselines keep the fixed 2 MiB.
     buffsize = (
-        2 * case.slice_size_bytes
+        case.nccl_buffsize_bytes
         if selected_source is XmlSource.VERICCL
         else 2 * 1024 * 1024
     )
@@ -498,12 +763,8 @@ def build_performance_environment(
         "NCCL_ALGO": "MSCCL,RING",
         "NCCL_BUFFSIZE": str(buffsize),
         "NCCL_DEBUG": "INFO",
-        "NCCL_IB_DISABLE": "1",
-        "NCCL_IGNORE_DISABLED_P2P": "1",
-        "NCCL_NET_GDR_LEVEL": "0",
-        "NCCL_NET_GDR_READ": "0",
-        "NCCL_P2P_LEVEL": "NVL",
         "NCCL_PROTO": "Simple",
+        **BENCHMARK_TRANSPORT,
     }
     if config.environment.get('NCCL_SOCKET_IFNAME'):
         environment['NCCL_SOCKET_IFNAME'] = config.environment['NCCL_SOCKET_IFNAME']
@@ -1028,30 +1289,29 @@ def benchmark_matrix(
     return tuple(records)
 
 
-def _online_factory(config: V100ExperimentConfig, rank_count: int):
-    remote_executor, collector = _runtime_dependencies(config, rank_count)
-    return build_online_context_factory(
-        _factory_environment(config, rank_count),
-        executor=remote_executor,
-        trace_collector=collector,
+def _failure_record(
+    task_id: str,
+    input_sha256: str,
+    command: Tuple[str, ...],
+    started: str,
+    error: Exception,
+    directory: Path,
+) -> TaskRecord:
+    directory.mkdir(parents=True, exist_ok=True)
+    error_path = directory / "runner-error.log"
+    atomic_replace_text(error_path, "{}\n".format(error))
+    return TaskRecord(
+        task_id=task_id,
+        status=TaskStatus.FAILED,
+        input_sha256=input_sha256,
+        output_sha256=None,
+        command=command,
+        returncode=1,
+        failure_code=type(error).__name__,
+        log_path=str(error_path),
+        started_at_utc=started,
+        finished_at_utc=_utc_now(),
     )
-
-
-def _online_report_is_valid(path: Path) -> bool:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        online = payload["validation"]["online"]
-        if online["status"] == "valid":
-            return True
-        evidence = online["evidence"]
-        return (
-            online["status"] == "warning"
-            and evidence["release_status"] == "unstable"
-            and evidence["online_operator_validation"] == "passed"
-            and evidence["failure_code"] is None
-        )
-    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
-        return False
 
 
 def solve_case(
@@ -1059,20 +1319,32 @@ def solve_case(
     config: V100ExperimentConfig,
     *,
     atom_path: Optional[Path] = None,
-    execute: Callable[[RunContext], object] = execute_solve,
-    online_factory=None,
+    execute: Callable[[PrimaryRequest, RunContext], RunResult] = run_primary,
     state_store: Optional[ExperimentStateStore] = None,
+    run_id: Optional[str] = None,
 ) -> TaskRecord:
+    """Solve one case with the v5 pipeline (purpose ``solve``).
+
+    The run's project root is ``<experiment_root>/runs/<task_id>``. The task
+    passes only when the run completed and ``best/accepted.json`` names an
+    existing non-empty XML; that XML is recorded as ``log_path`` with its
+    digest as ``output_sha256`` for the benchmark stage. ``execute`` takes
+    ``(PrimaryRequest, RunContext)`` and returns a ``RunResult``.
+    """
     if not isinstance(case, ExperimentCase):
         raise SemanticError("solve_case requires an ExperimentCase")
     if not isinstance(config, V100ExperimentConfig):
         raise SemanticError("solve_case requires V100ExperimentConfig")
     atom = (
-        config.repo_root / "tests/fixtures/legacy-catalog/atom/default.json"
+        load_experiment_manifest(
+            config.manifest_path,
+            repo_root=config.repo_root,
+        ).atom_path
         if atom_path is None
         else _absolute_path(atom_path, "atom_path")
     )
-    input_sha256 = _case_input_sha256(case, atom)
+    runtime_text = _bound_runtime_text(config, case.runtime_path)
+    input_sha256 = _case_input_sha256(case, atom, runtime_text)
     command = (
         "python",
         "-m",
@@ -1093,54 +1365,30 @@ def solve_case(
     )
     if state_store is not None:
         state_store.put(running)
+    project_root = config.experiment_root / "runs" / case.task_id
     try:
-        if online_factory is None:
-            runtime_factory = None
-
-            def selected_factory(*args, **kwargs):
-                nonlocal runtime_factory
-                if runtime_factory is None:
-                    runtime_factory = _online_factory(
-                        config,
-                        case.rank_count,
-                    )
-                return runtime_factory(*args, **kwargs)
-        else:
-            selected_factory = online_factory
-        context = RunContext(
-            topology_path=case.topology_path,
-            sketch_path=case.sketch_path,
-            atom_path=atom,
-            output_base=config.experiment_root / "runs" / case.task_id,
-            run_id=case.task_id,
-            online=True,
-            tune=True,
-            timeout_s=10800.0,
-            environment_signature="v100-k16",
-            online_context_factory=selected_factory,
+        runtime_path = project_root / "inputs" / "runtime.json"
+        atomic_replace_text(runtime_path, runtime_text)
+        request, context = _start_run(
+            project_root,
+            case.task_id,
+            {
+                "topology": case.topology_path,
+                "sketch": case.sketch_path,
+                "atom": atom,
+                "runtime": runtime_path,
+            },
+            purpose="solve",
+            run_id=run_id,
         )
-        artifacts = execute(context)
-        final_xml = artifacts.final_xml
-        final_report = artifacts.final_report
-        valid = (
-            artifacts.final_candidate_id is not None
-            and final_xml is not None
-            and Path(final_xml).is_file()
-            and Path(final_xml).stat().st_size > 0
-            and final_report is not None
-            and Path(final_report).is_file()
-            and Path(final_report).stat().st_size > 0
-            and _online_report_is_valid(Path(final_report))
-        )
-        if not valid:
-            raise SemanticError(
-                "solve result has no online-valid final artifact"
-            )
+        result, finalized = _execute_run(execute, request, context)
+        _require_completed(result, finalized, context, "V100 solve")
+        final_xml = accepted_xml(context.root)
         record = TaskRecord(
             task_id=case.task_id,
             status=TaskStatus.PASSED,
             input_sha256=input_sha256,
-            output_sha256=_file_sha256(Path(final_xml)),
+            output_sha256=_file_sha256(final_xml),
             command=command,
             returncode=0,
             log_path=str(final_xml),
@@ -1148,37 +1396,144 @@ def solve_case(
             finished_at_utc=_utc_now(),
         )
     except Exception as error:
-        record = TaskRecord(
-            task_id=case.task_id,
-            status=TaskStatus.FAILED,
-            input_sha256=input_sha256,
-            output_sha256=None,
-            command=command,
-            returncode=1,
-            failure_code=type(error).__name__,
-            log_path=None,
-            started_at_utc=started,
-            finished_at_utc=_utc_now(),
+        record = _failure_record(
+            case.task_id,
+            input_sha256,
+            command,
+            started,
+            error,
+            project_root,
         )
     if state_store is not None:
         state_store.put(record)
     return record
 
 
+def build_smoke_documents(
+    config: V100ExperimentConfig,
+    manifest: ExperimentManifest,
+) -> dict:
+    """Topology, sketch and bound runtime of the 2-rank inter-node smoke.
+
+    The first manifest case supplies the documents. The topology keeps the
+    first rank of the first two nodes (gateways preferred) with the directed
+    links between them, their shared resources and local costs. The sketch
+    calibrates one channel on a 128 MiB message with the case slice size;
+    the runtime keeps the case environment (explicit ``NCCL_BUFFSIZE``) and
+    the two ranks' logical placement before :func:`bind_runtime`.
+    """
+    case = manifest.cases[0]
+    topology = _read_document(case.topology_path, "smoke topology")
+    sketch = _read_document(case.sketch_path, "smoke sketch")
+    runtime = _read_document(case.runtime_path, "smoke runtime")
+    nodes = sorted(topology.get("nodes", ()), key=lambda node: node["id"])
+    if len(nodes) < 2:
+        raise SemanticError("V100 smoke requires an inter-node topology")
+    selected = tuple(
+        min(node.get("gateways") or node["ranks"]) for node in nodes[:2]
+    )
+    remap = {rank: index for index, rank in enumerate(selected)}
+    pairs = {(selected[0], selected[1]), (selected[1], selected[0])}
+    links = [
+        edge
+        for edge in topology["directed_links"]
+        if (edge["src"], edge["dst"]) in pairs
+    ]
+    if len(links) != 2:
+        raise SemanticError("V100 smoke ranks lack bidirectional links")
+    used = {
+        resource for edge in links for resource in edge.get("resources", ())
+    }
+    smoke_topology = {
+        "name": "{} smoke 2x1 inter-node".format(
+            topology.get("name", case.topology_name)
+        ),
+        "ranks": 2,
+        "nodes": [
+            {"id": 0, "ranks": [0], "gateways": [0]},
+            {"id": 1, "ranks": [1], "gateways": [1]},
+        ],
+        "directed_links": [
+            dict(edge, src=remap[edge["src"]], dst=remap[edge["dst"]])
+            for edge in links
+        ],
+        "shared_resources": [
+            dict(
+                resource,
+                links=[
+                    [remap[src], remap[dst]]
+                    for src, dst in resource.get("links", ())
+                    if (src, dst) in pairs
+                ],
+            )
+            for resource in topology.get("shared_resources", ())
+            if resource["id"] in used
+        ],
+        "local_costs": [
+            dict(entry, rank=remap[entry["rank"]])
+            for entry in topology.get("local_costs", ())
+            if entry["rank"] in remap
+        ],
+    }
+    smoke_sketch = copy.deepcopy(sketch)
+    hyperparameters = smoke_sketch["hyperparameters"]
+    slice_size = hyperparameters.get("slice_size_bytes")
+    if not slice_size or SMOKE_TOTAL_SIZE_BYTES % slice_size:
+        raise SemanticError("V100 smoke slice size must divide 128 MiB")
+    hyperparameters["total_size_bytes"] = SMOKE_TOTAL_SIZE_BYTES
+    solver = smoke_sketch.setdefault("solver", {})
+    solver["max_channels"] = 1
+    solver["channel_candidates"] = [1]
+    budgets = smoke_sketch.setdefault("budgets", {})
+    budgets["max_online_validation_per_round_s"] = SMOKE_TIMEOUT_S
+    budgets["max_online_validation_total_s"] = SMOKE_TIMEOUT_S
+    budgets["max_tuning_rounds"] = 0
+    calibration = smoke_sketch.setdefault("calibration", {})
+    calibration["enabled"] = True
+    calibration["candidate_limit"] = 1
+    calibration.setdefault("max_relative_fit_error", CALIBRATION_MAX_RELATIVE_FIT_ERROR)
+    calibration.setdefault("job_timeout_s", MEASUREMENT_JOB_TIMEOUT_S)
+    smoke_sketch["trace_and_measure"] = {"enabled": False}
+    placement = {entry["rank"]: entry for entry in runtime["rank_map"]}
+    smoke_runtime = copy.deepcopy(runtime)
+    smoke_runtime["rank_map"] = [
+        dict(placement[rank], rank=remap[rank]) for rank in selected
+    ]
+    return {
+        "topology": smoke_topology,
+        "sketch": smoke_sketch,
+        "runtime": bind_runtime(config, smoke_runtime),
+    }
+
+
 def smoke(
     config: V100ExperimentConfig,
     *,
-    factory_builder: Callable = _online_factory,
-    run: Callable = run_online_validation,
+    execute: Callable[[PrimaryRequest, RunContext], RunResult] = run_primary,
     state_store: Optional[ExperimentStateStore] = None,
+    run_id: Optional[str] = None,
 ) -> TaskRecord:
+    """Calibrate the 2-rank inter-node link with a v5 ``calibrate`` run.
+
+    Passes iff the run completed; the finalized ``run-summary.json`` is the
+    task's log and output. Failures keep their message in
+    ``<experiment_root>/smoke/runner-error.log``.
+    """
     manifest = load_experiment_manifest(
         config.manifest_path,
         repo_root=config.repo_root,
     )
-    case = manifest.cases[0]
-    input_sha256 = _case_input_sha256(case, manifest.atom_path)
-    task_id = "smoke-2x1-128m"
+    documents = build_smoke_documents(config, manifest)
+    texts = {name: _document_text(value) for name, value in documents.items()}
+    input_sha256 = _request_sha256(
+        (
+            ("topology", _text_sha256(texts["topology"])),
+            ("sketch", _text_sha256(texts["sketch"])),
+            ("atom", _file_sha256(manifest.atom_path)),
+            ("runtime", _text_sha256(texts["runtime"])),
+        )
+    )
+    task_id = SMOKE_TASK_ID
     command = (
         "python",
         "-m",
@@ -1198,98 +1553,42 @@ def smoke(
                 started_at_utc=started,
             )
         )
+    directory = config.experiment_root / "smoke"
     try:
-        inputs = resolve_inputs(
-            case.topology_path,
-            case.sketch_path,
-            manifest.atom_path,
+        files = {}
+        for name in ("topology", "sketch", "runtime"):
+            files[name] = directory / "inputs" / (name + ".json")
+            atomic_replace_text(files[name], texts[name])
+        files["atom"] = manifest.atom_path
+        request, context = _start_run(
+            directory,
+            task_id,
+            files,
+            purpose="calibrate",
+            run_id=run_id,
         )
-        topology = representative_calibration_topology(
-            load_topology(inputs),
-            "inter_node",
-        )
-        request = CalibrationRequest(
-            link_class="inter_node",
-            slice_size_bytes=inputs.hyperparameters.slice_size_bytes,
-            max_calibration_channels=1,
-            datatype="float",
-        )
-        benchmark = build_calibration_benchmark(
-            request,
-            topology,
-            concurrency=1,
-        )
-        directory = config.experiment_root / "smoke"
-        directory.mkdir(parents=True, exist_ok=True)
-        xml_path = directory / "inter-node-k01-128m.xml"
-        _write_or_reuse_text(xml_path, benchmark.artifact.xml_text)
-        factory = factory_builder(config, 2)
-        context = factory(
-            benchmark.artifact,
-            benchmark.schedule,
-            benchmark.inputs,
-            xml_path,
-            directory / "traces",
-            False,
-            10800.0,
-            False,
-        )
-        result = run(context)
-        valid = (
-            result.release_status is OnlineStageStatus.PASSED
-            and result.online_operator_validation is OnlineStageStatus.PASSED
-            and result.failure_code is None
-        )
-        if not valid:
-            raise SemanticError(
-                result.failure_message or "V100 smoke validation failed"
-            )
-        report_path = directory / "smoke.validation.json"
-        atomic_write_text(
-            report_path,
-            json.dumps(
-                {
-                    "failure_code": result.failure_code,
-                    "online_operator_validation": (
-                        result.online_operator_validation.value
-                    ),
-                    "release_status": result.release_status.value,
-                    "trace_clock_uncertainty_us": (
-                        result.trace_clock_uncertainty_us
-                    ),
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            + "\n",
-        )
+        result, finalized = _execute_run(execute, request, context)
+        _require_completed(result, finalized, context, "V100 smoke calibration")
+        summary = context.root / "run-summary.json"
         record = TaskRecord(
             task_id=task_id,
             status=TaskStatus.PASSED,
             input_sha256=input_sha256,
-            output_sha256=_file_sha256(xml_path),
+            output_sha256=_file_sha256(summary),
             command=command,
             returncode=0,
-            log_path=str(report_path),
+            log_path=str(summary),
             started_at_utc=started,
             finished_at_utc=_utc_now(),
         )
     except Exception as error:
-        directory = config.experiment_root / "smoke"
-        directory.mkdir(parents=True, exist_ok=True)
-        error_path = directory / "runner-error.log"
-        atomic_replace_text(error_path, "{}\n".format(error))
-        record = TaskRecord(
-            task_id=task_id,
-            status=TaskStatus.FAILED,
-            input_sha256=input_sha256,
-            output_sha256=None,
-            command=command,
-            returncode=1,
-            failure_code=type(error).__name__,
-            log_path=str(error_path),
-            started_at_utc=started,
-            finished_at_utc=_utc_now(),
+        record = _failure_record(
+            task_id,
+            input_sha256,
+            command,
+            started,
+            error,
+            directory,
         )
     if state_store is not None:
         state_store.put(record)
@@ -1315,6 +1614,7 @@ def _record_is_reusable(
     record: Optional[TaskRecord],
     case: ExperimentCase,
     atom_path: Path,
+    config: V100ExperimentConfig,
 ) -> bool:
     if (
         record is None
@@ -1326,7 +1626,12 @@ def _record_is_reusable(
     output = Path(record.log_path)
     return (
         output.is_file()
-        and record.input_sha256 == _case_input_sha256(case, atom_path)
+        and record.input_sha256
+        == _case_input_sha256(
+            case,
+            atom_path,
+            _bound_runtime_text(config, case.runtime_path),
+        )
         and record.output_sha256 == _file_sha256(output)
     )
 
@@ -1349,6 +1654,7 @@ def solve_matrix(
             previous.get(case.task_id),
             case,
             manifest.atom_path,
+            config,
         ):
             records.append(previous[case.task_id])
             continue

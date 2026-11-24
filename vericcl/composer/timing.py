@@ -2,6 +2,7 @@ from typing import Mapping, Optional, Tuple
 
 from vericcl.errors import SemanticError
 from vericcl.semantics.atom import Atom, PathStage, Schedule, Symbol, Transfer
+from vericcl.semantics.atom import symbolic_step
 from vericcl.topology.model import LaneKey, LinkKey, Topology
 
 
@@ -334,7 +335,7 @@ def _retime(
                             "atom path operation is missing from the schedule"
                         )
                     symbols.append(
-                        Symbol(
+                        symbolic_step(
                             symbol.src_rank,
                             symbol.dst_rank,
                             times[operation_id][2],
@@ -342,7 +343,7 @@ def _retime(
                     )
                 path.append(PathStage(stage.stage_id, stage.operator, tuple(symbols)))
             atoms.append(
-                Atom(
+                Atom.build(
                     slice_id=atom.slice_id,
                     slice_size_bytes=atom.slice_size_bytes,
                     path=tuple(path),

@@ -14,6 +14,10 @@ ENVIRONMENT_ALLOWLIST = frozenset({
     "CUDA_VISIBLE_DEVICES", "NCCL_ALGO", "NCCL_PROTO", "NCCL_BUFFSIZE",
     "NCCL_DEBUG", "NCCL_DEBUG_SUBSYS", "NCCL_IB_HCA", "NCCL_IB_GID_INDEX",
     "NCCL_SOCKET_IFNAME", "NCCL_P2P_DISABLE", "NCCL_SHM_DISABLE",
+    # Transport selection the V100 benchmark stage sets; calibration and
+    # trace runs must be able to measure under the same transport.
+    "NCCL_IB_DISABLE", "NCCL_NET_GDR_LEVEL", "NCCL_NET_GDR_READ",
+    "NCCL_P2P_LEVEL", "NCCL_IGNORE_DISABLED_P2P",
     "MSCCL_XML_FILES", "NCCL_TESTS_ROOT", "MSCCL_ROOT", "OMP_NUM_THREADS",
     "OMPI_MCA_btl", "OMPI_MCA_pml", "UCX_NET_DEVICES", "UCX_TLS",
     "OMPI_MCA_btl_tcp_if_include", "OMPI_MCA_oob_tcp_if_include",
